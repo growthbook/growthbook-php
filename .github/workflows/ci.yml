@@ -1,7 +1,5 @@
-name: CI
-
+name: Build
 on: [push]
-
 jobs:
   lint-test:
     runs-on: ubuntu-latest
@@ -16,14 +14,14 @@ jobs:
         uses: actions/cache@v1
         with:
           path: ${{ steps.composer-cache.outputs.dir }}
-          key: ${{ runner.os }}-composer-${{hash_files('**/composer.lock') }}
+          key: ${{ runner.os }}-composer-${{hashFiles('**/composer.lock') }}
           restore-keys: |
             ${{ runner.os }}-composer-
       - name: Cache PHP dependencies
         uses: actions/cache@v1
         with:
           path: vendor
-          key: ${{ runner.os }}-build-${{hash_files('**/composer.lock') }}
+          key: ${{ runner.os }}-build-${{hashFiles('**/composer.lock') }}
       - uses: php-actions/composer@v2
       - uses: php-actions/phpstan@v1
         with:

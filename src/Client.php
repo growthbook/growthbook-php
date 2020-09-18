@@ -96,4 +96,11 @@ class Client
 
     throw new \Exception("Failed to parse experiment configs");
   }
+
+  /**
+   * @return TrackData[]
+   */
+  public function getTrackData(): array {
+    return $this->experimentsViewed;
+  }
 }

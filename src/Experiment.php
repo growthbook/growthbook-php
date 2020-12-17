@@ -11,6 +11,8 @@ class Experiment {
   public $coverage;
   /** @var float[] */
   public $weights;
+  /** @var bool */
+  public $anon;
   /** @var string[] */
   public $targeting;
   /** @var array<string,array<mixed>> */
@@ -19,7 +21,7 @@ class Experiment {
   /**
    * @param string $id
    * @param int $variations
-   * @param array{coverage?: float, weights?: array<float>, targeting?: array<string>, data?: array<string,array<mixed>>} $options
+   * @param array{coverage?: float, weights?: array<float>, anon?: bool, targeting?: array<string>, data?: array<string,array<mixed>>} $options
    */
   public function __construct(string $id, int $variations, array $options = [])
   {
@@ -27,6 +29,7 @@ class Experiment {
     $this->variations = $variations;
     $this->coverage = $options["coverage"] ?? 1;
     $this->weights = $options["weights"] ?? $this->getEqualWeights();
+    $this->anon = $options["anon"] ?? false;
     $this->targeting = $options["targeting"] ?? [];
     $this->data = $options["data"] ?? [];
   }

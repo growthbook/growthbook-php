@@ -13,9 +13,9 @@ Growth Book is available on Composer:
 ```php
 $client = new Growthbook\Client();
 
-// User id of the visitor being experimented on
-// Can also use anonymous identifier like session id
-$user = $client->user("12345");
+// Logged-in id of the user being experimented on
+// Can also use an anonymous id like session (see below)
+$user = $client->user(["id"=>"12345"]);
 
 // 2 variations, 50/50 split
 $experiment = new Growthbook\Experiment("experiment-id", 2);
@@ -58,20 +58,36 @@ $client->config->enabled = false;
 
 ## User Configuration
 
-The `$client->user` method takes an optional 2nd argument with user attributes. These attributes are never sent across the network and are only used to locally evaluate experiment targeting rules.
+The `$client->user` method takes a single associative array argument.  There are 3 possible keys you can use:
+
+-  `id` - The logged-in user id
+-  `anonId` - An anonymous identifier for the user (session id, cookie, ip, etc.)
+-  `attributes` - An associative array with user attributes. These are never sent across the network and are only used to locally evaluate experiment targeting rules.
+
+Although all of these are technically optional, at least 1 type of id must be set or the user will be excluded from all experiments.
+
+Here is an example that uses all 3 properties:
 
 ```php
-$user = $client->user("12345", [
-  "premium" => true,
-  "accountAge" => 36,
-  "geo" => [
-    "region" => "NY"
+$user = $client->user([
+  // Logged-in user id
+  "id"=>"12345",
+
+  // Anonymous id
+  "anonId"=>"abcdef",
+
+  // Targeting attributes
+  "attributes"=> [
+    "premium" => true,
+    "accountAge" => 36,
+    "geo" => [
+      "region" => "NY"
+    ]
   ]
 ]);
 ```
 
-You can update these at any time by calling `$user->setAttributes`. By default, this completely overwrites all previous attributes. To do a 
-shallow merge instead, pass `true` as the 2nd argument.
+You can update attributes at any time by calling `$user->setAttributes`. By default, this completely overwrites all previous attributes. To do a shallow merge instead, pass `true` as the 2nd argument.
 
 ```php
 // Only overwrite the "premium" key and keep all the others
@@ -132,6 +148,9 @@ $experiment = new Growthbook\Experiment("my-experiment-id", 3, [
     "coverage" => 0.5,
     // How to split traffic between variations (must add to 1)
     "weights" => [0.34, 0.33, 0.33],
+    // If false, use the logged-in user id to assign variations
+    // If true, use the anonymous id
+    "anon" => false,
     // Targeting rules
     // Evaluated against user attributes to determine who is included in the test
     "targeting" => ["source != google"],

@@ -32,7 +32,7 @@ final class UserTest extends TestCase
    */
   private function chooseVariation($user, $experiment): int {
     if(is_string($user)) {
-      $user = $this->client->user($user);
+      $user = $this->client->user(["id"=>$user]);
     }
     return $user->experiment($experiment)->variation;
   }
@@ -49,6 +49,17 @@ final class UserTest extends TestCase
     $this->assertEquals(0, $this->chooseVariation("7", $experiment));
     $this->assertEquals(1, $this->chooseVariation("8", $experiment));
     $this->assertEquals(0, $this->chooseVariation("9", $experiment));
+  }
+
+  public function testOldUserSignature(): void {
+    /** @phpstan-ignore-next-line */
+    $user = $this->client->user("1");
+    /** @phpstan-ignore-next-line */
+    $withAttributes = $this->client->user("1", ["hello"=>"world"]);
+
+    $this->assertEquals('1', $user->id);
+    $this->assertEquals('1', $user->anonId);
+    $this->assertEquals(["hello"=>"world"], $withAttributes->getAttributes());
   }
 
   public function testUnevenWeights(): void {
@@ -102,6 +113,23 @@ final class UserTest extends TestCase
     $this->assertEquals(0, $this->chooseVariation("1", new Experiment("my-test-3", 2)));
   }
 
+  public function testAnonId(): void {
+    $userOnly = $this->client->user(["id"=>"1"]);
+    $anonOnly = $this->client->user(["anonId"=>"2"]);
+    $both = $this->client->user(["id"=>"1", "anonId"=>"2"]);
+
+    $experimentAnon = new Experiment("my-test", 2, ["anon"=>true]);
+    $experimentUser = new Experiment("my-test", 2, ["anon"=>false]);
+
+    $this->assertEquals(1, $this->chooseVariation($userOnly, $experimentUser));
+    $this->assertEquals(1, $this->chooseVariation($both, $experimentUser));
+    $this->assertEquals(-1, $this->chooseVariation($anonOnly, $experimentUser));
+
+    $this->assertEquals(-1, $this->chooseVariation($userOnly, $experimentAnon));
+    $this->assertEquals(0, $this->chooseVariation($both, $experimentAnon));
+    $this->assertEquals(0, $this->chooseVariation($anonOnly, $experimentAnon));
+  }
+
   public function testTracking(): void {
     // Reset client
     $this->client = new Client();
@@ -109,8 +137,8 @@ final class UserTest extends TestCase
     $mock = [];
     $this->mockCallback($mock);
 
-    $user1 = $this->client->user("1");
-    $user2 = $this->client->user("2");
+    $user1 = $this->client->user(["id"=>"1"]);
+    $user2 = $this->client->user(["id"=>"2"]);
 
     $experiment1 = new Experiment("my-test", 2);
     $experiment2 = new Experiment("my-other-test", 2);
@@ -141,7 +169,7 @@ final class UserTest extends TestCase
     $this->client->setExperimentConfigs([$override]);
 
     $experiment = new Experiment("my-test", 2);
-    $user = $this->client->user("1");
+    $user = $this->client->user(["id"=>"1"]);
     $result = $user->experiment($experiment);
 
     $this->assertEquals($result->experiment, $override);
@@ -170,7 +198,7 @@ final class UserTest extends TestCase
     ];
 
     // Matches all
-    $user = $this->client->user("1", $attributes);
+    $user = $this->client->user(["id"=>"1", "attributes"=>$attributes]);
     $this->assertEquals(1, $this->chooseVariation($user, $experiment), "Matches all");
 
     // Missing negative checks
@@ -259,7 +287,7 @@ final class UserTest extends TestCase
 
   public function testConfigData(): void {
     $this->client = new Client();
-    $user = $this->client->user("1");
+    $user = $this->client->user(["id"=>"1"]);
 
     $experiment = new Experiment("my-test", 2, [
       "data"=>[
@@ -304,7 +332,7 @@ final class UserTest extends TestCase
       $experiment2
     ]);
 
-    $user = $this->client->user("1");
+    $user = $this->client->user(["id"=>"1"]);
 
     // No matches
     $this->assertEquals(null, $user->lookupByDataKey("button.unknown")->value);

@@ -6,6 +6,8 @@ class User
 {
   /** @var string */
   public $id = "";
+  /** @var string */
+  public $anonId = "";
   /** @var array<string, mixed> */
   private $attributes = [];
   /** @var Client */
@@ -14,12 +16,14 @@ class User
   private $attributeMap = [];
 
   /**
+   * @param string $anonId
    * @param string $id
    * @param array<string, mixed> $attributes
    * @param Client $client
    */
-  public function __construct(string $id, array $attributes, Client $client)
+  public function __construct(string $anonId, string $id, array $attributes, Client $client)
   {
+    $this->anonId = $anonId;
     $this->id = $id;
     $this->attributes = $attributes;
     $this->client = $client;
@@ -41,12 +45,19 @@ class User
   }
 
   /**
+   * @return array<string,mixed>
+   */
+  public function getAttributes(): array {
+    return $this->attributes;
+  }
+
+  /**
    * @param string|Experiment $experiment
    */
   public function experiment($experiment): ExperimentResult
   {
-    // If experiments are disabled globally or no userId set
-    if(!$this->client->config->enabled || !$this->id) {
+    // If experiments are disabled globally
+    if(!$this->client->config->enabled) {
       return new ExperimentResult();
     }
 
@@ -77,6 +88,12 @@ class User
       return new ExperimentResult(new Experiment($id, 2), -1);
     }
 
+    // User missing required user id type
+    $userId = $experiment->anon ? $this->anonId : $this->id;
+    if(!$userId) {
+      return new ExperimentResult($experiment);
+    }
+
     // Experiment has targeting rules, check if user matches
     if($experiment->targeting) {
       if(!$this->isTargeted($experiment->targeting)) {
@@ -85,7 +102,7 @@ class User
     }
 
     // Hash unique id and experiment id to randomly choose a variation given weights
-    $variation = Util::chooseVariation($this->id, $experiment);
+    $variation = Util::chooseVariation($userId, $experiment);
     $result = new ExperimentResult($experiment, $variation);
 
     $this->trackView($result);

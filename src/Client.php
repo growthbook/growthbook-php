@@ -61,12 +61,28 @@ class Client
   }
 
   /**
-   * @param string $id
-   * @param array<string, mixed> $attributes
+   * @param array{id?:string,anonId?:string,attributes?:array<string,mixed>} $params
    */
-  public function user(string $id, array $attributes = []): User
+  public function user($params): User
   {
-    return new User($id, $attributes, $this);
+    // Old usage: $client->user(string $id, array $attributes = [])
+	  /** @phpstan-ignore-next-line */
+    if(is_string($params)) {
+      $params = [
+        "id"=>$params,
+        "anonId"=>$params,
+      ];
+      if(func_num_args() > 1) {
+        $params["attributes"] = func_get_arg(1);
+      }
+    }
+
+    return new User(
+      $params["anonId"]??"", 
+      $params["id"]??"", 
+      $params["attributes"]??[], 
+      $this
+    );
   }
 
   /**

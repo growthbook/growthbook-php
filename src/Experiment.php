@@ -7,6 +7,8 @@ class Experiment {
   public $id;
   /** @var int */
   public $variations;
+  /** @var null|int */
+  public $force;
   /** @var float */
   public $coverage;
   /** @var float[] */
@@ -32,6 +34,7 @@ class Experiment {
     $this->anon = $options["anon"] ?? false;
     $this->targeting = $options["targeting"] ?? [];
     $this->data = $options["data"] ?? [];
+    $this->force = $options["force"] ?? null;
   }
 
   /**

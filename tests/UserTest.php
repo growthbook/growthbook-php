@@ -363,6 +363,22 @@ final class UserTest extends TestCase
     $this->assertEquals(null, $size->experiment->id ?? null);
   }
 
+  // A variation is forced
+  public function testForcedVariation(): void {
+    $user = $this->client->user(["id"=>"1"]);
+    $experiment = new Experiment("my-test", 2);
+    $this->assertEquals(1, $this->chooseVariation($user, $experiment));
+
+    $experiment->force = -1;
+    $this->assertEquals(-1, $this->chooseVariation($user, $experiment));
+
+    $experiment->force = 0;
+    $this->assertEquals(0, $this->chooseVariation($user, $experiment));
+
+    $experiment->force = 1;
+    $this->assertEquals(1, $this->chooseVariation($user, $experiment));
+  }
+
   public function testEvenWeighting(): void {
     // Full coverage
     $experiment = new Experiment("my-test", 2);

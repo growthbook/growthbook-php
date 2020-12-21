@@ -101,6 +101,11 @@ class User
       }
     }
 
+    // A specific variation is forced, return it without tracking
+    if($experiment->force !== null) {
+      return new ExperimentResult($experiment, $experiment->force);
+    }
+
     // Hash unique id and experiment id to randomly choose a variation given weights
     $variation = Util::chooseVariation($userId, $experiment);
     $result = new ExperimentResult($experiment, $variation);

@@ -6,10 +6,17 @@ class ExperimentResult {
   public $experiment;
   /** @var int */
   public $variation;
+  /** @var string */
+  public $variationKey;
 
   public function __construct(Experiment $experiment = null, int $variation = -1) {
     $this->experiment = $experiment;
     $this->variation = $variation;
+    $this->variationKey = "";
+
+    if($experiment && $variation >= 0 && is_array($experiment->variations)) {
+      $this->variationKey = $experiment->variations[$variation]["key"] ?? ($variation."");
+    }
   }
 
   /** @return mixed */
@@ -17,16 +24,18 @@ class ExperimentResult {
     if(!$this->experiment) {
       return null;
     }
-    if(!array_key_exists($key, $this->experiment->data)) {
+    if(!is_array($this->experiment->variations)) {
       return null;
     }
 
-    $data = $this->experiment->data[$key];
-    // Fallback to control value
-    if(!array_key_exists($this->variation, $data)) {
-      return $data[0];
+    $var = $this->experiment->variations[0];
+    if($this->variation > 0) {
+      $var = $this->experiment->variations[$this->variation];
     }
+    if(!$var) return null;
 
-    return $data[$this->variation];
+    if(!array_key_exists("data", $var)) return null;
+
+    return $var["data"][$key] ?? null;
   }
 }

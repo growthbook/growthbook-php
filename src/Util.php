@@ -4,7 +4,7 @@ namespace Growthbook;
 
 class Util
 {
-  public static function checkRule(string $actual, string $op, string $desired): bool
+  public static function checkRule(string $actual, string $op, string $desired, Client $client): bool
   {
     switch ($op) {
       case "=":
@@ -21,14 +21,16 @@ class Util
         return !preg_match("/" . $desired . "/", $actual);
     }
 
-    trigger_error("Unknown targeting rule operator: " . $op);
+    $client->log("warning", "Unknown targeting rule operator", [
+      "operator" => $op
+    ]);
 
     return true;
   }
 
   public static function chooseVariation(string $userId, Experiment $experiment): int
   {
-    $testId = $experiment->id;
+    $testId = $experiment->key;
     $weights = $experiment->getScaledWeights();
 
     // Hash the user id and testName to a number from 0 to 1
@@ -51,5 +53,44 @@ class Util
     }
 
     return null;
+  }
+
+  private static function url_origin(): string
+  {
+      $ssl      = ($_SERVER['HTTPS']??'off')==='on';
+      $protocol = $ssl ? 'https' : 'http';
+      $port     = $_SERVER['SERVER_PORT'] ?? ($ssl ? '443' : '80');
+      $port     = ((!$ssl && $port=='80') || ($ssl && $port=='443')) ? '' : ':'.$port;
+      $host     = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME']??"localhost").$port;
+      return $protocol . '://' . $host;
+  }
+  
+  private static function full_url(): string
+  {
+      return static::url_origin() . $_SERVER['REQUEST_URI'];
+  }
+
+  public static function urlIsValid(string $urlRegex): bool {
+    // Need to escape this twice to catch 2 slashes next to each other (e.g. "http://localhost")
+    $escaped = preg_replace('/([^\\\\])\\//', '$1\\/', $urlRegex);
+    if(!$escaped) return false;
+    $escaped = preg_replace('/([^\\\\])\\//', '$1\\/', $escaped);
+    if(!$escaped) return false;
+
+    $url = static::full_url();
+    $pathOnly = $_SERVER['REQUEST_URI'];
+
+    try {
+      if(preg_match('/'.$escaped.'/', $url)) {
+        return true;
+      }
+      if(preg_match('/'.$escaped.'/', $pathOnly)) {
+        return true;
+      }
+      return false;
+    }
+    catch(\Throwable $e) {
+      return false;
+    }
   }
 }

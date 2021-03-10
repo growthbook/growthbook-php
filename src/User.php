@@ -51,60 +51,66 @@ class User
     return $this->attributes;
   }
 
+  private function isIncluded(Experiment $experiment): bool {
+    $numVariations = is_array($experiment->variations)
+      ? count($experiment->variations)
+      : $experiment->variations;
+    if($numVariations < 2) {
+      return false;
+    }
+
+    if($experiment->status === "draft") {
+      return false;
+    }
+
+    if($experiment->status === "stopped" && $experiment->force === null) {
+      return false;
+    }
+
+    $userId = $experiment->anon ? $this->anonId : $this->id;
+    if(!$userId) {
+      return false;
+    }
+
+    if($experiment->targeting && !$this->isTargeted($experiment->targeting)) {
+      return false;
+    }
+
+    if($experiment->url && !Util::urlIsValid($experiment->url)) {
+      return false;
+    }
+
+    return true;
+  }
+
   /**
-   * @param string|Experiment $experiment
+   * @param Experiment $experiment
    */
-  public function experiment($experiment): ExperimentResult
+  private function runExperiment(Experiment $experiment, bool $isOverride = false): ExperimentResult
   {
     // If experiments are disabled globally
     if(!$this->client->config->enabled) {
-      return new ExperimentResult();
-    }
-
-    // Make sure experiment is always an object (or null)
-    $id = "";
-    if(is_string($experiment)) {
-      $id = $experiment;
-      $experiment = $this->client->getExperimentConfigs($id);
-    }
-    else {
-      $id = $experiment->id;
-      $override = $this->client->getExperimentConfigs($id);
-      if($override) {
-        $experiment = $override;
-      }
+      return new ExperimentResult($experiment);
     }
 
     // If querystring override is enabled
     if ($this->client->config->enableQueryStringOverride) {
-      $variation = Util::getQueryStringOverride($id);
+      $variation = Util::getQueryStringOverride($experiment->key);
       if ($variation !== null) {
-        return new ExperimentResult($experiment ?? new Experiment($id, 2), $variation);
+        return new ExperimentResult($experiment, $variation);
       }
     }
 
-    // No experiment found
-    if(!$experiment) {
-      return new ExperimentResult(new Experiment($id, 2), -1);
-    }
-
-    // User missing required user id type
-    $userId = $experiment->anon ? $this->anonId : $this->id;
-    if(!$userId) {
+    if(!$this->isIncluded($experiment)) {
       return new ExperimentResult($experiment);
-    }
-
-    // Experiment has targeting rules, check if user matches
-    if($experiment->targeting) {
-      if(!$this->isTargeted($experiment->targeting)) {
-        return new ExperimentResult($experiment);
-      }
     }
 
     // A specific variation is forced, return it without tracking
     if($experiment->force !== null) {
       return new ExperimentResult($experiment, $experiment->force);
     }
+
+    $userId = $experiment->anon ? $this->anonId : $this->id;
 
     // Hash unique id and experiment id to randomly choose a variation given weights
     $variation = Util::chooseVariation($userId, $experiment);
@@ -115,15 +121,43 @@ class User
     return $result;
   }
 
-  public function lookupByDataKey(string $key): LookupResult
+  private function getNumVariations(Experiment $experiment): int {
+    return is_array($experiment->variations)
+      ? count($experiment->variations)
+      : $experiment->variations;
+  }
+
+  public function experiment(Experiment $experiment): ExperimentResult {
+    $override = $this->client->getExperimentByKey($experiment->key);
+    if($override) {
+      // Make sure override has same number of variations
+      if($this->getNumVariations($experiment) === $this->getNumVariations($override)) {
+        return $this->runExperiment($override, true);
+      }
+    }
+
+    return $this->runExperiment($experiment);
+  }
+
+
+  public function getFeatureFlag(string $key): LookupResult
   {
-    $experiments = $this->client->getAllExperimentConfigs();
-    foreach ($experiments as $experiment) {
-      if(array_key_exists($key, $experiment->data)) {
-        $ret = $this->experiment($experiment);
-        if($ret->variation >= 0) {
-          return LookupResult::fromExperimentResult($ret, $key);
+    if(!$this->client->config->enabled) {
+      return new LookupResult();
+    }
+
+    foreach ($this->client->experiments as $experiment) {
+      if(is_array($experiment->variations)) {
+        if(!array_filter($experiment->variations, function ($v) use($key) {
+          return isset($v['data']) && array_key_exists($key, $v['data']);
+        })) {
+          continue;
         }
+      }
+
+      $ret = $this->runExperiment($experiment);
+      if($ret->variation >= 0) {
+        return LookupResult::fromExperimentResult($ret, $key);
       }
     }
 
@@ -144,7 +178,7 @@ class User
    * @param mixed $val
    * @return array<array{k:string, v:string}>
    */
-  private function flattenUserValues(string $prefix = "", $val): array
+  private function flattenUserValues(string $prefix = "", $val=""): array
   {
     // Associative array
     if (is_array($val) && array_keys($val) !== range(0, count($val) - 1)) {
@@ -194,7 +228,7 @@ class User
 
       $key = trim($parts[0]);
       $actual = $this->attributeMap[$key] ?? "";
-      if (!Util::checkRule($actual, trim($parts[1]), trim($parts[2]))) {
+      if (!Util::checkRule($actual, trim($parts[1]), trim($parts[2]), $this->client)) {
         return false;
       }
     }

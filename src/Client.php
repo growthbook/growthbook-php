@@ -11,53 +11,56 @@ class Client
   /** @var TrackData[] */
   private $experimentsViewed = [];
   /** @var Experiment[] */
-  private $experiments = [];
+  public $experiments = [];
 
   public function __construct(Config $config = null)
   {
     $this->config = $config ?? new Config([]);
   }
 
-  /**
-   * @param Experiment[] $experiments
-   */
-  public function setExperimentConfigs(array $experiments): void
+  public function addExperimentsFromJSON(string $experimentsJSON): void
   {
-    $this->experiments = $experiments;
+    $experiments = json_decode($experimentsJSON, true);
+    foreach($experiments as $options) {
+      $key = $options['key'];
+      unset($options['key']);
+      $this->experiments[] = new Experiment($key, $options);
+    }
   }
 
-  /**
-   * @return Experiment[]
-   */
-  public function getAllExperimentConfigs(): array {
-    return $this->experiments;
-  }
-
-  public function getExperimentConfigs(string $id): ?Experiment {
+  public function getExperimentByKey(string $key): ?Experiment {
     foreach($this->experiments as $experiment) {
-      if($experiment->id === $id) {
+      if($experiment->key === $key) {
         return $experiment;
       }
     }
     return null;
   }
 
+  /**
+   * @param string $level
+   * @param string $message
+   * @param mixed $context
+   */
+  public function log(string $level, string $message, $context = []): void {
+    if($this->config->logger) {
+      $this->config->logger->log($level, $message, $context);
+    }
+  }
+
   public function trackExperiment(TrackData $data): void {
+    // @codeCoverageIgnoreStart
     if(!$data->result->experiment) {
       return;
     }
+    // @codeCoverageIgnoreEnd
 
-    $key = $data->result->experiment->id . $data->user->id;
+    $key = $data->result->experiment->key . $data->user->id;
     if(array_key_exists($key, $this->experimentViewedHash)) {
       return;
     }
     $this->experimentViewedHash[$key] = true;
-
     $this->experimentsViewed[] = $data;
-    $callback = $this->config->onExperimentViewed;
-    if($callback) {
-      $callback($data);
-    }
   }
 
   /**
@@ -83,34 +86,6 @@ class Client
       $params["attributes"]??[], 
       $this
     );
-  }
-
-  /**
-   * @param string $apiKey
-   * @param array<string, mixed> $guzzleSettings
-   * @return Experiment[]
-   */
-  public static function fetchExperimentConfigs(string $apiKey, array $guzzleSettings = []): array
-  {
-    $client = new \GuzzleHttp\Client();
-    $res = $client->request('GET', "https://cdn.growthbook.io/config/$apiKey", $guzzleSettings);
-
-    $body = $res->getBody();
-    $json = json_decode($body);
-
-    if ($res->getStatusCode() !== 200) {
-      throw new \Exception(isset($json['message']) ? $json['message'] : "There was an error fetching experiment configs");
-    }
-
-    if ($json && is_array($json) && isset($json['experiments']) && is_array($json['experiments'])) {
-      $experiments = [];
-      foreach($json["experiments"] as $id=>$experiment) {
-        $experiments[] = new Experiment($id, $experiment["variation"], $experiment);
-      }
-      return $experiments;
-    }
-
-    throw new \Exception("Failed to parse experiment configs");
   }
 
   /**

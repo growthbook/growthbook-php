@@ -1,6 +1,15 @@
+# Growth Book PHP Library
+
+Small utility library to run controlled experiments (i.e. A/B/n tests) in PHP.
+
 ![Build Status](https://github.com/growthbook/growthbook-php/workflows/Build/badge.svg)
 
-Small utility library to run controlled experiments (i.e. AB tests). Comaptible with the Growth Book experimentation platform.
+-  No external dependencies
+-  Lightweight and fast
+-  No HTTP requests, everything is defined and evaluated locally
+-  Advanced user and page targeting
+-  Supports feature flag and remote config use cases
+-  PHP 7.1+ with 100% test coverage and phpstan on the highest level
 
 ## Installation
 
@@ -17,10 +26,8 @@ $client = new Growthbook\Client();
 // Can also use an anonymous id like session (see below)
 $user = $client->user(["id"=>"12345"]);
 
-// 2 variations, 50/50 split
-$experiment = new Growthbook\Experiment("experiment-id", 2);
-
-$result = $user->experiment($experiment);
+// Put the user in an experiment (default 2-way 50/50 split)
+$result = $user->experiment("my-test");
 
 if($result->variation === 0) {
   echo "Control";
@@ -32,6 +39,138 @@ else {
   echo "Not in experiment";
 }
 ```
+
+## Experiments
+
+As shown above, the simplest experiment you can define only has a single `key` argument.
+
+There are a lot more configuration options you can specify.  Here is a full example showing all the possible options:
+
+```php
+new Growthbook\Experiment("my-test", [
+  // Number of variations, or an array with more detailed info for each variation
+  "variations" => 2,
+  // "running" is always active, "draft" is only active during QA. "stopped" is only active when forcing a winning variation
+  "status" => "running",
+  // What percent of users should be included in the experiment. Float from 0 to 1.
+  "coverage" => 1,
+  // Users can only be included in this experiment if the current URL matches this regex
+  "url" => "/post/[0-9]+",
+  // Array of strings if the format "{key} {operator} {value}"
+  // Users must pass all of these targeting rules to be included in this experiment
+  "targeting" => [
+    "age >= 18"
+  ],
+  // If specified, all users included in the experiment should be forced into the 
+  // specified variation (0 is control, 1 is first variation, etc.)
+  "force" => 1,
+  // If true, use anonymous id for assigning, otherwise use logged-in user id
+  "anon" => false,
+]);
+```
+
+For `variations`, you can either specify a number like above or an array with more detailed info.  The array takes the following format and everything is optional:
+
+```php
+$experiment = Growthbook\Experiment("my-test", [
+  "variations" => [
+    // One array item for each variation
+    [
+      // An identifier for the variation
+      // Defaults to "0" for control, "1" for first variation, etc.
+      "key" => "a",
+      // Determines traffic split. Float from 0 to 1, weights for all variations must sum to 1.
+      // Defaults to an even split between all variations
+      "weight" => 0.5,
+      // Arbitrary data attached to the variation. Used to parameterize experiments.
+      "data" => [
+        "color" => "blue"
+      ],
+    ],
+    ...
+  ]
+]);
+```
+
+## Running Experiments
+
+There are 3 different ways to run experiments. You can use more than one of these at a time; choose what makes sense on a case-by-case basis.
+
+### 1. Code Branching
+
+With this approach, you put the user in the experiment and fork your code depending on the assigned variation.
+
+```php
+$result = $user->experiment(new Growthbook\Experiment("my-test"));
+
+if($result->variation === 0) {
+  echo "Control";
+}
+elseif($result->variation === 1) {
+  echo "Variation";
+}
+else {
+  echo "Not in experiment";
+}
+```
+
+### 2. Parameterization
+
+You can use Parameterization as a cleaner alternative to code branching for simple experiments.
+
+Requirements:
+-  Experiment must define `variations` as an array with the `data` property for each variation
+
+Instead of branching, you would extract the data from the chosen variation:
+
+```php
+$result = $user->experiment(new Growthbook\Experiment("my-test", [
+  "variations" => [
+    [
+      "data"=>["color" => "blue"]
+    ],
+    [
+      "data"=>["color" => "green"]
+    ]
+  ]
+]));
+
+// Will be either "blue" or "green"
+$color = $result->getData("color") ?? "blue";
+```
+
+### 3. Feature Flags
+
+Parameterization still requires referencing experiments directly in code.  Using feature flags, you can get some of the same benefits while also keeping your code more maintainable.
+
+Requirements:
+-  Experiment must define `variations` as an array with the `data` property for each variation
+-  Use more descriptive data keys (e.g. `homepage.signup.color` instead of just `color`)
+
+First, add your experiment definitions to the client:
+
+```php
+$client->setExperimentConfigs([
+  new Growthbook\Experiment("my-test", [
+    "variations" => [
+      [
+        "data"=>["homepage.cta.color" => "blue"]
+      ],
+      [
+        "data"=>["homepage.cta.color" => "green"]
+      ]
+    ]
+  ])
+]);
+```
+
+Now you can do a lookup based on the data key without knowing about which (if any) experiments are running:
+
+```php
+// Will be either "blue" or "green"
+$color = $user->getFeatureFlag("homepage.signup.color") ?? "blue";
+```
+
 
 ## Client Configuration
 
@@ -47,7 +186,8 @@ $client = new Growthbook\Client($config);
 The `Growthbook\Config` constructor takes an associative array of options. Below are all of the available options currently:
 
 -  **enabled** - Default true. Set to false to completely disable all experiments.
--  **onExperimentViewed** - Callback when the user views an experiment. Passed a `Growthbook\TrackData` object with experiment, variation, and user info.
+-  **logger** - An optional psr-3 logger instance
+-  **url** - The url of the page (defaults to `$_SERVER['REQUEST_URL']` if not set)
 -  **enableQueryStringOverride** - Default false.  If true, enables forcing variations via the URL.  Very useful for QA.  https://example.com/?my-experiment=1
 
 You can change configuration options at any time by setting properties directly:
@@ -96,185 +236,9 @@ $user->setAttributes([
 ], true);
 ```
 
-## Experiment Configuration
+## Event Tracking
 
-The default test is a 50/50 split with no targeting or customization.  There are a few ways to configure this on a test-by-test basis.
-
-### Option 1: Global Configuration
-
-With this option, you configure all experiments globally once and then reference them via id throughout the code.
-
-```php
-// Build array of Growthbook\Experiment objects
-$experiments = [
-  // Default 50/50 2-way test
-  new Growthbook\Experiment("my-test", 2),
-
-  // Changing some options
-  new Growthbook\Experiment("my-other-test", 2, [
-    // Only run on 40% of traffic
-    "coverage" => 0.4,
-    // 80/20 traffic split between the variations
-    "weights" => [0.8, 0.2]
-  ])
-];
-
-$client->setExperimentConfigs($experiments);
-
-// Later in code, pass the string id instead of the Experiment object
-$result = $user->experiment("my-test");
-```
-
-Instead of building the array of experiments manually, there's a helper method to fetch the latest configs from the Growth Book API:
-
-```php
-// Optional 2nd argument with guzzle config settings
-$experiments = $client->fetchExperimentConfigs("my-api-key");
-$client->setExperimentConfigs($experiments);
-```
-
-This does a network request to the Growth Book CDN. The CDN is very fast and reliable, but we still recommend implementing a caching layer (Memcached, Redis, APCu, DynamoDB, etc.) if possible.
-
-### Option 2: Inline Experiment Configuration
-
-As shown in the quick start above, you can use a `Growthbook\Experiment` object directly to run an experiment.
-
-The below example shows all of the possible experiment options you can set:
-```php
-// 1st argument is the experiment id
-// 2nd argument is the number of variations
-$experiment = new Growthbook\Experiment("my-experiment-id", 3, [
-    // Percent of traffic to include in the test (from 0 to 1)
-    "coverage" => 0.5,
-    // How to split traffic between variations (must add to 1)
-    "weights" => [0.34, 0.33, 0.33],
-    // If false, use the logged-in user id to assign variations
-    // If true, use the anonymous id
-    "anon" => false,
-    // Targeting rules
-    // Evaluated against user attributes to determine who is included in the test
-    "targeting" => ["source != google"],
-    // Add arbitrary data to the variations (see below for more info)
-    "data" => [
-        "color" => ["blue","green","red"]
-    ]
-]);
-
-$result = $user->experiment($experiment);
-```
-
-## Running Experiments
-
-Growth Book supports 3 different implementation approaches:
-
-1.  Branching
-2.  Parameterization
-3.  Config System
-
-### Approach 1: Branching
-
-This is the simplest to understand and implement. You add branching via if/else or switch statements:
-
-```php
-$result = $user->experiment("experiment-id");
-
-if($result->variation === 1) {
-    // Variation
-    $buttonColor = "green";
-}
-else {
-    // Control
-    $buttonColor = "blue";
-}
-```
-
-### Approach 2: Parameterization
-
-With this approach, you parameterize the variations by associating them with data.
-
-```php
-$experiment = new Growthbook\Experiment("experiment-id", 2, [
-  "data" => [
-    "color" => ["blue", "green"]
-  ]
-]);
-
-$result = $user->experiment($experiment);
-
-// Will be either "blue" or "green"
-$buttonColor = $result->getData("color");
-
-// If no data is defined for the key, `null` is returned
-$result->getData("unknown");
-```
-
-### Approach 3: Configuration System
-
-If you already have an existing configuration or feature flag system, you can do a deeper integration that 
-avoids `experiment` calls throughout your code base entirely.
-
-All you need to do is modify your existing config system to get experiment overrides before falling back to your normal lookup process:
-
-```php
-// Your existing function
-function getConfig($key) {
-    // Look for a valid matching experiment. 
-    // If found, choose a variation and return the value for the requested key
-    $result = $user->lookupByDataKey($key);
-    if($result->value !== null) {
-        return $result->value;
-    }
-
-    // Continue with your normal lookup process
-    ...
-}
-```
-
-Instead of generic keys like `color`, you probably want to be more descriptive with this approach (e.g. `homepage.cta.color`).
-
-With the following experiment data:
-```php
-[
-  "data" => [
-    "homepage.cta.color" => ["blue", "green"]
-  ]
-]
-```
-
-You can now do:
-
-```php
-$buttonColor = getConfig("homepage.cta.color");
-```
-
-Your code now no longer cares where the value comes from. It could be a hard-coded config value or part of an experiment.  This is the cleanest approach of the 3, but it can be difficult to debug if things go wrong.
-
-## Tracking
-
-The Growth Book library does not do any event tracking.  You must implement that yourself.  There are 2 tracking methods:
-
-### Tracking Method 1: Callback
-
-You can configure a callback to be fired synchronously when a user is assigned a variation.
-
-Use this for logging debug info.
-
-```php
-$client->config->onExperimentViewed = function(Growthbook\TrackData $data) {
-  $info = [
-    "experimentId" => $data->result->experiment->id,
-    "variation" => $data->result->variation,
-    "userId" => $data->user->id
-  ];
-  print_r($info);
-}
-```
-
-### Tracking Method 2: Array
-
-At the end of your script, you can loop through an array of all `Growthbook\TrackData` objects.
-
-Use this to more efficiently write to a database in bulk or pass to the front-end for client-side event tracking (Segment, GA, etc.).
+Typically, you'll want to track who sees which experiment so you can analyze the data later.  You can track however you want: insert to a database, use a logger, pass to the front-end for analytics tracking.
 
 ```php
 $tracks = $client->getTrackData();
@@ -283,10 +247,54 @@ $docs = [];
 foreach($tracks as $track) {
   $docs[] = [
     "experimentId" => $data->result->experiment->id,
-    "variation" => $data->result->variation,
+    "variationId" => $data->result->variationKey,
     "userId" => $data->user->id
   ];
 }
 
+// TODO: insert into a database, etc.
 echo json_encode($docs);
 ```
+
+## Remote Config
+
+This libraries enables you to load experiment definitions and overrides externally (e.g. from a database or cache).
+
+```php
+// JSON-encoded list of experiments from a database
+$experiments = '[
+  {
+    "key": "my-test",
+    "variations": [
+      {"weight": 0.8},
+      {"weight": 0.2}
+    ],
+    "coverage": 0.3
+  }
+]';
+
+// Load them into the client
+$client->addExperimentsFromJSON($experiments);
+
+// Now, instead of the inline settings (100% coverage, 50/50 split)
+// this will use the overrides in the client (30% coverage, 80/20 split)
+$result = $user->experiment(new Growthbook\Experiment("my-test"));
+```
+
+## Using with the Growth Book App
+
+It's not required, but we recommend using [Growth Book](https://www.growthbook.io) to manage your list of experiments and analyze results.
+
+-  Document your experiments with screenshots, markdown, and comment threads
+-  Connect to your existing data warehouse or analytics tool to automatically fetch results
+   -  Currently supports Snowflake, BigQuery, Redshift, Postgres, Mixpanel, GA, and Athena
+-  Advanced bayesian statistics and automated data-quality checks (SRM, etc.)
+-  Simple and affordable pricing
+
+Integration is super easy:
+
+1.  Create a Growth Book API key - https://docs.growthbook.io/api
+2.  Periodically fetch the latest experiment list from the API and cache in your database
+3.  At the start of your app, run `$client->addExperimentsFromJSON($jsonEncodedExperimentList);`
+
+Now you can start/stop tests, adjust coverage and variation weights, and apply a winning variation to 100% of traffic, all within the Growth Book app without deploying code changes to your site.

@@ -4,47 +4,46 @@ namespace Growthbook;
 
 class Experiment {
   /** @var string */
-  public $id;
-  /** @var int */
+  public $key;
+  /** @var "draft"|"running"|"stopped" */
+  public $status;
+  /** @var int|(array<array{key?:string,weight?:float,data?:array<string,mixed>}>) */
   public $variations;
   /** @var null|int */
   public $force;
   /** @var float */
   public $coverage;
-  /** @var float[] */
-  public $weights;
   /** @var bool */
   public $anon;
+  /** @var string */
+  public $url;
   /** @var string[] */
   public $targeting;
-  /** @var array<string,array<mixed>> */
-  public $data;
 
   /**
-   * @param string $id
-   * @param int $variations
-   * @param array{coverage?: float, weights?: array<float>, anon?: bool, targeting?: array<string>, data?: array<string,array<mixed>>} $options
+   * @param string $key
+   * @param array{status?:"draft"|"running"|"stopped",variations?:(int|array<array{key?:string,weight?:float,data?:array<string,mixed>}>), coverage?: float, anon?: bool, targeting?: string[]} $options
    */
-  public function __construct(string $id, int $variations, array $options = [])
+  public function __construct(string $key, array $options = [])
   {
-    $this->id = $id;
-    $this->variations = $variations;
+    $this->key = $key;
+    $this->status = $options['status'] ?? 'running';
+    $this->variations = $options['variations'] ?? 2;
     $this->coverage = $options["coverage"] ?? 1;
-    $this->weights = $options["weights"] ?? $this->getEqualWeights();
     $this->anon = $options["anon"] ?? false;
+    $this->url = $options['url'] ?? "";
     $this->targeting = $options["targeting"] ?? [];
-    $this->data = $options["data"] ?? [];
     $this->force = $options["force"] ?? null;
   }
 
   /**
    * @return float[]
    */
-  private function getEqualWeights(): array
+  private function getEqualWeights(int $numVariations): array
   {
     $weights = [];
-    for ($i = 0; $i < $this->variations; $i++) {
-      $weights[] = 1 / $this->variations;
+    for ($i = 0; $i < $numVariations; $i++) {
+      $weights[] = 1 / $numVariations;
     }
     return $weights;
   }
@@ -55,10 +54,30 @@ class Experiment {
   public function getScaledWeights(): array
   {
     $coverage = $this->coverage;
+    if($coverage < 0 || $coverage > 1) $coverage = 1;
+
+    $weights = [];
+    if(is_array($this->variations)) {
+      $weights = array_map(function ($v) { return $v['weight'] ?? 0; }, $this->variations);
+      $totalWeight = 0;
+      foreach($weights as $w) {
+        $totalWeight += $w;
+      }
+      if($totalWeight < 0.99 || $totalWeight > 1.01) {
+        $weights = $this->getEqualWeights(count($weights));
+      }
+    }
+    else {
+      $weights = $this->getEqualWeights($this->variations);
+    }
+
+    if(count($weights) < 2 || count($weights) > 20) {
+      $weights = [0.5, 0.5];
+    }
 
     // Scale weights by traffic coverage
     return array_map(function ($n) use ($coverage) {
       return $n * $coverage;
-    }, $this->weights);
+    }, $weights);
   }
 }

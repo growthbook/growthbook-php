@@ -144,24 +144,25 @@ $color = $result->getData("color") ?? "blue";
 Parameterization still requires referencing experiments directly in code.  Using feature flags, you can get some of the same benefits while also keeping your code more maintainable.
 
 Requirements:
+-  Experiments must be defined in the client
 -  Experiment must define `variations` as an array with the `data` property for each variation
 -  Use more descriptive data keys (e.g. `homepage.signup.color` instead of just `color`)
 
 First, add your experiment definitions to the client:
 
 ```php
-$client->setExperimentConfigs([
+$client->experiments = [
   new Growthbook\Experiment("my-test", [
     "variations" => [
       [
-        "data"=>["homepage.cta.color" => "blue"]
+        "data"=>["homepage.signup.color" => "blue"]
       ],
       [
-        "data"=>["homepage.cta.color" => "green"]
+        "data"=>["homepage.signup.color" => "green"]
       ]
     ]
   ])
-]);
+];
 ```
 
 Now you can do a lookup based on the data key without knowing about which (if any) experiments are running:
@@ -170,7 +171,6 @@ Now you can do a lookup based on the data key without knowing about which (if an
 // Will be either "blue" or "green"
 $color = $user->getFeatureFlag("homepage.signup.color") ?? "blue";
 ```
-
 
 ## Client Configuration
 
@@ -281,9 +281,11 @@ $client->addExperimentsFromJSON($experiments);
 $result = $user->experiment(new Growthbook\Experiment("my-test"));
 ```
 
+This is especially powerful when combined with `$user->getFeatureFlag()`. You can instrument your code with feature flag checks once and then run an unlimited number of experiments against them, all without any additional code deploys.
+
 ## Using with the Growth Book App
 
-It's not required, but we recommend using [Growth Book](https://www.growthbook.io) to manage your list of experiments and analyze results.
+Managing experiments and analyzing results at scale can be complicated, which is why we built the [Growth Book App](https://www.growthbook.io).  It's completely optional, but definitely worth checking out.
 
 -  Document your experiments with screenshots, markdown, and comment threads
 -  Connect to your existing data warehouse or analytics tool to automatically fetch results
@@ -294,7 +296,7 @@ It's not required, but we recommend using [Growth Book](https://www.growthbook.i
 Integration is super easy:
 
 1.  Create a Growth Book API key - https://docs.growthbook.io/api
-2.  Periodically fetch the latest experiment list from the API and cache in your database
-3.  At the start of your app, run `$client->addExperimentsFromJSON($jsonEncodedExperimentList);`
+2.  Periodically fetch the latest experiment list from the API and cache in Redis/MySQL/etc.
+3.  Call `$client->addExperimentsFromJSON($cachedApiResponse);`
 
-Now you can start/stop tests, adjust coverage and variation weights, and apply a winning variation to 100% of traffic, all within the Growth Book app without deploying code changes to your site.
+Now you can start/stop tests, adjust coverage and variation weights, and apply a winning variation to 100% of traffic, all within the Growth Book App without deploying code changes to your site.

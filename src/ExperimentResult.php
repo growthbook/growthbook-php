@@ -2,6 +2,9 @@
 
 namespace Growthbook;
 
+/**
+ * @template T
+ */
 class ExperimentResult
 {
     /**
@@ -13,12 +16,12 @@ class ExperimentResult
      */
     public $variationId;
     /**
-     * @var mixed
+     * @var T
      */
     public $value;
 
     /**
-     * @var null|Experiment
+     * @var null|Experiment<T>
      * @deprecated
      */
     public $experiment;
@@ -28,6 +31,10 @@ class ExperimentResult
      */
     public $variation;
 
+    /**
+     * @param Experiment<T> $experiment
+     * @param int $variation
+     */
     public function __construct(Experiment $experiment, int $variation = -1)
     {
         $this->inExperiment = true;

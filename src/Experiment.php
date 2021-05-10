@@ -2,13 +2,16 @@
 
 namespace Growthbook;
 
+/**
+ * @template T
+ */
 class Experiment
 {
     /** @var string */
     public $key;
     /** @var "draft"|"running"|"stopped" */
     public $status;
-    /** @var array<int,mixed> */
+    /** @var T[] */
     public $variations;
     /** @var null|int */
     public $force;
@@ -25,7 +28,7 @@ class Experiment
 
     /**
      * @param string $key
-     * @param int|array<int,mixed> $variations
+     * @param int|T[] $variations
      * @param array{status?:"draft"|"running"|"stopped", url?: string, weights?: float[], coverage?: float, anon?: bool, targeting?: string[]} $options
      */
     public function __construct(string $key, $variations = [0,1], array $options = [])
@@ -35,6 +38,7 @@ class Experiment
         // Deprecated - pass int for variations instead of an array
         // Turn into simple range arrage (e.g. [0,1,2])
         if (is_numeric($variations)) {
+            trigger_error('Experiment $variations should be an array. Passing an integer is deprecated.', E_USER_DEPRECATED);
             $numVariations = $variations;
             $variations = [];
             for ($i=0; $i<$numVariations; $i++) {
@@ -50,6 +54,7 @@ class Experiment
         }
 
         $this->status = $options['status'] ?? 'running';
+        /** @phpstan-ignore-next-line */
         $this->variations = $variations;
         $this->weights = $options['weights'] ?? $this->getEqualWeights(count($this->variations));
         $this->coverage = $options["coverage"] ?? 1;
@@ -100,6 +105,10 @@ class Experiment
         }, $weights);
     }
 
+    /**
+     * @param ExperimentOverride $override
+     * @return Experiment<T>
+     */
     public function withOverride(ExperimentOverride $override): Experiment
     {
         return new Experiment($this->key, $this->variations, [

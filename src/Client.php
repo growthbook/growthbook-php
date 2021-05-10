@@ -8,7 +8,7 @@ class Client
     public $config;
     /** @var array<string,bool> */
     private $experimentViewedHash = [];
-    /** @var TrackData[] */
+    /** @var TrackData<mixed>[] */
     private $experimentsViewed = [];
     /** @var array<string,ExperimentOverride> */
     private $overrides = [];
@@ -57,15 +57,12 @@ class Client
         }
     }
 
+    /**
+     * @param TrackData<mixed> $data
+     */
     public function trackExperiment(TrackData $data): void
     {
-        // @codeCoverageIgnoreStart
-        if (!$data->result->experiment) {
-            return;
-        }
-        // @codeCoverageIgnoreEnd
-
-        $key = $data->result->experiment->key . $data->user->id;
+        $key = $data->experiment->key . $data->user->id;
         if (array_key_exists($key, $this->experimentViewedHash)) {
             return;
         }
@@ -81,10 +78,8 @@ class Client
         // Old usage: $client->user(string $id, array $attributes = [])
         /** @phpstan-ignore-next-line */
         if (is_string($params)) {
-            $params = [
-        "id"=>$params,
-        "anonId"=>$params,
-      ];
+            trigger_error('That GrowthBookClient::user usage is deprecated. It now accepts a single associative array argument.', E_USER_DEPRECATED);
+            $params = ["id"=>$params, "anonId"=>$params,];
             if (func_num_args() > 1) {
                 $params["attributes"] = func_get_arg(1);
             }
@@ -99,7 +94,7 @@ class Client
     }
 
     /**
-     * @return TrackData[]
+     * @return TrackData<mixed>[]
      */
     public function getTrackData(): array
     {

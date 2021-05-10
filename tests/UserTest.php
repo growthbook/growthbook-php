@@ -1,6 +1,6 @@
 <?php
 
-require_once __DIR__.'/../vendor/autoload.php';
+require_once __DIR__ . '/../vendor/autoload.php';
 
 use Growthbook\Client;
 use Growthbook\Experiment;
@@ -21,7 +21,8 @@ final class UserTest extends TestCase
 
     /**
      * @param string|User $user
-     * @param string|Experiment $experiment
+     * @param string|Experiment<mixed> $experiment
+     * @return int
      */
     private function chooseVariation($user, $experiment): int
     {
@@ -30,7 +31,7 @@ final class UserTest extends TestCase
         }
 
         if (is_string($user)) {
-            $user = $this->client->user(["id"=>$user]);
+            $user = $this->client->user(["id" => $user]);
         }
 
         $result = $user->experiment($experiment);
@@ -64,23 +65,13 @@ final class UserTest extends TestCase
         $this->assertEquals(0, $this->chooseVariation("9", $experiment));
     }
 
-    public function testOldUserSignature(): void
-    {
-        /** @phpstan-ignore-next-line */
-        $user = $this->client->user("1");
-        /** @phpstan-ignore-next-line */
-        $withAttributes = $this->client->user("1", ["hello"=>"world"]);
-
-        $this->assertEquals('1', $user->id);
-        $this->assertEquals('1', $user->anonId);
-        $this->assertEquals(["hello"=>"world"], $withAttributes->getAttributes());
-    }
-
     public function testUnevenWeights(): void
     {
-        $experiment = new Experiment("my-test", 2, [
-      "weights" => [0.1, 0.9]
-    ]);
+        $experiment = new Experiment(
+            "my-test",
+            [0,1],
+            ["weights" => [0.1, 0.9]]
+        );
 
         $this->assertEquals(1, $this->chooseVariation("1", $experiment));
         $this->assertEquals(1, $this->chooseVariation("2", $experiment));
@@ -95,9 +86,7 @@ final class UserTest extends TestCase
 
     public function testCoverage(): void
     {
-        $experiment = new Experiment("my-test", 2, [
-      "coverage" => 0.4
-    ]);
+        $experiment = new Experiment("my-test", [0,1], ["coverage" => 0.4]);
 
         $this->assertEquals(-1, $this->chooseVariation("1", $experiment));
         $this->assertEquals(0, $this->chooseVariation("2", $experiment));
@@ -112,7 +101,7 @@ final class UserTest extends TestCase
 
     public function test3WayTest(): void
     {
-        $experiment = new Experiment("my-test", 3);
+        $experiment = new Experiment("my-test", [0,1,2]);
 
         $this->assertEquals(2, $this->chooseVariation("1", $experiment));
         $this->assertEquals(0, $this->chooseVariation("2", $experiment));
@@ -138,16 +127,12 @@ final class UserTest extends TestCase
 
     public function testAnonId(): void
     {
-        $userOnly = $this->client->user(["id"=>"1"]);
-        $anonOnly = $this->client->user(["anonId"=>"2"]);
-        $both = $this->client->user(["id"=>"1", "anonId"=>"2"]);
+        $userOnly = $this->client->user(["id" => "1"]);
+        $anonOnly = $this->client->user(["anonId" => "2"]);
+        $both = $this->client->user(["id" => "1", "anonId" => "2"]);
 
-        $experimentAnon = new Experiment("my-test", 2, [
-      "anon" => true
-    ]);
-        $experimentUser = new Experiment("my-test", 2, [
-      "anon" => false
-    ]);
+        $experimentAnon = new Experiment("my-test", [0,1], ["anon" => true]);
+        $experimentUser = new Experiment("my-test", [0,1], ["anon" => false]);
 
         $this->assertEquals(1, $this->chooseVariation($userOnly, $experimentUser));
         $this->assertEquals(1, $this->chooseVariation($both, $experimentUser));
@@ -163,8 +148,8 @@ final class UserTest extends TestCase
         // Reset client
         $this->client = new Client();
 
-        $user1 = $this->client->user(["id"=>"1"]);
-        $user2 = $this->client->user(["id"=>"2"]);
+        $user1 = $this->client->user(["id" => "1"]);
+        $user2 = $this->client->user(["id" => "2"]);
 
         $experiment1 = new Experiment("my-test");
         $experiment2 = new Experiment("my-other-test");
@@ -184,22 +169,19 @@ final class UserTest extends TestCase
         $this->assertEquals(1, $tracks[0]->result->variationId);
 
         $this->assertEquals("1", $tracks[1]->user->id);
-        $this->assertEquals("my-other-test", $tracks[1]->experiment->key??null);
+        $this->assertEquals("my-other-test", $tracks[1]->experiment->key ?? null);
         $this->assertEquals(1, $tracks[1]->result->variationId);
 
         $this->assertEquals("2", $tracks[2]->user->id);
-        $this->assertEquals("my-other-test", $tracks[2]->experiment->key??null);
+        $this->assertEquals("my-other-test", $tracks[2]->experiment->key ?? null);
         $this->assertEquals(0, $tracks[2]->result->variationId);
     }
 
     public function testTracksVariationKeys(): void
     {
-        $experiment = new Experiment("my-test", [
-        "first",
-        "second"
-    ]);
+        $experiment = new Experiment("my-test", ["first","second"]);
         $client = new Client();
-        $user = $client->user(["id"=>"1"]);
+        $user = $client->user(["id" => "1"]);
         $user->experiment($experiment);
         $tracks = $client->getTrackData();
         $this->assertEquals(1, count($tracks));
@@ -213,33 +195,33 @@ final class UserTest extends TestCase
     public function testNumVariationsTooSmall(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        new Experiment("my-test", 1);
+        new Experiment("my-test", [0]);
     }
     public function testNumVariationsTooBig(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        new Experiment("my-test", 30);
+        new Experiment("my-test", range(0, 30));
     }
 
     public function testWeirdExperimentValues(): void
     {
-        $experiment = new Experiment("my-test", 2, [
-      "coverage" => -0.2
-    ]);
-        $this->assertEquals([0.5,0.5], $experiment->getScaledWeights());
+        $experiment = new Experiment("my-test", [0,1], ["coverage" => -0.2]);
+        $this->assertEquals([0.5, 0.5], $experiment->getScaledWeights());
         $experiment->coverage = 1.5;
-        $this->assertEquals([0.5,0.5], $experiment->getScaledWeights());
+        $this->assertEquals([0.5, 0.5], $experiment->getScaledWeights());
         $experiment->coverage = 1;
         $experiment->weights = [0.4, 0.1];
-        $this->assertEquals([0.5,0.5], $experiment->getScaledWeights());
+        $this->assertEquals([0.5, 0.5], $experiment->getScaledWeights());
         $experiment->weights = [0.7, 0.6];
-        $this->assertEquals([0.5,0.5], $experiment->getScaledWeights());
+        $this->assertEquals([0.5, 0.5], $experiment->getScaledWeights());
+        $experiment->weights = [0.33,0.33,0.34];
+        $this->assertEquals([0.5, 0.5], $experiment->getScaledWeights());
     }
 
     // A variation is forced
     public function testForcedVariation(): void
     {
-        $user = $this->client->user(["id"=>"1"]);
+        $user = $this->client->user(["id" => "1"]);
         $experiment = new Experiment("my-test");
         $this->assertEquals(1, $this->chooseVariation($user, $experiment));
 
@@ -262,36 +244,34 @@ final class UserTest extends TestCase
 
     public function testTargeting(): void
     {
-        $experiment = new Experiment("my-test", 2, [
-      "targeting"=> [
-        'member = true',
-        'age > 18',
-        'source ~ (google|yahoo)',
-        'name != matt',
-        'email !~ ^.*@exclude.com$',
-        'colors !~ brown'
-      ]
-    ]);
+        $experiment = new Experiment("my-test", [0,1], ["targeting" => [
+            'member = true',
+            'age > 18',
+            'source ~ (google|yahoo)',
+            'name != matt',
+            'email !~ ^.*@exclude.com$',
+            'colors !~ brown'
+        ]]);
 
         $attributes = [
-      "member"=> true,
-      "age"=> 21,
-      "source"=> 'yahoo',
-      "name"=> 'george',
-      "email"=> 'test@example.com',
-      "colors" => ["red", "blue", "green"]
-    ];
+            "member" => true,
+            "age" => 21,
+            "source" => 'yahoo',
+            "name" => 'george',
+            "email" => 'test@example.com',
+            "colors" => ["red", "blue", "green"]
+        ];
 
         // Matches all
-        $user = $this->client->user(["id"=>"1", "attributes"=>$attributes]);
+        $user = $this->client->user(["id" => "1", "attributes" => $attributes]);
         $this->assertEquals(1, $this->chooseVariation($user, $experiment), "Matches all");
 
         // Missing negative checks
         $user->setAttributes([
-      "member" => true,
-      "age" => 21,
-      "source" => "yahoo",
-    ]);
+            "member" => true,
+            "age" => 21,
+            "source" => "yahoo",
+        ]);
         $this->assertEquals(1, $this->chooseVariation($user, $experiment), "Missing negative checks");
 
         // Missing all attributes
@@ -300,56 +280,49 @@ final class UserTest extends TestCase
 
         // Fails boolean
         $user->setAttributes(array_merge($attributes, [
-      "member"=> false
-    ]));
+            "member" => false
+        ]));
         $this->assertEquals(-1, $this->chooseVariation($user, $experiment), "Fails boolean");
 
         // Fails number
         $user->setAttributes(array_merge($attributes, [
-      "age"=> 17
-    ]));
+            "age" => 17
+        ]));
         $this->assertEquals(-1, $this->chooseVariation($user, $experiment), "Fails number");
 
         // Fails regex
         $user->setAttributes(array_merge($attributes, [
-      "source"=> "goog"
-    ]));
+            "source" => "goog"
+        ]));
         $this->assertEquals(-1, $this->chooseVariation($user, $experiment), "Fails regex");
 
         // Fails not equals
         $user->setAttributes(array_merge($attributes, [
-      "name"=> "matt"
-    ]));
+            "name" => "matt"
+        ]));
         $this->assertEquals(-1, $this->chooseVariation($user, $experiment), "Fails not equals");
 
         // Fails not regex
         $user->setAttributes(array_merge($attributes, [
-      "email"=> "test@exclude.com"
-    ]));
+            "email" => "test@exclude.com"
+        ]));
         $this->assertEquals(-1, $this->chooseVariation($user, $experiment), "Fails not regex");
     }
 
     public function testAttributeMerge(): void
     {
-        $user = $this->client->user(["id" => "1", "attributes" => [
-      "foo" => 1,
-      "bar" => 2
-    ]]);
-        $this->assertEquals([
-      "foo" => 1,
-      "bar" => 2,
-    ], $user->getAttributes());
+        $user = $this->client->user([
+            "id" => "1",
+            "attributes" => [
+              "foo" => 1,
+              "bar" => 2
+            ]
+        ]);
+        $this->assertEquals(["foo" => 1,"bar" => 2,], $user->getAttributes());
 
-        $user->setAttributes([
-      "bar" => 3,
-      "baz" => 1
-    ], true);
+        $user->setAttributes(["bar" => 3,"baz" => 1], true);
 
-        $this->assertEquals([
-      "foo" => 1,
-      "bar" => 3,
-      "baz" => 1
-    ], $user->getAttributes());
+        $this->assertEquals(["foo" => 1,"bar" => 3,"baz" => 1], $user->getAttributes());
     }
 
     public function testExperimentsDisabled(): void
@@ -402,9 +375,7 @@ final class UserTest extends TestCase
 
     public function testUrlTargeting(): void
     {
-        $experiment = new Experiment("my-test", 2, [
-      "url" => "^/post/[0-9]+",
-    ]);
+        $experiment = new Experiment("my-test", [0,1], ["url" => "^/post/[0-9]+",]);
 
         $_SERVER['REQUEST_URI'] = '/';
         $this->assertEquals(-1, $this->chooseVariation("1", $experiment));
@@ -422,9 +393,7 @@ final class UserTest extends TestCase
 
     public function testInvalidUrlRegex(): void
     {
-        $experiment = new Experiment("my-test", 2, [
-      "url" => '???***[)',
-    ]);
+        $experiment = new Experiment("my-test", [0,1], ["url" => '???***[)',]);
 
         $_SERVER['SERVER_PORT'] = '80';
         $_SERVER['HTTP_HOST'] = 'example.com';
@@ -435,9 +404,7 @@ final class UserTest extends TestCase
     public function testIgnoreDraftExperiments(): void
     {
         $this->client->config->enableQueryStringOverride = true;
-        $experiment = new Experiment("my-test", 2, [
-      "status" => "draft"
-    ]);
+        $experiment = new Experiment("my-test", [0,1], ["status" => "draft"]);
         $this->assertEquals(-1, $this->chooseVariation("1", $experiment));
 
         $_GET['my-test'] = '1';
@@ -449,24 +416,15 @@ final class UserTest extends TestCase
 
     public function testIgnoresStoppedExperimentsUnlessForced(): void
     {
-        $lose = new Experiment("my-test", 3, [
-      "status" => "stopped"
-    ]);
-        $win = new Experiment("my-test", 3, [
-      "status" => "stopped",
-      "force" => 2,
-    ]);
+        $lose = new Experiment("my-test", [0,1,2], ["status" => "stopped"]);
+        $win = new Experiment("my-test", [0,1,2], ["status" => "stopped","force" => 2,]);
         $this->assertEquals(-1, $this->chooseVariation("1", $lose));
         $this->assertEquals(2, $this->chooseVariation("1", $win));
     }
 
     public function testJSONImport(): void
     {
-        $overrides = json_decode('{
-      "json-test": {
-        "coverage": 0.01
-      }
-    }', true);
+        $overrides = json_decode('{"json-test":{"coverage": 0.01}}', true);
         $this->client->importOverrides($overrides);
 
         $this->assertEquals(-1, $this->chooseVariation("1", "json-test"));
@@ -476,36 +434,33 @@ final class UserTest extends TestCase
 
     public function testConfigData(): void
     {
-        $user = $this->client->user(["id"=>"1"]);
-        $experiment = new Experiment("my-test", [
-      [
-        "color" => "blue",
-        "size" => "small"
-      ],
-      [
-        "color" => "green",
-        "size" => "large"
-      ]
-    ]);
+        $user = $this->client->user(["id" => "1"]);
+        $experiment = new Experiment(
+            "my-test",
+            [
+                ["color" => "blue","size" => "small"],
+                ["color" => "green","size" => "large"]
+            ]
+        );
 
         $res1 = $user->experiment($experiment);
         $this->assertEquals(1, $res1->variationId);
-        $this->assertEquals(["color"=>'green','size'=>'large'], $res1->value);
+        $this->assertEquals(["color" => 'green', 'size' => 'large'], $res1->value);
 
         // Fallback to control config data if not in test
         $experiment->coverage = 0.01;
         $res2 = $user->experiment($experiment);
         $this->assertEquals(false, $res2->inExperiment);
         $this->assertEquals(0, $res2->variationId);
-        $this->assertEquals(["color"=>'blue','size'=>'small'], $res2->value);
+        $this->assertEquals(["color" => 'blue', 'size' => 'small'], $res2->value);
     }
 
     public function testEvenWeighting(): void
     {
         // Full coverage
         $experiment = new Experiment("my-test");
-        $variations = [0,0];
-        for ($i=1; $i<1000; $i++) {
+        $variations = [0, 0];
+        for ($i = 1; $i < 1000; $i++) {
             $v = $this->chooseVariation((string) $i, $experiment);
             $variations[$v]++;
         }
@@ -514,17 +469,20 @@ final class UserTest extends TestCase
 
         // Reduced coverage
         $experiment->coverage = 0.4;
-        $variations = [
-      0=>0,
-      1=>0,
-      -1=>0
-    ];
-        for ($i=0; $i<1000; $i++) {
+        $variations = [0 => 0, 1 => 0, -1 => 0];
+        for ($i = 0; $i < 1000; $i++) {
             $variations[$this->chooseVariation((string) $i, $experiment)]++;
         }
         $this->assertEquals(200, $variations[0]);
         $this->assertEquals(204, $variations[1]);
         $this->assertEquals(596, $variations[-1]);
+    }
+
+    public function testDeprecatedIntegerVariations(): void
+    {
+        $user = $this->client->user(["id"=>"1"]);
+        $this->expectDeprecation();
+        $user->experiment(new Experiment("my-test", 2));
     }
 
     public function testLogs(): void
@@ -550,8 +508,8 @@ final class UserTest extends TestCase
             }
         };
         $this->client->config->logger = $logger;
-        $this->client->log("debug", "foo", ["bar"=>1]);
-        $this->assertEquals([["debug", "foo", ["bar"=>1]]], $logger->logs);
+        $this->client->log("debug", "foo", ["bar" => 1]);
+        $this->assertEquals([["debug", "foo", ["bar" => 1]]], $logger->logs);
 
         $this->client->config->logger = null;
     }

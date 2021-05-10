@@ -28,6 +28,11 @@ class Util
         return true;
     }
 
+    /**
+     * @param string $userId
+     * @param Experiment<mixed> $experiment
+     * @return int
+     */
     public static function chooseVariation(string $userId, Experiment $experiment): int
     {
         $testId = $experiment->key;

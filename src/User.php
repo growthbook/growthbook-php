@@ -52,6 +52,10 @@ class User
         return $this->attributes;
     }
 
+    /**
+     * @param Experiment<mixed> $experiment
+     * @return bool
+     */
     private function isIncluded(Experiment $experiment): bool
     {
         $numVariations = count($experiment->variations);
@@ -84,7 +88,9 @@ class User
     }
 
     /**
-     * @param Experiment $experiment
+     * @template T
+     * @param Experiment<T> $experiment
+     * @return ExperimentResult<T>
      */
     private function runExperiment(Experiment $experiment, bool $isOverride = false): ExperimentResult
     {
@@ -121,6 +127,11 @@ class User
         return $result;
     }
 
+    /**
+     * @template T
+     * @param Experiment<T> $experiment
+     * @return ExperimentResult<T>
+     */
     public function experiment(Experiment $experiment): ExperimentResult
     {
         $override = $this->client->getExperimentOverride($experiment->key);
@@ -131,6 +142,10 @@ class User
         return $this->runExperiment($experiment);
     }
 
+    /**
+     * @param Experiment<mixed> $experiment
+     * @param ExperimentResult<mixed> $result
+     */
     private function trackView(Experiment $experiment, ExperimentResult $result): void
     {
         if (!$result->inExperiment) {

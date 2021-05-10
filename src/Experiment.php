@@ -29,7 +29,7 @@ class Experiment
     /**
      * @param string $key
      * @param int|T[] $variations
-     * @param array{status?:"draft"|"running"|"stopped", url?: string, weights?: float[], coverage?: float, anon?: bool, targeting?: string[]} $options
+     * @param array{status?:"draft"|"running"|"stopped",url?:string,weights?:float[],coverage?:float,anon?:bool,targeting?:string[],force?:int|null} $options
      */
     public function __construct(string $key, $variations = [0,1], array $options = [])
     {
@@ -44,6 +44,13 @@ class Experiment
             for ($i=0; $i<$numVariations; $i++) {
                 $variations[] = $i;
             }
+        }
+
+        // Warn if any unknown options are passed
+        $knownOptions = ["status","url","weights","coverage","anon","targeting","force"];
+        $unknownOptions = array_diff(array_keys($options), $knownOptions);
+        if (count($unknownOptions)) {
+            trigger_error('Unknown Experiment options: '.implode(", ", $unknownOptions), E_USER_NOTICE);
         }
 
         if (count($variations) < 2) {
@@ -112,13 +119,13 @@ class Experiment
     public function withOverride(ExperimentOverride $override): Experiment
     {
         return new Experiment($this->key, $this->variations, [
-      "anon" => $this->anon,
-      "status" => $override->status !== null ? $override->status : $this->status,
-      "weights" => $override->weights !== null ? $override->weights : $this->weights,
-      "coverage" => $override->coverage !== null ? $override->coverage : $this->coverage,
-      "url" => $override->url !== null ? $override->url : $this->url,
-      "targeting" => $override->targeting !== null ? $override->targeting : $this->targeting,
-      "force" => $override->force !== null ? $override->force : $this->force,
-    ]);
+            "anon" => $this->anon,
+            "status" => $override->status !== null ? $override->status : $this->status,
+            "weights" => $override->weights !== null ? $override->weights : $this->weights,
+            "coverage" => $override->coverage !== null ? $override->coverage : $this->coverage,
+            "url" => $override->url !== null ? $override->url : $this->url,
+            "targeting" => $override->targeting !== null ? $override->targeting : $this->targeting,
+            "force" => $override->force !== null ? $override->force : $this->force,
+        ]);
     }
 }

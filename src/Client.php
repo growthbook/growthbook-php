@@ -85,6 +85,13 @@ class Client
             }
         }
 
+        // Warn if any unknown options are passed
+        $knownOptions = ["id","anonId","attributes"];
+        $unknownOptions = array_diff(array_keys($params), $knownOptions);
+        if (count($unknownOptions)) {
+            trigger_error('Unknown Client->user params: '.implode(", ", $unknownOptions), E_USER_NOTICE);
+        }
+
         return new User(
             $params["anonId"]??"",
             $params["id"]??"",

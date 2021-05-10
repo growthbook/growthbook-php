@@ -18,10 +18,17 @@ class ExperimentOverride
     public $targeting;
 
     /**
-     * @param array{status?:"draft"|"running"|"stopped", url?: string, weights?: float[], coverage?: float, targeting?: string[]} $options
+     * @param array{status?:"draft"|"running"|"stopped",url?:string,weights?:float[],coverage?:float,targeting?:string[],force?:int} $options
      */
     public function __construct(array $options = [])
     {
+        // Warn if any unknown options are passed
+        $knownOptions = ["status","url","weights","coverage","targeting","force"];
+        $unknownOptions = array_diff(array_keys($options), $knownOptions);
+        if (count($unknownOptions)) {
+            trigger_error('Unknown ExperimentOverride options: '.implode(", ", $unknownOptions), E_USER_NOTICE);
+        }
+
         $this->status = $options['status'] ?? null;
         $this->weights = $options['weights'] ?? null;
         $this->coverage = $options["coverage"] ?? null;

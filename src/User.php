@@ -18,7 +18,7 @@ class User
     /**
      * @param string $anonId
      * @param string $id
-     * @param array<string, mixed> $attributes
+     * @param array<string,mixed> $attributes
      * @param Client $client
      */
     public function __construct(string $anonId, string $id, array $attributes, Client $client)
@@ -158,7 +158,7 @@ class User
     /**
      * @param string $prefix
      * @param mixed $val
-     * @return array<array{k:string, v:string}>
+     * @return array<array{k:string,v:string}>
      */
     private function flattenUserValues(string $prefix = "", $val=""): array
     {

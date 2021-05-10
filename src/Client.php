@@ -4,94 +4,105 @@ namespace Growthbook;
 
 class Client
 {
-  /** @var Config */
-  public $config;
-  /** @var array<string,bool> */
-  private $experimentViewedHash = [];
-  /** @var TrackData[] */
-  private $experimentsViewed = [];
-  /** @var Experiment[] */
-  public $experiments = [];
+    /** @var Config */
+    public $config;
+    /** @var array<string,bool> */
+    private $experimentViewedHash = [];
+    /** @var TrackData[] */
+    private $experimentsViewed = [];
+    /** @var array<string,ExperimentOverride> */
+    private $overrides = [];
 
-  public function __construct(Config $config = null)
-  {
-    $this->config = $config ?? new Config([]);
-  }
-
-  public function addExperimentsFromJSON(string $experimentsJSON): void
-  {
-    $experiments = json_decode($experimentsJSON, true);
-    foreach($experiments as $options) {
-      $key = $options['key'];
-      unset($options['key']);
-      $this->experiments[] = new Experiment($key, $options);
+    public function __construct(Config $config = null)
+    {
+        $this->config = $config ?? new Config([]);
     }
-  }
 
-  public function getExperimentByKey(string $key): ?Experiment {
-    foreach($this->experiments as $experiment) {
-      if($experiment->key === $key) {
-        return $experiment;
-      }
+    /**
+     * @param array<string,ExperimentOverride|array> $overrides
+     */
+    public function importOverrides(array $overrides): void
+    {
+        foreach ($overrides as $key=>$override) {
+            if (is_array($override)) {
+                $override = new ExperimentOverride($override);
+            }
+
+            $this->overrides[$key] = $override;
+        }
     }
-    return null;
-  }
 
-  /**
-   * @param string $level
-   * @param string $message
-   * @param mixed $context
-   */
-  public function log(string $level, string $message, $context = []): void {
-    if($this->config->logger) {
-      $this->config->logger->log($level, $message, $context);
+    public function getExperimentOverride(string $key): ?ExperimentOverride
+    {
+        if (array_key_exists($key, $this->overrides)) {
+            return $this->overrides[$key];
+        }
+        return null;
     }
-  }
 
-  public function trackExperiment(TrackData $data): void {
-    // @codeCoverageIgnoreStart
-    if(!$data->result->experiment) {
-      return;
+    public function clearExperimentOverrides(): void
+    {
+        $this->overrides = [];
     }
-    // @codeCoverageIgnoreEnd
 
-    $key = $data->result->experiment->key . $data->user->id;
-    if(array_key_exists($key, $this->experimentViewedHash)) {
-      return;
+    /**
+     * @param string $level
+     * @param string $message
+     * @param mixed $context
+     */
+    public function log(string $level, string $message, $context = []): void
+    {
+        if ($this->config->logger) {
+            $this->config->logger->log($level, $message, $context);
+        }
     }
-    $this->experimentViewedHash[$key] = true;
-    $this->experimentsViewed[] = $data;
-  }
 
-  /**
-   * @param array{id?:string,anonId?:string,attributes?:array<string,mixed>} $params
-   */
-  public function user($params): User
-  {
-    // Old usage: $client->user(string $id, array $attributes = [])
-	  /** @phpstan-ignore-next-line */
-    if(is_string($params)) {
-      $params = [
+    public function trackExperiment(TrackData $data): void
+    {
+        // @codeCoverageIgnoreStart
+        if (!$data->result->experiment) {
+            return;
+        }
+        // @codeCoverageIgnoreEnd
+
+        $key = $data->result->experiment->key . $data->user->id;
+        if (array_key_exists($key, $this->experimentViewedHash)) {
+            return;
+        }
+        $this->experimentViewedHash[$key] = true;
+        $this->experimentsViewed[] = $data;
+    }
+
+    /**
+     * @param array{id?:string,anonId?:string,attributes?:array<string,mixed>} $params
+     */
+    public function user($params): User
+    {
+        // Old usage: $client->user(string $id, array $attributes = [])
+        /** @phpstan-ignore-next-line */
+        if (is_string($params)) {
+            $params = [
         "id"=>$params,
         "anonId"=>$params,
       ];
-      if(func_num_args() > 1) {
-        $params["attributes"] = func_get_arg(1);
-      }
+            if (func_num_args() > 1) {
+                $params["attributes"] = func_get_arg(1);
+            }
+        }
+
+        return new User(
+            $params["anonId"]??"",
+            $params["id"]??"",
+            $params["attributes"]??[],
+            $this
+        );
     }
 
-    return new User(
-      $params["anonId"]??"", 
-      $params["id"]??"", 
-      $params["attributes"]??[], 
-      $this
-    );
-  }
-
-  /**
-   * @return TrackData[]
-   */
-  public function getTrackData(): array {
-    return $this->experimentsViewed;
-  }
+    /**
+     * @return TrackData[]
+     */
+    public function getTrackData(): array
+    {
+        return $this->experimentsViewed;
+    }
 }

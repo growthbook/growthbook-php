@@ -1,41 +1,45 @@
 <?php
+
 namespace Growthbook;
 
-class ExperimentResult {
-  /** @var null|Experiment */
-  public $experiment;
-  /** @var int */
-  public $variation;
-  /** @var string */
-  public $variationKey;
+class ExperimentResult
+{
+    /**
+     * @var boolean
+     */
+    public $inExperiment;
+    /**
+     * @var int
+     */
+    public $variationId;
+    /**
+     * @var mixed
+     */
+    public $value;
 
-  public function __construct(Experiment $experiment = null, int $variation = -1) {
-    $this->experiment = $experiment;
-    $this->variation = $variation;
-    $this->variationKey = "";
+    /**
+     * @var null|Experiment
+     * @deprecated
+     */
+    public $experiment;
+    /**
+     * @var int
+     * @deprecated
+     */
+    public $variation;
 
-    if($experiment && $variation >= 0 && is_array($experiment->variations)) {
-      $this->variationKey = $experiment->variations[$variation]["key"] ?? ($variation."");
+    public function __construct(Experiment $experiment, int $variation = -1)
+    {
+        $this->inExperiment = true;
+        if ($variation < 0) {
+            $this->inExperiment = false;
+            $variation = 0;
+        }
+
+        $this->variationId = $variation;
+        $this->value = $experiment->variations[$this->variationId];
+
+        $this->experiment = $experiment;
+        $this->variation = $variation;
     }
-  }
-
-  /** @return mixed */
-  public function getData(string $key) {
-    if(!$this->experiment) {
-      return null;
-    }
-    if(!is_array($this->experiment->variations)) {
-      return null;
-    }
-
-    $var = $this->experiment->variations[0];
-    if($this->variation > 0) {
-      $var = $this->experiment->variations[$this->variation];
-    }
-    if(!$var) return null;
-
-    if(!array_key_exists("data", $var)) return null;
-
-    return $var["data"][$key] ?? null;
-  }
 }

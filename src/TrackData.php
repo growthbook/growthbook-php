@@ -1,14 +1,20 @@
 <?php
+
 namespace Growthbook;
 
-class TrackData {
-  /** @var User */
-  public $user;
-  /** @var ExperimentResult */
-  public $result;
+class TrackData
+{
+    /** @var User */
+    public $user;
+    /** @var Experiment */
+    public $experiment;
+    /** @var ExperimentResult */
+    public $result;
 
-  public function __construct(User $user, ExperimentResult $result) {
-    $this->user = $user;
-    $this->result = $result;
-  }
+    public function __construct(User $user, Experiment $experiment, ExperimentResult $result)
+    {
+        $this->user = $user;
+        $this->experiment = $experiment;
+        $this->result = $result;
+    }
 }

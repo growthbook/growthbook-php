@@ -1,0 +1,39 @@
+<?php
+
+namespace Growthbook;
+
+class ExperimentOverride
+{
+    /** @var null|"draft"|"running"|"stopped" */
+    public $status;
+    /** @var null|int */
+    public $force;
+    /** @var null|float[] */
+    public $weights;
+    /** @var null|float */
+    public $coverage;
+    /** @var null|string */
+    public $url;
+    /** @var null|string[] */
+    public $targeting;
+
+    /**
+     * @param array{status?:"draft"|"running"|"stopped",url?:string,weights?:float[],coverage?:float,targeting?:string[],force?:int} $options
+     */
+    public function __construct(array $options = [])
+    {
+        // Warn if any unknown options are passed
+        $knownOptions = ["status","url","weights","coverage","targeting","force"];
+        $unknownOptions = array_diff(array_keys($options), $knownOptions);
+        if (count($unknownOptions)) {
+            trigger_error('Unknown ExperimentOverride options: '.implode(", ", $unknownOptions), E_USER_NOTICE);
+        }
+
+        $this->status = $options['status'] ?? null;
+        $this->weights = $options['weights'] ?? null;
+        $this->coverage = $options["coverage"] ?? null;
+        $this->url = $options['url'] ?? null;
+        $this->targeting = $options["targeting"] ?? null;
+        $this->force = $options["force"] ?? null;
+    }
+}

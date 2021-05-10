@@ -1,32 +1,52 @@
 <?php
+
 namespace Growthbook;
 
-class ExperimentResult {
-  /** @var null|Experiment */
-  public $experiment;
-  /** @var int */
-  public $variation;
+/**
+ * @template T
+ */
+class ExperimentResult
+{
+    /**
+     * @var boolean
+     */
+    public $inExperiment;
+    /**
+     * @var int
+     */
+    public $variationId;
+    /**
+     * @var T
+     */
+    public $value;
 
-  public function __construct(Experiment $experiment = null, int $variation = -1) {
-    $this->experiment = $experiment;
-    $this->variation = $variation;
-  }
+    /**
+     * @var null|Experiment<T>
+     * @deprecated
+     */
+    public $experiment;
+    /**
+     * @var int
+     * @deprecated
+     */
+    public $variation;
 
-  /** @return mixed */
-  public function getData(string $key) {
-    if(!$this->experiment) {
-      return null;
+    /**
+     * @param Experiment<T> $experiment
+     * @param int $variation
+     */
+    public function __construct(Experiment $experiment, int $variation = -1)
+    {
+        $this->inExperiment = true;
+        if ($variation < 0) {
+            $this->inExperiment = false;
+            $variation = 0;
+        }
+
+        $this->variationId = $variation;
+        $this->value = $experiment->variations[$this->variationId];
+
+        $this->experiment = $experiment;
+        $this->variation = $variation;
     }
-    if(!array_key_exists($key, $this->experiment->data)) {
-      return null;
-    }
-
-    $data = $this->experiment->data[$key];
-    // Fallback to control value
-    if(!array_key_exists($this->variation, $data)) {
-      return $data[0];
-    }
-
-    return $data[$this->variation];
-  }
 }

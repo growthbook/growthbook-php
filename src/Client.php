@@ -4,119 +4,107 @@ namespace Growthbook;
 
 class Client
 {
-  /** @var Config */
-  public $config;
-  /** @var array<string,bool> */
-  private $experimentViewedHash = [];
-  /** @var TrackData[] */
-  private $experimentsViewed = [];
-  /** @var Experiment[] */
-  private $experiments = [];
+    /** @var Config */
+    public $config;
+    /** @var array<string,bool> */
+    private $experimentViewedHash = [];
+    /** @var TrackData<mixed>[] */
+    private $experimentsViewed = [];
+    /** @var array<string,ExperimentOverride> */
+    private $overrides = [];
 
-  public function __construct(Config $config = null)
-  {
-    $this->config = $config ?? new Config([]);
-  }
-
-  /**
-   * @param Experiment[] $experiments
-   */
-  public function setExperimentConfigs(array $experiments): void
-  {
-    $this->experiments = $experiments;
-  }
-
-  /**
-   * @return Experiment[]
-   */
-  public function getAllExperimentConfigs(): array {
-    return $this->experiments;
-  }
-
-  public function getExperimentConfigs(string $id): ?Experiment {
-    foreach($this->experiments as $experiment) {
-      if($experiment->id === $id) {
-        return $experiment;
-      }
-    }
-    return null;
-  }
-
-  public function trackExperiment(TrackData $data): void {
-    if(!$data->result->experiment) {
-      return;
+    public function __construct(Config $config = null)
+    {
+        $this->config = $config ?? new Config([]);
     }
 
-    $key = $data->result->experiment->id . $data->user->id;
-    if(array_key_exists($key, $this->experimentViewedHash)) {
-      return;
-    }
-    $this->experimentViewedHash[$key] = true;
+    /**
+     * @param array<string,ExperimentOverride|array> $overrides
+     */
+    public function importOverrides(array $overrides): void
+    {
+        foreach ($overrides as $key=>$override) {
+            if (is_array($override)) {
+                $override = new ExperimentOverride($override);
+            }
 
-    $this->experimentsViewed[] = $data;
-    $callback = $this->config->onExperimentViewed;
-    if($callback) {
-      $callback($data);
-    }
-  }
-
-  /**
-   * @param array{id?:string,anonId?:string,attributes?:array<string,mixed>} $params
-   */
-  public function user($params): User
-  {
-    // Old usage: $client->user(string $id, array $attributes = [])
-	  /** @phpstan-ignore-next-line */
-    if(is_string($params)) {
-      $params = [
-        "id"=>$params,
-        "anonId"=>$params,
-      ];
-      if(func_num_args() > 1) {
-        $params["attributes"] = func_get_arg(1);
-      }
+            $this->overrides[$key] = $override;
+        }
     }
 
-    return new User(
-      $params["anonId"]??"", 
-      $params["id"]??"", 
-      $params["attributes"]??[], 
-      $this
-    );
-  }
-
-  /**
-   * @param string $apiKey
-   * @param array<string, mixed> $guzzleSettings
-   * @return Experiment[]
-   */
-  public static function fetchExperimentConfigs(string $apiKey, array $guzzleSettings = []): array
-  {
-    $client = new \GuzzleHttp\Client();
-    $res = $client->request('GET', "https://cdn.growthbook.io/config/$apiKey", $guzzleSettings);
-
-    $body = $res->getBody();
-    $json = json_decode($body);
-
-    if ($res->getStatusCode() !== 200) {
-      throw new \Exception(isset($json['message']) ? $json['message'] : "There was an error fetching experiment configs");
+    public function getExperimentOverride(string $key): ?ExperimentOverride
+    {
+        if (array_key_exists($key, $this->overrides)) {
+            return $this->overrides[$key];
+        }
+        return null;
     }
 
-    if ($json && is_array($json) && isset($json['experiments']) && is_array($json['experiments'])) {
-      $experiments = [];
-      foreach($json["experiments"] as $id=>$experiment) {
-        $experiments[] = new Experiment($id, $experiment["variation"], $experiment);
-      }
-      return $experiments;
+    public function clearExperimentOverrides(): void
+    {
+        $this->overrides = [];
     }
 
-    throw new \Exception("Failed to parse experiment configs");
-  }
+    /**
+     * @param string $level
+     * @param string $message
+     * @param mixed $context
+     */
+    public function log(string $level, string $message, $context = []): void
+    {
+        if ($this->config->logger) {
+            $this->config->logger->log($level, $message, $context);
+        }
+    }
 
-  /**
-   * @return TrackData[]
-   */
-  public function getTrackData(): array {
-    return $this->experimentsViewed;
-  }
+    /**
+     * @param TrackData<mixed> $data
+     */
+    public function trackExperiment(TrackData $data): void
+    {
+        $key = $data->experiment->key . $data->user->id;
+        if (array_key_exists($key, $this->experimentViewedHash)) {
+            return;
+        }
+        $this->experimentViewedHash[$key] = true;
+        $this->experimentsViewed[] = $data;
+    }
+
+    /**
+     * @param array{id?:string,anonId?:string,attributes?:array<string,mixed>} $params
+     */
+    public function user($params): User
+    {
+        // Old usage: $client->user(string $id, array $attributes = [])
+        /** @phpstan-ignore-next-line */
+        if (is_string($params)) {
+            trigger_error('That GrowthBookClient::user usage is deprecated. It now accepts a single associative array argument.', E_USER_DEPRECATED);
+            $params = ["id"=>$params, "anonId"=>$params,];
+            if (func_num_args() > 1) {
+                $params["attributes"] = func_get_arg(1);
+            }
+        }
+
+        // Warn if any unknown options are passed
+        $knownOptions = ["id","anonId","attributes"];
+        $unknownOptions = array_diff(array_keys($params), $knownOptions);
+        if (count($unknownOptions)) {
+            trigger_error('Unknown Client->user params: '.implode(", ", $unknownOptions), E_USER_NOTICE);
+        }
+
+        return new User(
+            $params["anonId"]??"",
+            $params["id"]??"",
+            $params["attributes"]??[],
+            $this
+        );
+    }
+
+    /**
+     * @return TrackData<mixed>[]
+     */
+    public function getTrackData(): array
+    {
+        return $this->experimentsViewed;
+    }
 }

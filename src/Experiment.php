@@ -19,24 +19,24 @@ class Experiment
     public $weights;
     /** @var float */
     public $coverage;
-    /** @var bool */
-    public $anon;
+    /** @var string */
+    public $randomizationUnit;
     /** @var string */
     public $url;
     /** @var string[] */
-    public $targeting;
+    public $groups;
 
     /**
      * @param string $key
      * @param int|T[] $variations
-     * @param array{status?:"draft"|"running"|"stopped",url?:string,weights?:float[],coverage?:float,anon?:bool,targeting?:string[],force?:int|null} $options
+     * @param array{status?:"draft"|"running"|"stopped",url?:string,weights?:float[],coverage?:float,randomizationUnit?:string,groups?:string[],force?:int|null} $options
      */
     public function __construct(string $key, $variations = [0,1], array $options = [])
     {
         $this->key = $key;
 
         // Deprecated - pass int for variations instead of an array
-        // Turn into simple range arrage (e.g. [0,1,2])
+        // Turn into simple range (e.g. [0,1,2])
         if (is_numeric($variations)) {
             trigger_error('Experiment $variations should be an array. Passing an integer is deprecated.', E_USER_DEPRECATED);
             $numVariations = $variations;
@@ -46,8 +46,17 @@ class Experiment
             }
         }
 
+        // Deprecated - using `anon` option instead of `randomizationUnit`
+        if (isset($options['anon'])) {
+            //trigger_error('The experiment.anon flag is deprecated. Use randomizationUnit instead.', E_USER_DEPRECATED);
+            if ($options['anon'] && !isset($options['randomizationUnit'])) {
+                $options['randomizationUnit'] = 'anonId';
+            }
+            unset($options['anon']);
+        }
+
         // Warn if any unknown options are passed
-        $knownOptions = ["status","url","weights","coverage","anon","targeting","force"];
+        $knownOptions = ["status","url","weights","coverage","randomizationUnit","groups","force"];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
             trigger_error('Unknown Experiment options: '.implode(", ", $unknownOptions), E_USER_NOTICE);
@@ -65,10 +74,10 @@ class Experiment
         $this->variations = $variations;
         $this->weights = $options['weights'] ?? $this->getEqualWeights(count($this->variations));
         $this->coverage = $options["coverage"] ?? 1;
-        $this->anon = $options["anon"] ?? false;
         $this->url = $options['url'] ?? "";
-        $this->targeting = $options["targeting"] ?? [];
+        $this->groups = $options["groups"] ?? [];
         $this->force = $options["force"] ?? null;
+        $this->randomizationUnit = $options["randomizationUnit"] ?? "id";
     }
 
     /**
@@ -119,12 +128,12 @@ class Experiment
     public function withOverride(ExperimentOverride $override): Experiment
     {
         return new Experiment($this->key, $this->variations, [
-            "anon" => $this->anon,
+            "randomizationUnit" => $this->randomizationUnit,
             "status" => $override->status !== null ? $override->status : $this->status,
             "weights" => $override->weights !== null ? $override->weights : $this->weights,
             "coverage" => $override->coverage !== null ? $override->coverage : $this->coverage,
             "url" => $override->url !== null ? $override->url : $this->url,
-            "targeting" => $override->targeting !== null ? $override->targeting : $this->targeting,
+            "groups" => $override->groups !== null ? $override->groups : $this->groups,
             "force" => $override->force !== null ? $override->force : $this->force,
         ]);
     }

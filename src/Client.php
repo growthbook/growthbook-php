@@ -62,7 +62,8 @@ class Client
      */
     public function trackExperiment(TrackData $data): void
     {
-        $key = $data->experiment->key . $data->user->id;
+        $userId = $data->user->getRandomizationId($data->experiment->randomizationUnit);
+        $key = $data->experiment->key . $data->experiment->randomizationUnit . $userId;
         if (array_key_exists($key, $this->experimentViewedHash)) {
             return;
         }
@@ -71,31 +72,21 @@ class Client
     }
 
     /**
-     * @param array{id?:string,anonId?:string,attributes?:array<string,mixed>} $params
+     * @param array<string,string> $ids
+     * @param array<string,boolean> $groups
      */
-    public function user($params): User
+    public function user($ids, array $groups = []): User
     {
         // Old usage: $client->user(string $id, array $attributes = [])
         /** @phpstan-ignore-next-line */
-        if (is_string($params)) {
+        if (is_string($ids)) {
             trigger_error('That GrowthBookClient::user usage is deprecated. It now accepts a single associative array argument.', E_USER_DEPRECATED);
-            $params = ["id"=>$params, "anonId"=>$params,];
-            if (func_num_args() > 1) {
-                $params["attributes"] = func_get_arg(1);
-            }
-        }
-
-        // Warn if any unknown options are passed
-        $knownOptions = ["id","anonId","attributes"];
-        $unknownOptions = array_diff(array_keys($params), $knownOptions);
-        if (count($unknownOptions)) {
-            trigger_error('Unknown Client->user params: '.implode(", ", $unknownOptions), E_USER_NOTICE);
+            $ids = ["id"=>$ids, "anonId"=>$ids,];
         }
 
         return new User(
-            $params["anonId"]??"",
-            $params["id"]??"",
-            $params["attributes"]??[],
+            $ids,
+            $groups,
             $this
         );
     }

@@ -143,6 +143,46 @@ final class UserTest extends TestCase
         $this->assertEquals(0, $this->chooseVariation($anonOnly, $experimentAnon));
     }
 
+    public function testRandomizationUnit(): void
+    {
+        $experiment = new Experiment("my-test", [0,1], ["randomizationUnit" => "companyId"]);
+
+        for ($i=0;$i<10;$i++) {
+            $user = $this->client->user([
+                "id" => "".$i,
+                "companyId" => "1"
+            ]);
+            $this->assertEquals(1, $this->chooseVariation($user, $experiment));
+        }
+    }
+
+    public function testGroups(): void
+    {
+        $user = $this->client->user(["id"=>"123"], [
+            "alpha"=>true,
+            "beta"=>true,
+            "internal"=>false,
+            "qa"=>false
+        ]);
+
+        $experiment = new Experiment("my-test", [0,1], [
+            "groups" => ["internal", "qa"]
+        ]);
+        $result = $user->experiment($experiment);
+        $this->assertEquals(false, $result->inExperiment);
+
+        $experiment = new Experiment("my-test", [0,1], [
+            "groups" => ["internal", "qa", "beta"]
+        ]);
+        $result = $user->experiment($experiment);
+        $this->assertEquals(true, $result->inExperiment);
+
+        $experiment = new Experiment("my-test", [0,1], [
+        ]);
+        $result = $user->experiment($experiment);
+        $this->assertEquals(true, $result->inExperiment);
+    }
+
     public function testTracking(): void
     {
         // Reset client
@@ -164,15 +204,15 @@ final class UserTest extends TestCase
 
         $this->assertEquals(3, count($tracks));
 
-        $this->assertEquals("1", $tracks[0]->user->id);
+        $this->assertEquals("1", $tracks[0]->user->getRandomizationId("id"));
         $this->assertEquals("my-test", $tracks[0]->experiment->key ?? null);
         $this->assertEquals(1, $tracks[0]->result->variationId);
 
-        $this->assertEquals("1", $tracks[1]->user->id);
+        $this->assertEquals("1", $tracks[1]->user->getRandomizationId("id"));
         $this->assertEquals("my-other-test", $tracks[1]->experiment->key ?? null);
         $this->assertEquals(1, $tracks[1]->result->variationId);
 
-        $this->assertEquals("2", $tracks[2]->user->id);
+        $this->assertEquals("2", $tracks[2]->user->getRandomizationId("id"));
         $this->assertEquals("my-other-test", $tracks[2]->experiment->key ?? null);
         $this->assertEquals(0, $tracks[2]->result->variationId);
     }
@@ -233,96 +273,6 @@ final class UserTest extends TestCase
 
         $experiment->force = 1;
         $this->assertEquals(1, $this->chooseVariation($user, $experiment));
-    }
-
-    public function testWeirdTargetingRules(): void
-    {
-        $this->assertEquals(true, Util::checkRule('9', '<', '20', $this->client));
-        $this->assertEquals(false, Util::checkRule('5', '<', '4', $this->client));
-        $this->assertEquals(true, Util::checkRule('a', '?', 'b', $this->client));
-    }
-
-    public function testTargeting(): void
-    {
-        $experiment = new Experiment("my-test", [0,1], ["targeting" => [
-            'member = true',
-            'age > 18',
-            'source ~ (google|yahoo)',
-            'name != matt',
-            'email !~ ^.*@exclude.com$',
-            'colors !~ brown'
-        ]]);
-
-        $attributes = [
-            "member" => true,
-            "age" => 21,
-            "source" => 'yahoo',
-            "name" => 'george',
-            "email" => 'test@example.com',
-            "colors" => ["red", "blue", "green"]
-        ];
-
-        // Matches all
-        $user = $this->client->user(["id" => "1", "attributes" => $attributes]);
-        $this->assertEquals(1, $this->chooseVariation($user, $experiment), "Matches all");
-
-        // Missing negative checks
-        $user->setAttributes([
-            "member" => true,
-            "age" => 21,
-            "source" => "yahoo",
-        ]);
-        $this->assertEquals(1, $this->chooseVariation($user, $experiment), "Missing negative checks");
-
-        // Missing all attributes
-        $user->setAttributes([]);
-        $this->assertEquals(-1, $this->chooseVariation($user, $experiment), "Missing all attribtues");
-
-        // Fails boolean
-        $user->setAttributes(array_merge($attributes, [
-            "member" => false
-        ]));
-        $this->assertEquals(-1, $this->chooseVariation($user, $experiment), "Fails boolean");
-
-        // Fails number
-        $user->setAttributes(array_merge($attributes, [
-            "age" => 17
-        ]));
-        $this->assertEquals(-1, $this->chooseVariation($user, $experiment), "Fails number");
-
-        // Fails regex
-        $user->setAttributes(array_merge($attributes, [
-            "source" => "goog"
-        ]));
-        $this->assertEquals(-1, $this->chooseVariation($user, $experiment), "Fails regex");
-
-        // Fails not equals
-        $user->setAttributes(array_merge($attributes, [
-            "name" => "matt"
-        ]));
-        $this->assertEquals(-1, $this->chooseVariation($user, $experiment), "Fails not equals");
-
-        // Fails not regex
-        $user->setAttributes(array_merge($attributes, [
-            "email" => "test@exclude.com"
-        ]));
-        $this->assertEquals(-1, $this->chooseVariation($user, $experiment), "Fails not regex");
-    }
-
-    public function testAttributeMerge(): void
-    {
-        $user = $this->client->user([
-            "id" => "1",
-            "attributes" => [
-              "foo" => 1,
-              "bar" => 2
-            ]
-        ]);
-        $this->assertEquals(["foo" => 1,"bar" => 2,], $user->getAttributes());
-
-        $user->setAttributes(["bar" => 3,"baz" => 1], true);
-
-        $this->assertEquals(["foo" => 1,"bar" => 3,"baz" => 1], $user->getAttributes());
     }
 
     public function testExperimentsDisabled(): void

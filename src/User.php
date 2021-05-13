@@ -4,52 +4,25 @@ namespace Growthbook;
 
 class User
 {
-    /** @var string */
-    public $id = "";
-    /** @var string */
-    public $anonId = "";
-    /** @var array<string, mixed> */
-    private $attributes = [];
+    /** @var array<string,string> */
+    public $ids = [];
+    /** @var array<string,boolean> */
+    public $groups = [];
     /** @var Client */
     private $client = null;
     /** @var array<string, string> */
     private $attributeMap = [];
 
     /**
-     * @param string $anonId
-     * @param string $id
-     * @param array<string,mixed> $attributes
+     * @param array<string,string> $ids
+     * @param array<string,boolean> $groups
      * @param Client $client
      */
-    public function __construct(string $anonId, string $id, array $attributes, Client $client)
+    public function __construct(array $ids, array $groups, Client $client)
     {
-        $this->anonId = $anonId;
-        $this->id = $id;
-        $this->attributes = $attributes;
+        $this->ids = $ids;
+        $this->groups = $groups;
         $this->client = $client;
-        $this->updateAttributeMap();
-    }
-
-    /**
-     * @param array<string,mixed> $attributes
-     */
-    public function setAttributes(array $attributes, bool $merge = false): void
-    {
-        if ($merge) {
-            $this->attributes = array_merge($this->attributes, $attributes);
-        } else {
-            $this->attributes = $attributes;
-        }
-
-        $this->updateAttributeMap();
-    }
-
-    /**
-     * @return array<string,mixed>
-     */
-    public function getAttributes(): array
-    {
-        return $this->attributes;
     }
 
     /**
@@ -71,13 +44,20 @@ class User
             return false;
         }
 
-        $userId = $experiment->anon ? $this->anonId : $this->id;
-        if (!$userId) {
+        if (!$this->getRandomizationId($experiment->randomizationUnit)) {
             return false;
         }
 
-        if ($experiment->targeting && !$this->isTargeted($experiment->targeting)) {
-            return false;
+        if ($experiment->groups) {
+            $allowed = false;
+            foreach ($experiment->groups as $group) {
+                if (array_key_exists($group, $this->groups) && $this->groups[$group]) {
+                    $allowed = true;
+                }
+            }
+            if (!$allowed) {
+                return false;
+            }
         }
 
         if ($experiment->url && !Util::urlIsValid($experiment->url)) {
@@ -85,6 +65,14 @@ class User
         }
 
         return true;
+    }
+
+    public function getRandomizationId(string $unit = "id"): ?string
+    {
+        if (array_key_exists($unit, $this->ids)) {
+            return $this->ids[$unit];
+        }
+        return null;
     }
 
     /**
@@ -116,7 +104,10 @@ class User
             return new ExperimentResult($experiment, $experiment->force);
         }
 
-        $userId = $experiment->anon ? $this->anonId : $this->id;
+        $userId = $this->getRandomizationId($experiment->randomizationUnit);
+        if (!$userId) {
+            return new ExperimentResult($experiment);
+        }
 
         // Hash unique id and experiment id to randomly choose a variation given weights
         $variation = Util::chooseVariation($userId, $experiment);
@@ -153,69 +144,5 @@ class User
         }
 
         $this->client->trackExperiment(new TrackData($this, $experiment, $result));
-    }
-
-    /**
-     * @param string $prefix
-     * @param mixed $val
-     * @return array<array{k:string,v:string}>
-     */
-    private function flattenUserValues(string $prefix = "", $val=""): array
-    {
-        // Associative array
-        if (is_array($val) && array_keys($val) !== range(0, count($val) - 1)) {
-            $ret = [];
-            foreach ($val as $k => $v) {
-                $ret = array_merge(
-                    $ret,
-                    $this->flattenUserValues($prefix ? $prefix . "." . $k : $k, $v)
-                );
-            }
-            return $ret;
-        }
-
-        // Numeric array
-        if (is_array($val)) {
-            $val = implode(",", $val);
-        } elseif (is_bool($val)) {
-            $val = $val ? "true" : "false";
-        }
-
-        return [
-      [
-        "k" => $prefix,
-        "v" => (string) $val
-      ]
-    ];
-    }
-
-    private function updateAttributeMap(): void
-    {
-        $this->attributeMap = [];
-        $flat = $this->flattenUserValues("", $this->attributes);
-        foreach ($flat as $item) {
-            $this->attributeMap[$item["k"]] = $item["v"];
-        }
-    }
-
-    /**
-     * @param string[] $rules
-     */
-    private function isTargeted(array $rules): bool
-    {
-        foreach ($rules as $rule) {
-            $parts = explode(" ", $rule, 3);
-            if (count($parts) !== 3) {
-                continue;
-            }
-
-            $key = trim($parts[0]);
-            $actual = $this->attributeMap[$key] ?? "";
-            if (!Util::checkRule($actual, trim($parts[1]), trim($parts[2]), $this->client)) {
-                return false;
-            }
-        }
-
-        return true;
     }
 }

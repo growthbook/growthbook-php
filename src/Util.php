@@ -4,30 +4,6 @@ namespace Growthbook;
 
 class Util
 {
-    public static function checkRule(string $actual, string $op, string $desired, Client $client): bool
-    {
-        switch ($op) {
-      case "=":
-        return $actual === $desired;
-      case "!=":
-        return $actual !== $desired;
-      case ">":
-        return strnatcmp($actual, $desired) > 0;
-      case "<":
-        return strnatcmp($actual, $desired) < 0;
-      case "~":
-        return !!preg_match("/" . $desired . "/", $actual);
-      case "!~":
-        return !preg_match("/" . $desired . "/", $actual);
-    }
-
-        $client->log("warning", "Unknown targeting rule operator", [
-      "operator" => $op
-    ]);
-
-        return true;
-    }
-
     /**
      * @param string $userId
      * @param Experiment<mixed> $experiment

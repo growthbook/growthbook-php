@@ -7,6 +7,8 @@ namespace Growthbook;
  */
 class TrackData
 {
+    /** @var string */
+    public $userId;
     /** @var User */
     public $user;
     /** @var Experiment<T> */
@@ -24,5 +26,6 @@ class TrackData
         $this->user = $user;
         $this->experiment = $experiment;
         $this->result = $result;
+        $this->userId = $user->getRandomizationId($experiment->randomizationUnit) ?? "";
     }
 }

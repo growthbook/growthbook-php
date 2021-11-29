@@ -28,6 +28,6 @@ class Config
         $this->enabled = $options["enabled"] ?? true;
         $this->logger = $options["logger"] ?? null;
         $this->enableQueryStringOverride = $options["enableQueryStringOverride"] ?? false;
-        $this->url = $options["url"] ?? $_SERVER['REQUEST_URL'];
+        $this->url = $options["url"] ?? $_SERVER['REQUEST_URI'];
     }
 }

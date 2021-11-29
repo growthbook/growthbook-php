@@ -10,6 +10,8 @@ class Config
     public $logger = null;
     /** @var bool */
     public $enableQueryStringOverride = false;
+    /** @var string */
+    public $url = null;
 
     /**
      * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,enableQueryStringOverride?:boolean} $options
@@ -26,5 +28,6 @@ class Config
         $this->enabled = $options["enabled"] ?? true;
         $this->logger = $options["logger"] ?? null;
         $this->enableQueryStringOverride = $options["enableQueryStringOverride"] ?? false;
+        $this->url = $options["url"] ?? $_SERVER['REQUEST_URL'];
     }
 }

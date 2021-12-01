@@ -19,7 +19,7 @@ class Config
     public function __construct(array $options)
     {
         // Warn if any unknown options are passed
-        $knownOptions = ["enabled","logger","enableQueryStringOverride"];
+        $knownOptions = ["enabled","logger","enableQueryStringOverride","url"];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
             trigger_error('Unknown Config options: '.implode(", ", $unknownOptions), E_USER_NOTICE);

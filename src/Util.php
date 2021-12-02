@@ -55,7 +55,7 @@ class Util
         return static::url_origin() . $_SERVER['REQUEST_URI'];
     }
 
-    public static function urlIsValid(string $urlRegex): bool
+    public static function urlIsValid(string $urlRegex, string $url = ''): bool
     {
         // Need to escape this twice to catch 2 slashes next to each other (e.g. "http://localhost")
         $escaped = preg_replace('/([^\\\\])\\//', '$1\\/', $urlRegex);
@@ -67,7 +67,7 @@ class Util
             return false;
         }
 
-        $url = static::full_url();
+        $url = $url ? $url : static::full_url();
         $pathOnly = $_SERVER['REQUEST_URI'];
 
         try {

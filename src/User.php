@@ -60,7 +60,7 @@ class User
             }
         }
 
-        if ($experiment->url && !Util::urlIsValid($experiment->url)) {
+        if ($experiment->url && !Util::urlIsValid($experiment->url, $this->client->config->url ?? "")) {
             return false;
         }
 

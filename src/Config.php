@@ -10,6 +10,8 @@ class Config
     public $logger = null;
     /** @var bool */
     public $enableQueryStringOverride = false;
+    /** @var string */
+    public $url = null;
 
     /**
      * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,enableQueryStringOverride?:boolean} $options
@@ -17,7 +19,7 @@ class Config
     public function __construct(array $options)
     {
         // Warn if any unknown options are passed
-        $knownOptions = ["enabled","logger","enableQueryStringOverride"];
+        $knownOptions = ["enabled","logger","enableQueryStringOverride","url"];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
             trigger_error('Unknown Config options: '.implode(", ", $unknownOptions), E_USER_NOTICE);
@@ -26,5 +28,6 @@ class Config
         $this->enabled = $options["enabled"] ?? true;
         $this->logger = $options["logger"] ?? null;
         $this->enableQueryStringOverride = $options["enableQueryStringOverride"] ?? false;
+        $this->url = $options["url"] ?? $_SERVER['REQUEST_URI'] ?? null;
     }
 }

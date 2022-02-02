@@ -2,7 +2,7 @@
 
 # Growth Book - PHP
 
-Powerful A/B testing for PHP.
+Powerful Feature flagging and A/B testing for PHP.
 
 ![Build Status](https://github.com/growthbook/growthbook-php/workflows/Build/badge.svg)
 
@@ -23,28 +23,41 @@ Growth Book is available on Composer:
 ## Quick Usage
 
 ```php
-$client = new Growthbook\Client();
+// Get current feature flags from GrowthBook API
+// TODO: persist this in a database or cache in production
+const FEATURES_ENDPOINT = 'https://cdn.growthbook.io/api/features/key_prod_abc123';
+$features = json_decode(file_get_contents(FEATURES_ENDPOINT), true)["features"];
 
-// Define the user that you want to run an experiment on
-$user = $client->user(["id"=>"12345"]);
+// Create a GrowthBook instance
+$growthbook = new Growthbook\Growthbook([
+  'features' => $features,
+  // Targeting attributes for the user
+  'attributes' => [
+    'id' => $userId,
+    'someCustomAttribute' => true
+  ],
+]);
 
-// Define the experiment
-$experiment = new Growthbook\Experiment("my-experiment", ["A", "B"]);
+// Evaluate a feature flag
+if($growthbook->feature("my-feature")->on) {
+  echo "My feature is enabled!";
+}
 
-// Put the user in the experiment
-$result = $user->experiment($experiment);
-
-echo $result->value; // "A" or "B"
+// Remote configuration with fallback
+$color = $growthbook->feature("button-color")->value ?? "blue";
+echo "<button style='color:${color}'>Click Me!</button>";
 ```
 
-At the end of the request, you would track all of the viewed experiments in your analytics tool or database (Segment, GA, Mixpanel, etc.):
+Some of the feature flags you evaluate might be running an A/B test behind the scenes which you'll want to track in your analytics system.
+
+At the end of the request, you can loop through all experiments and track them however you want to:
 
 ```php
-$impressions = $client->getViewedExperiments();
+$impressions = $growthbook->getViewedExperiments();
 foreach($impressions as $impression) {
   // Whatever you use for event tracking
   Segment::track([
-    "userId" => $impression->userId,
+    "userId" => $userId,
     "event" => "Experiment Viewed",
     "properties" => [
       "experimentId" => $impression->experiment->key,
@@ -54,169 +67,110 @@ foreach($impressions as $impression) {
 }
 ```
 
-## Experiments
+## The Growthbook Class
 
-As shown above, the simplest experiment you can define has an id and an array of variations.
+The `Growthbook` constructor takes an associative array with a number of optional properties.
 
-There is an optional 3rd argument, which is an associative array of additional options:
+### Features
 
--  **weights** (`float[]`) - How to weight traffic between variations. Must add to 1 and be the same length as the number of variations.
--  **status** (`string`) - "running" is the default and always active. "draft" is only active during QA and development.  "stopped" is only active when forcing a winning variation to 100% of users.
--  **coverage** (`float`) - What percent of users should be included in the experiment (between 0 and 1, inclusive)
--  **url** (`string`) - Users can only be included in this experiment if the current URL matches this regex
--  **groups** (`string[]`) - User groups that should be included in the experiment (e.g. internal employees, qa testers)
--  **force** (`int`) - All users included in the experiment will be forced into the specific variation index
--  **randomizationUnit** (`string`) - The type of user id to use for variation assignment. Defaults to `id`.
-
-## Running Experiments
-
-Run experiments by calling `$user->experiment()` which returns an object with a few useful properties:
+Defines all of the available features plus rules for how to assign values to users.
 
 ```php
-$result = $user->experiment(new Growthbook\Experiment(
-  "my-experiment", ["A", "B"]
-);
-
-// If user is part of the experiment
-echo $result->inExperiment; // true or false
-
-// The index of the assigned variation
-echo $result->variationId; // 0 or 1
-
-// The value of the assigned variation
-echo $result->value; // "A" or "B"
+new Growthbook\Growthbook([
+  'features'=> [
+    'feature-1': [...],
+    'feature-2': [...]
+  ]
+])
 ```
 
-The `inExperiment` flag can be false if the experiment defines any sort of targeting rules which the user does not pass.  In this case, the user is always assigned variation index `0` and the first variation value.
-
-## Client Configuration
-
-The `Growthbook\Client` constructor takes an optional config arugment:
+Feature definitions are stored in a JSON format. You can fetch them directly from the GrowthBook API:
 
 ```php
-$config = new Growthbook\Config([
-  // options go here
-]);
-$client = new Growthbook\Client($config);
+const FEATURES_ENDPOINT = 'https://cdn.growthbook.io/api/features/key_prod_abc123';
+$features = json_decode(
+  file_get_contents(FEATURES_ENDPOINT),
+  true
+)["features"];
 ```
 
-The `Growthbook\Config` constructor takes an associative array of options. Below are all of the available options currently:
-
--  **enabled** - Default true. Set to false to completely disable all experiments.
--  **logger** - An optional psr-3 logger instance
--  **url** - The url of the page (defaults to `$_SERVER['REQUEST_URL']` if not set)
--  **enableQueryStringOverride** - Default false.  If true, enables forcing variations via the URL.  Very useful for QA.  https://example.com/?my-experiment=1
-
-You can change configuration options at any time by setting properties directly:
+Or, you can use a copy stored in your database or cache server instead:
 
 ```php
-$client->config->enabled = false;
+// From database/cache
+$jsonString = '{"feature-1": {...}, "feature-2": {...}}';
+$features = json_decode($jsonString, true);
 ```
 
-## User Configuration
+We recomend the cache approach for production.
 
-The `$client->user` method takes two arguments: `$ids` and `$groups` (optional).
+### Attributes
+
+You can specify attributes about the current user and request. These are used for two things:
+
+1.  Feature targeting (e.g. paid users get one value, free users get another)
+2.  Assigning persistent variations in A/B tests (e.g. user id "123" always gets variation B)
+
+Attributes can be any JSON data type - boolean, integer, float, string, array, or object.
 
 ```php
-$user = $client->user([
-  // Any user id you want to randomize an experiment by
-  "id" => "123",
-  "anonId" => "abc",
-  "companyId" => "456",
-], [
-  // Any groups the user is a part of
-  "internal" => true,
-  "beta" => true,
-  "qa" => false
+new Growthbook\Growthbook([
+  'attributes' => [
+    'id' => "123",
+    'loggedIn' => true,
+    'deviceId' => "abc123def456",
+    'company' => "acme",
+    'paid' => false,
+    'url' => "/pricing",
+    'browser' => "chrome",
+    'mobile' => false,
+    'country' => "US",
+  ],
 ]);
 ```
 
-### Randomization Units
+You can also set or update attributes asynchronously at any time with the `setAttributes` method. This will completely overwrite the attributes object with whatever you pass in. If you want to merge attributes instead, you can get the existing ones with `getAttributes`:
 
-On an experiment-by-experiment basis, you can choose which user id you want to use for randomization.
-
-Most of the time, you'll want to use `id` if your experiment is for logged-in users only or `anonId` if your experiment includes any logged out users.
-
-For some experiments, you may need other units like `companyId`, `childId`, `geoRegion`, etc.
-
-```php
-new Experiment("company-test", ["A", "B"], [
-  "randomizationUnit" => "companyId"
-]);
-// Now all users in the same company will see the same variation
+```ts
+// Only update the url attribute
+$growthbook->setAttributes(array_merge(
+  $growthbook->getAttributes(),
+  [
+    'url' => '/checkout'
+  ]
+));
 ```
 
-### Groups
+### Tracking Callback
 
-Experiments can specify a list of user groups which are allowed in the experiment. If a user is not a member of one of the groups listed, they will be excluded.
+Any time an experiment is run to determine the value of a feature, you want to track that event in your analytics system.
 
-```php
-$result = $user->experiment(
-    "my-targeted-experiment",
-    ["A", "B"],
-    [
-      "groups" => ["beta", "qa"]
-    ]
-]);
-```
-
-In the above example, if the user is not in either `beta` or `qa`, then `$result->inExperiment` will be false and they will be assigned variation index `0`.
-
-## Overriding Weights and Targeting
-
-It's common practice to adjust experiment settings after a test is live.  For example, slowly ramping up traffic, stopping a test automatically if guardrail metrics go down, or rolling out a winning variation to 100% of users.
-
-Instead of constantly changing your code, you can use client overrides.  For example, to roll out a winning variation to 100% of users:
+You can either track them via a callback function:
 
 ```php
-$client->overrides->set("experiment-key", [
-    "status" => 'stopped',
-    // Force variation index 1
-    "force" => 1
-]);
-```
-
-The full list of experiment properties you can override is:
-*  status
-*  force
-*  weights
-*  coverage
-*  groups
-*  url
-
-This data structure can be easily seralized and stored in a database or returned from an API.  There is a small helper function if you have all of your overrides in a single JSON object:
-
-```php
-$json = '{
-  "experiment-key-1": {
-    "status": "stopped"
-  },
-  "experiment-key-2": {
-    "weights": [0.8, 0.2]
+new Growthbook([
+  'trackingCallback' => function ($experiment, $result) {  
+    // Segment.io example
+    Segment::track([
+      "userId" => $userId,
+      "event" => "Experiment Viewed",
+      "properties" => [
+        "experimentId" => $experiment->key,
+        "variationId" => $result->variationId
+      ]
+    ])
   }
-}';
-
-// Convert to associative array
-$overrides = json_decode($json, true);
-
-// Import into the client
-$client->importOverrides($overrides);
+])
 ```
 
-### Tracking
-
-It's likely you already have some event tracking on your site with the metrics you want to optimize (Google Analytics, Segment, Mixpanel, etc.).
-
-For A/B tests, you just need to track one additional event - when someone views a variation.  
-
-You can call `$client->getViewedExperiments()` at the end of a request to forward to your analytics tool of choice.
+Or track them at the end of the request by looping through an array:
 
 ```php
-$impressions = $client->getViewedExperiments();
+$impressions = $growthbook->getViewedExperiments();
 foreach($impressions as $impression) {
-  // Whatever you use for event tracking
+  // Segment.io example
   Segment::track([
-    "userId" => $impression->userId,
+    "userId" => $userId,
     "event" => "Experiment Viewed",
     "properties" => [
       "experimentId" => $impression->experiment->key,
@@ -226,13 +180,7 @@ foreach($impressions as $impression) {
 }
 ```
 
-Each impression object has the following properties:
--  experiment (the full experiment object)
--  result (the result of the $user->experiment call)
--  userId (the id used to randomize the experiment result)
-
-Often times you'll want to do the event tracking from the front-end with javascript.  To do this, simply add a block to your template (shown here in plain PHP, but similar idea for Twig, Blade, etc.).
-
+Or, you can pass the impressions onto your front-end and fire analytics events from there. To do this, simply add a block to your template (shown here in plain PHP, but similar idea for Twig, Blade, etc.).
 
 ```php
 <script>
@@ -274,30 +222,97 @@ mixpanel.track("Experiment Viewed", <?=json_encode([
 ])?>);
 ```
 
-### Analysis
+## Using Features
 
-For analysis, there are a few options:
+The main method, `$growthbook->feature("key")` takes a feature key and returns a `FeatureResult` object with a few properties:
 
-*  Online A/B testing calculators
-*  Built-in A/B test analysis in Mixpanel/Amplitude
-*  Python or R libraries and a Jupyter Notebook
-*  The [Growth Book App](https://github.io/growthbook/growthbook) (more info below)
+- **value** - The JSON-decoded value of the feature (or `null` if not defined)
+- **on** and **off** - The JSON-decoded value cast to booleans (to make your code easier to read)
+- **source** - Why the value was assigned to the user. One of `unknownFeature`, `defaultValue`, `force`, or `experiment`
+- **experiment** - Information about the experiment (if any) which was used to assign the value to the user
 
-### The Growth Book App
+Here's an example that uses all of them:
 
-Managing experiments and analyzing results at scale can be complicated, which is why we built the open source **Growth Book App** - https://github.io/growthbook/growthbook.  It's completely optional, but definitely worth checking out.
+```php
+$result = $growthbook->feature("my-feature");
 
-- Query multiple data sources (Snowflake, Redshift, BigQuery, Mixpanel, Postgres, Athena, and Google Analytics)
-- Bayesian statistics engine with support for binomial, count, duration, and revenue metrics
-- Drill down into A/B test results (e.g. by browser, country, etc.)
-- Lightweight idea board and prioritization framework
-- Document everything! (upload screenshots, add markdown comments, and more)
-- Automated email alerts when tests become significant
+// The value (might be null, string, boolean, int, float, array, or object)
+print_r($result->value);
 
-Integration is super easy:
+if ($result->on) {
+  // Feature value is truthy
+}
+if ($result->off) {
+  // Feature value is falsy
+}
 
-1.  Create a Growth Book API key
-2.  Periodically fetch the latest experiment overrides from the API and cache in Redis, Mongo, etc.
-3.  At the start of your app, run `$client->importOverrides($listFromCache);`
+// If the feature value was assigned as part of an experiment
+if ($result->source === "experiment") {
+  // Get all the possible variations that could have been assigned
+  print_r($result->experiment->variations);
+}
+```
 
-Now you can start/stop tests, adjust coverage and variation weights, and apply a winning variation to 100% of traffic, all within the Growth Book App without deploying code changes to your site.
+## Inline Experiments
+
+Instead of declaring all features up-front in the constructor and referencing them by ids in your code, you can also just run an experiment directly. This is done with the `$growthbook->run` method:
+
+```js
+$exp = new Growthbook\Experiment("my-experiment", [
+  "red",
+  "blue",
+  "green"
+])
+
+echo $growthbook->run($exp)->value; // Either "red", "blue", or "green"
+```
+
+As you can see, there are 2 required parameters for experiments, a string key, and an array of variations.  Variations can be any data type, not just strings.
+
+There are a number of additional settings to control the experiment behavior. The methods are all chainable. Here's an example that shows all of the possible settings:
+
+```php
+$exp = new Growthbook\Experiment("my-experiment", ["red","blue"])
+  // Run a 40/60 experiment instead of the default 50/50
+  ->withWeights([0.4, 0.6])
+  // Only include 20% of users in the experiment
+  ->withCoverage(0.2)
+  // Targeting conditions using a MongoDB-like syntax
+  ->withCondition([
+    'country' => 'US',
+    'browser' => [
+      '$in' => ['chrome', 'firefox']
+    ]
+  ])
+  // Use an alternate attribute for assigning variations (default is 'id')
+  ->withHashAttribute("sessionId")
+  // Namespaces are used to run mutually exclusive experiments
+  // Another experiment in the "pricing" namespace with a non-overlapping range
+  //   will be mutually exclusive (e.g. [0.5, 1])
+  ->withNamespace("pricing", 0, 0.5);
+```
+
+### Inline Experiment Return Value
+
+A call to `$growthbook->run($experiment)` returns a `ExperimentResult` object with a few useful properties:
+
+```php
+$result = $growthbook->run($experiment);
+
+// If user is part of the experiment
+echo($result->inExperiment); // true or false
+
+// The index of the assigned variation
+echo($result->variationId); // e.g. 0 or 1
+
+// The value of the assigned variation
+echo($result->value); // e.g. "A" or "B"
+
+// The user attribute used to assign a variation
+echo($result->hashAttribute); // "id"
+
+// The value of that attribute
+echo($result->hashValue); // e.g. "123"
+```
+
+The `inExperiment` flag is only set to true if the user was randomly assigned a variation. If the user failed any targeting rules or was forced into a specific variation, this flag will be false.

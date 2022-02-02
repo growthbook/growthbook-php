@@ -87,31 +87,38 @@ class User
             return new ExperimentResult($experiment);
         }
 
+        $hashValue = $this->getRandomizationId($experiment->hashAttribute) ?? "";
+
         // If querystring override is enabled
         if ($this->client->config->enableQueryStringOverride) {
-            $variation = Util::getQueryStringOverride($experiment->key);
+            $variation = Util::getQueryStringOverride($experiment->key, $this->client->config->url, count($experiment->variations));
             if ($variation !== null) {
-                return new ExperimentResult($experiment, $variation);
+                return new ExperimentResult($experiment, $hashValue, $variation);
             }
         }
 
         if (!$this->isIncluded($experiment)) {
-            return new ExperimentResult($experiment);
+            return new ExperimentResult($experiment, $hashValue);
         }
 
         // A specific variation is forced, return it without tracking
         if ($experiment->force !== null) {
-            return new ExperimentResult($experiment, $experiment->force);
+            return new ExperimentResult($experiment, $hashValue, $experiment->force);
         }
 
-        $userId = $this->getRandomizationId($experiment->randomizationUnit);
-        if (!$userId) {
-            return new ExperimentResult($experiment);
+        if (!$hashValue) {
+            return new ExperimentResult($experiment, $hashValue);
         }
 
-        // Hash unique id and experiment id to randomly choose a variation given weights
-        $variation = Util::chooseVariation($userId, $experiment);
-        $result = new ExperimentResult($experiment, $variation);
+        $ranges = Util::getBucketRanges(count($experiment->variations), $experiment->coverage, $experiment->weights ?? []);
+        $n = Util::hash($hashValue + $experiment->key);
+        $assigned = Util::chooseVariation($n, $ranges);
+
+        if($assigned < 0) {
+            return new ExperimentResult($experiment, $hashValue);
+        }
+
+        $result = new ExperimentResult($experiment, $hashValue, $assigned, true);
 
         $this->trackView($experiment, $result);
 

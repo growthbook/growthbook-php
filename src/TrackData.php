@@ -4,6 +4,7 @@ namespace Growthbook;
 
 /**
  * @template T
+ * @deprecated
  */
 class TrackData
 {
@@ -13,15 +14,15 @@ class TrackData
     public $user;
     /** @var Experiment<T> */
     public $experiment;
-    /** @var ExperimentResult<T> */
+    /** @var OldExperimentResult<T> */
     public $result;
 
     /**
      * @param User $user
      * @param Experiment<T> $experiment
-     * @param ExperimentResult<T> $result
+     * @param OldExperimentResult<T> $result
      */
-    public function __construct(User $user, Experiment $experiment, ExperimentResult $result)
+    public function __construct(User $user, Experiment $experiment, OldExperimentResult $result)
     {
         $this->user = $user;
         $this->experiment = $experiment;

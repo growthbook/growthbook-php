@@ -6,13 +6,13 @@ class Growthbook
 {
   /** @var bool */
   public $enabled = true;
-  /** @var \Psr\Log\LoggerInterface */
+  /** @var null|\Psr\Log\LoggerInterface */
   public $logger = null;
-  /** @var string|null */
+  /** @var string */
   private $url = "";
   /** @var array<string,mixed> */
   private $attributes = [];
-  /** @var Feature[] */
+  /** @var Feature<mixed>[] */
   private $features = [];
   /** @var array<string,int> */
   private $forcedVariations = [];
@@ -25,7 +25,7 @@ class Growthbook
   private $tracks = [];
 
   /**
-   * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable} $options
+   * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable} $options
    */
   public function __construct(array $options)
   {
@@ -39,44 +39,92 @@ class Growthbook
     $this->enabled = $options["enabled"] ?? true;
     $this->logger = $options["logger"] ?? null;
     $this->url = $options["url"] ?? $_SERVER['REQUEST_URI'] ?? "";
-    $this->attributes = $options["attributes"] ?? [];
-    $this->features = $options["features"] ?? [];
     $this->forcedVariations = $options["forcedVariations"] ?? [];
     $this->qaMode = $options["qaMode"] ?? false;
     $this->trackingCallback = $options["trackingCallback"] ?? null;
+
+    if(array_key_exists("features", $options)) {
+      $this->withFeatures(($options["features"]));
+    }
+    if(array_key_exists("attributes", $options)) {
+      $this->withAttributes(($options["attributes"]));
+    }
   }
 
+
+  /**
+   * @param array<string,mixed> $attributes
+   * @return Growthbook
+   */
+  public function withAttributes(array $attributes): Growthbook
+  {
+    $this->attributes = $attributes;
+    return $this;
+  }
+  /**
+   * @param array<string,Feature<mixed>|mixed> $features
+   * @return Growthbook
+   */
+  public function withFeatures(array $features): Growthbook
+  {
+    $this->features = [];
+    foreach($features as $key=>$feature) {
+      if($feature instanceof Feature) {
+        $this->features[$key] = $feature;
+      }
+      else {
+        $this->features[$key] = new Feature($feature);
+      }
+    }
+    return $this;
+  }
+  /**
+   * @param array<string,int> $forcedVariations
+   * @return Growthbook
+   */
+  public function withForcedVariations(array $forcedVariations): Growthbook
+  {
+    $this->forcedVariations = $forcedVariations;
+    return $this;
+  }
+  /**
+   * @param string $url
+   * @return Growthbook
+   */
+  public function withUrl(string $url): Growthbook
+  {
+    $this->url = $url;
+    return $this;
+  }
+
+
+  /**
+   * @return array<string,mixed>
+   */
   public function getAttributes(): array
   {
     return $this->attributes;
   }
-  public function setAttributes(array $attributes)
-  {
-    $this->attributes = $attributes;
-  }
+  /**
+   * @return array<string,Feature<mixed>>
+   */
   public function getFeatures(): array
   {
     return $this->features;
   }
-  public function setFeatures(array $features)
-  {
-    $this->features = $features;
-  }
+  /**
+   * @return array<string,int>
+   */
   public function getForcedVariations(): array
   {
     return $this->forcedVariations;
   }
-  public function setForcedVariations(array $forcedVariations)
-  {
-    $this->forcedVariations = $forcedVariations;
-  }
+  /**
+   * @return string
+   */
   public function getUrl(): string
   {
     return $this->url;
-  }
-  public function setUrl(string $url)
-  {
-    $this->url = $url;
   }
 
   /**
@@ -86,6 +134,11 @@ class Growthbook
     return array_values($this->tracks);
   }
 
+  /**
+   * @template T
+   * @param string $key
+   * @return FeatureResult<T>|FeatureResult<null>
+   */
   public function feature(string $key): FeatureResult
   {
     if (!array_key_exists($key, $this->features)) {
@@ -105,7 +158,7 @@ class Growthbook
             if (!$hashValue) {
               continue;
             }
-            $n = Util::hash($hashValue . $feature->key);
+            $n = static::hash($hashValue . $key);
             if ($n > $rule->coverage) {
               continue;
             }
@@ -113,6 +166,9 @@ class Growthbook
           return new FeatureResult($rule->force, "force");
         }
         $exp = $rule->toExperiment($key);
+        if(!$exp) {
+          continue;
+        }
         $result = $this->run($exp);
         if (!$result->inExperiment) {
           continue;
@@ -123,7 +179,12 @@ class Growthbook
     return new FeatureResult($feature->defaultValue ?? null, "defaultValue");
   }
 
-  public function run(Experiment $exp): ExperimentResult
+  /**
+   * @template T
+   * @param InlineExperiment<T> $exp
+   * @return ExperimentResult<T>
+   */
+  public function run(InlineExperiment $exp): ExperimentResult
   {
     // 1. Too few variations
     if (count($exp->variations) < 2) {
@@ -140,7 +201,7 @@ class Growthbook
 
     // 3. Forced via querystring
     if ($this->url) {
-      $qsOverride = Util::getQueryStringOverride($exp->key, $this->url, count($exp->variations));
+      $qsOverride = static::getQueryStringOverride($exp->key, $this->url, count($exp->variations));
       if ($qsOverride !== null) {
         return new ExperimentResult($exp, $hashValue, $qsOverride);
       }
@@ -162,7 +223,7 @@ class Growthbook
     }
 
     // 7. Not in namespace
-    if ($exp->namespace && !Util::inNamespace($hashValue, $exp->namespace)) {
+    if ($exp->namespace && !static::inNamespace($hashValue, $exp->namespace)) {
       return new ExperimentResult($exp, $hashValue);
     }
 
@@ -172,9 +233,9 @@ class Growthbook
     }
 
     // 9. Calculate bucket ranges
-    $ranges = Util::getBucketRanges(count($exp->variations), $exp->coverage, $exp->weights ?? []);
-    $n = Util::hash($hashValue + $exp->key);
-    $assigned = Util::chooseVariation($n, $ranges);
+    $ranges = static::getBucketRanges(count($exp->variations), $exp->coverage, $exp->weights ?? []);
+    $n = static::hash($hashValue . $exp->key);
+    $assigned = static::chooseVariation($n, $ranges);
 
     // 10. Not assigned
     if($assigned === -1) {
@@ -207,5 +268,113 @@ class Growthbook
 
     // 15. Return the result
     return $result;
+  }
+
+
+  /**
+   * @param string $str
+   * @return float
+   */
+  public static function hash(string $str): float
+  {
+      $n = hexdec(hash("fnv1a32", $str));
+      return ($n % 1000) / 1000;
+  }
+
+  /**
+   * @param string $userId
+   * @param array{0:string,1:float,2:float} $namespace
+   * @return bool
+   */
+  public static function inNamespace(string $userId, array $namespace): bool
+  {
+      // @phpstan-ignore-next-line
+      if (count($namespace) < 3) return false;
+      $n = static::hash($userId . "__" . $namespace[0]);
+      return $n >= $namespace[1] && $n < $namespace[2];
+  }
+
+  /**
+   * @param int $numVariations
+   * @return float[]
+   */
+  public static function getEqualWeights(int $numVariations): array
+  {
+      $weights = [];
+      for ($i = 0; $i < $numVariations; $i++) {
+          $weights[] = 1 / $numVariations;
+      }
+      return $weights;
+  }
+
+  /**
+   * @param int $numVariations
+   * @param float $coverage
+   * @param null|(float[]) $weights
+   * @return array{0:float,1:float}[]
+   */
+  public static function getBucketRanges(int $numVariations, float $coverage, array $weights = null): array
+  {
+      $coverage = max(0, min(1, $coverage));
+
+      if (!$weights || count($weights) !== $numVariations) {
+          $weights = static::getEqualWeights($numVariations);
+      }
+      $sum = array_sum($weights);
+      if ($sum < 0.99 || $sum > 1.01) {
+          $weights = static::getEqualWeights($numVariations);
+      }
+
+      $cumulative = 0;
+      $ranges = [];
+      foreach ($weights as $weight) {
+          $start = $cumulative;
+          $cumulative += $weight;
+          $ranges[] = [$start, $start + $coverage * $weight];
+      }
+      return $ranges;
+  }
+
+  /**
+   * @param float $n
+   * @param array{0:float,1:float}[] $ranges
+   * @return int
+   */
+  public static function chooseVariation(float $n, array $ranges): int
+  {
+      foreach ($ranges as $i => $range) {
+          if ($n >= $range[0] && $n < $range[1]) {
+              return (int) $i;
+          }
+      }
+      return -1;
+  }
+
+  /**
+   * @param string $id
+   * @param string $url
+   * @param int $numVariations
+   * @return int|null
+   */
+  public static function getQueryStringOverride(string $id, string $url, int $numVariations): ?int
+  {
+      // Extract the querystring from the url
+      /** @var string|false */
+      $query = parse_url($url, PHP_URL_QUERY);
+      if(!$query) return null;
+
+      // Parse the query string and check if $id is there
+      parse_str($query, $params);
+      if(!isset($params[$id]) || !is_numeric($params[$id])) {
+          return null;
+      }
+
+      // Make sure it's a valid variation integer
+      $variation = (int) $params[$id];
+      if($variation < 0 || $variation >= $numVariations) {
+          return null;
+      }
+
+      return $variation;
   }
 }

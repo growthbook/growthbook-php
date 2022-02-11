@@ -4,15 +4,19 @@ namespace Growthbook;
 
 class ViewedExperiment {
   /**
-   * @var Experiment
+   * @var InlineExperiment<mixed>
    */
   public $experiment;
   /**
-   * @var ExperimentResult
+   * @var ExperimentResult<mixed>
    */
   public $result;
 
-  public function __construct(Experiment $exp, ExperimentResult $res)
+  /**
+   * @param InlineExperiment<mixed> $exp
+   * @param ExperimentResult<mixed> $res
+   */
+  public function __construct(InlineExperiment $exp, ExperimentResult $res)
   {
     $this->experiment = $exp;
     $this->result = $res;

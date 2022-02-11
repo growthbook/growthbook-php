@@ -2,6 +2,9 @@
 
 namespace Growthbook;
 
+/**
+ * @deprecated
+ */
 class ExperimentOverride
 {
     /** @var null|"draft"|"running"|"stopped" */

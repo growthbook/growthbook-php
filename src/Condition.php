@@ -3,6 +3,11 @@
 namespace Growthbook;
 
 class Condition {
+  /**
+   * @param array<string,mixed> $attributes
+   * @param array<string,mixed> $condition
+   * @return bool
+   */
   public static function evalCondition(array $attributes, array $condition): bool {
     if(isset($condition['$or'])) {
       return static::evalOr($attributes, $condition['$or']);
@@ -25,6 +30,11 @@ class Condition {
     return true;
   }
 
+  /**
+   * @param array<string,mixed> $attributes
+   * @param array<string,mixed>[] $conditions
+   * @return bool
+   */
   private static function evalOr(array $attributes, array $conditions): bool {
     if(!count($conditions)) return true;
 
@@ -34,6 +44,11 @@ class Condition {
     return false;
   }
 
+  /**
+   * @param array<string,mixed> $attributes
+   * @param array<string,mixed>[] $conditions
+   * @return bool
+   */
   private static function evalAnd(array $attributes, array $conditions): bool {
     foreach($conditions as $condition) {
       if(!static::evalCondition($attributes, $condition)) return false;
@@ -41,14 +56,22 @@ class Condition {
     return true;
   }
 
+  /**
+   * @param array<string,mixed> $obj
+   * @return bool
+   */
   private static function isOperatorObject(array $obj): bool {
     foreach($obj as $key=>$value) {
-      if($key[0] !== '$') return false;
+      if(!is_string($key) || $key[0] !== '$') return false;
     }
     return true;
   }
 
-  private static function getType(mixed $attributeValue): string {
+  /**
+   * @param mixed $attributeValue
+   * @return string
+   */
+  private static function getType($attributeValue): string {
     if(is_string($attributeValue)) return 'string';
     if(is_array($attributeValue)) {
       if($attributeValue === [] || (array_keys($attributeValue) === range(0, count($attributeValue) - 1))) {
@@ -66,12 +89,17 @@ class Condition {
       return "null";
     }
     if(is_numeric($attributeValue)) {
-      return "numeric";
+      return "number";
     }
     return "unknown";
   }
 
-  private static function getPath(array $attributes, string $path): mixed {
+  /**
+   * @param array<string,mixed> $attributes
+   * @param string $path
+   * @return mixed
+   */
+  private static function getPath(array $attributes, string $path) {
     $current = $attributes;
     $parts = explode(".", $path);
     foreach($parts as $part) {
@@ -81,7 +109,12 @@ class Condition {
     return $current;
   }
 
-  private static function evalConditionValue(mixed $conditionValue, mixed $attributeValue): bool {
+  /**
+   * @param mixed $conditionValue
+   * @param mixed $attributeValue
+   * @return bool
+   */
+  private static function evalConditionValue($conditionValue, $attributeValue): bool {
     if(is_array($conditionValue) && static::isOperatorObject($conditionValue)) {
       foreach($conditionValue as $key=>$value) {
         if(!static::evalOperatorCondition($key, $attributeValue, $value)) {
@@ -94,7 +127,12 @@ class Condition {
     return json_encode($attributeValue) === json_encode($conditionValue);
   }
 
-  private static function elemMatch(array $condition, mixed $attributeValue): bool {
+  /**
+   * @param array<string,mixed> $condition
+   * @param mixed $attributeValue
+   * @return bool
+   */
+  private static function elemMatch(array $condition, $attributeValue): bool {
     if(!is_array($attributeValue)) return false;
 
     foreach($attributeValue as $item) {
@@ -106,7 +144,13 @@ class Condition {
     return false;
   }
 
-  private static function evalOperatorCondition(string $operator, mixed $attributeValue, mixed $conditionValue): bool {
+  /**
+   * @param string $operator
+   * @param mixed $attributeValue
+   * @param mixed $conditionValue
+   * @return bool
+   */
+  private static function evalOperatorCondition(string $operator, $attributeValue, $conditionValue): bool {
     switch($operator) {
       case '$eq':
         return $attributeValue == $conditionValue;

@@ -24,21 +24,21 @@ class FeatureResult
      */
     public $source;
     /**
-     * @var null|Experiment
+     * @var null|InlineExperiment<T>
      */
     public $experiment;
     /**
-     * @var null|ExperimentResult
+     * @var null|ExperimentResult<T>
      */
     public $experimentResult;
 
     /**
      * @param T $value
      * @param string $source
-     * @param null|Experiment $experiment
-     * @param null|ExperimentResult $experimentResult
+     * @param null|InlineExperiment<T> $experiment
+     * @param null|ExperimentResult<T> $experimentResult
      */
-    public function __construct(mixed $value, string $source, ?Experiment $experiment = null, ?ExperimentResult $experimentResult = null) {
+    public function __construct($value, string $source, ?InlineExperiment $experiment = null, ?ExperimentResult $experimentResult = null) {
         $this->value = $value;
         $this->on = !!$value;
         $this->off = !$value;

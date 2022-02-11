@@ -2,24 +2,30 @@
 
 namespace Growthbook;
 
+/**
+ * @template T
+ */
 class FeatureRule {
   /** @var null|array<string,mixed> */
   public $condition;
   /** @var null|float */
   public $coverage;
-  /** @var null|mixed */
+  /** @var null|T */
   public $force;
-  /** @var null|mixed[] */
+  /** @var null|T[] */
   public $variations;
   /** @var null|string */
-  public $trackingKey;
+  public $key;
   /** @var null|float[] */
   public $weights;
-  /** @var null|array */
+  /** @var null|array{0:string,1:float,2:float} */
   public $namespace;
   /** @var null|string */
   public $hashAttribute;
 
+  /**
+   * @param array{condition:?array<string,mixed>,coverage:?float,force:?T,variations:?T[],key:?string,weights:?float[],namespace:?array{0:string,1:float,2:float},hashAttribute:?string} $rule
+   */
   public function __construct(array $rule)
   {
     if(array_key_exists("condition", $rule)) {
@@ -34,8 +40,8 @@ class FeatureRule {
     if(array_key_exists("variations", $rule)) {
       $this->variations = $rule["variations"];
     }
-    if(array_key_exists("trackingKey", $rule)) {
-      $this->trackingKey = $rule["trackingKey"];
+    if(array_key_exists("key", $rule)) {
+      $this->key = $rule["key"];
     }
     if(array_key_exists("weights", $rule)) {
       $this->weights = $rule["weights"];
@@ -48,10 +54,14 @@ class FeatureRule {
     }
   }
 
-  public function toExperiment(string $featureKey): ?Experiment {
+  /**
+   * @param string $featureKey
+   * @return null|InlineExperiment<T>
+   */
+  public function toExperiment(string $featureKey): ?InlineExperiment {
     if(!isset($this->variations)) return null;
 
-    $exp = new Experiment($this->trackingKey ?? $featureKey, $this->variations);
+    $exp = new InlineExperiment($this->key ?? $featureKey, $this->variations);
 
     if(isset($this->coverage)) {
       $exp->coverage = $this->coverage;

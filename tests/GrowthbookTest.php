@@ -9,12 +9,21 @@ use PHPUnit\Framework\TestCase;
 
 final class GrowthbookTest extends TestCase
 {
+    /**
+     * @var array<string,array<int,mixed[]>>
+     */
     private $cases;
 
+    /**
+     * @return array<int|string,mixed[]>
+     */
     protected function getCases(string $section, bool $extractName = true): array
     {
         if (!$this->cases) {
             $cases = file_get_contents(__DIR__ . '/cases.json');
+            if(!$cases) {
+                throw new \Exception("Could not load cases.json");
+            }
             $this->cases = json_decode($cases, true);
         }
 
@@ -38,6 +47,8 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider getBucketRangeProvider
+     * @param array{0:int,1:float,2:null|float[]} $args
+     * @param array{0:float,1:float}[] $expected
      */
     public function testGetBucketRange(array $args, array $expected): void
     {
@@ -51,6 +62,9 @@ final class GrowthbookTest extends TestCase
             }
         }
     }
+    /**
+     * @return array<int|string,mixed[]>
+     */
     public function getBucketRangeProvider(): array
     {
         return $this->getCases("getBucketRange");
@@ -63,6 +77,9 @@ final class GrowthbookTest extends TestCase
     {
         $this->assertSame(Growthbook::hash($value), $expected);
     }
+    /**
+     * @return array<int|string,mixed[]>
+     */
     public function hashProvider(): array
     {
         return $this->getCases("hash", false);
@@ -70,11 +87,17 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider evalConditionProvider
+     * @param array<string,mixed> $condition
+     * @param array<string,mixed> $attributes
+     * @param bool $expected
      */
     public function testEvalCondition(array $condition, array $attributes, bool $expected): void
     {
         $this->assertSame(Condition::evalCondition($attributes, $condition), $expected);
     }
+    /**
+     * @return array<int|string,mixed[]>
+     */
     public function evalConditionProvider(): array
     {
         return $this->getCases("evalCondition");
@@ -83,11 +106,15 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider getQueryStringOverrideProvider
+     * 
      */
-    public function testGetQueryStringOverride(string $key, string $url, int $numVariations, $expected): void
+    public function testGetQueryStringOverride(string $key, string $url, int $numVariations, ?int $expected): void
     {
         $this->assertSame(Growthbook::getQueryStringOverride($key, $url, $numVariations), $expected);
     }
+    /**
+     * @return array<int|string,mixed[]>
+     */
     public function getQueryStringOverrideProvider(): array
     {
         return $this->getCases("getQueryStringOverride");
@@ -96,11 +123,17 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider chooseVariationProvider
+     * @param float $n
+     * @param array{0:float,1:float}[] $ranges
+     * @param int $expected
      */
     public function testChooseVariation(float $n, array $ranges, int $expected): void
     {
         $this->assertSame(Growthbook::chooseVariation($n, $ranges), $expected);
     }
+    /**
+     * @return array<int|string,mixed[]>
+     */
     public function chooseVariationProvider(): array
     {
         return $this->getCases("chooseVariation");
@@ -109,11 +142,17 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider inNamespaceProvider
+     * @param string $id
+     * @param array{0:string,1:float,2:float} $namespace
+     * @param bool $expected
      */
-    public function testInNamespace(string $id, array $namespace, $expected): void
+    public function testInNamespace(string $id, array $namespace, bool $expected): void
     {
         $this->assertSame(Growthbook::inNamespace($id, $namespace), $expected);
     }
+    /**
+     * @return array<int|string,mixed[]>
+     */
     public function inNamespaceProvider(): array
     {
         return $this->getCases("inNamespace");
@@ -122,8 +161,10 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider getEqualWeightsProvider
+     * @param int $numVariations
+     * @param float[] $expected
      */
-    public function testGetEqualWeights(int $numVariations, $expected): void
+    public function testGetEqualWeights(int $numVariations, array $expected): void
     {
         $weights = Growthbook::getEqualWeights($numVariations);
 
@@ -133,6 +174,9 @@ final class GrowthbookTest extends TestCase
             return round($w, 8);
         }, $expected));
     }
+    /**
+     * @return array<int|string,mixed[]>
+     */
     public function getEqualWeightsProvider(): array
     {
         return $this->getCases("getEqualWeights", false);
@@ -141,8 +185,11 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider featureProvider
+     * @param array<string,mixed> $ctx
+     * @param string $key
+     * @param array<string,mixed> $expected
      */
-    public function testFeature($ctx, string $key, $expected): void
+    public function testFeature(array $ctx, string $key, array $expected): void
     {
         $gb = new Growthbook($ctx);
         $res = $gb->feature($key);
@@ -163,9 +210,18 @@ final class GrowthbookTest extends TestCase
 
         $this->assertEquals($expected, $actual);
     }
-    public function removeNulls($obj, $ref): array
+    /**
+     * @param mixed $obj
+     * @param array<string,mixed> $ref
+     * @return array<string,mixed>
+     */
+    public function removeNulls($obj, array $ref): array
     {
-        $arr = json_decode(json_encode($obj), true);
+        $encoded = json_encode($obj);
+        if(!$encoded) {
+            throw new \Exception("Failed to encode object");
+        }
+        $arr = json_decode($encoded, true);
         foreach ($arr as $k => $v) {
             if ($v === null || ($k === "active" && $v && !isset($ref['active'])) || ($k === "coverage" && $v === 1 && !isset($ref['coverage'])) || ($k==="hashAttribute" && $v==="id" && !isset($ref['hashAttribute']))) {
                 unset($arr[$k]);
@@ -174,6 +230,9 @@ final class GrowthbookTest extends TestCase
 
         return $arr;
     }
+    /**
+     * @return array<int|string,mixed[]>
+     */
     public function featureProvider(): array
     {
         return $this->getCases("feature");
@@ -183,8 +242,12 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider getRunProvider
+     * @param array<string,mixed> $ctx
+     * @param array<string,mixed> $exp
+     * @param mixed $expectedValue
+     * @param bool $inExperiment
      */
-    public function testRun($ctx, $exp, $expectedValue, $inExperiment): void
+    public function testRun(array $ctx, array $exp, $expectedValue, bool $inExperiment): void
     {
         $gb = new Growthbook($ctx);
         $experiment = new InlineExperiment($exp["key"], $exp["variations"], $exp);
@@ -193,6 +256,9 @@ final class GrowthbookTest extends TestCase
         $this->assertSame($res->value, $expectedValue);
         $this->assertSame($res->inExperiment, $inExperiment);
     }
+    /**
+     * @return array<int|string,mixed[]>
+     */
     public function getRunProvider(): array
     {
         return $this->getCases("run");

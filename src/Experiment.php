@@ -3,6 +3,7 @@
 namespace Growthbook;
 
 /**
+ * @deprecated
  * @template T
  */
 class Experiment

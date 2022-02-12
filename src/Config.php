@@ -2,6 +2,9 @@
 
 namespace Growthbook;
 
+/**
+ * @deprecated
+ */
 class Config
 {
     /** @var bool */

@@ -21,32 +21,31 @@ class ExperimentResult
     public $value;
 
     /**
-     * @var null|Experiment<T>
-     * @deprecated
+     * @var string
      */
-    public $experiment;
+    public $hashAttribute;
     /**
-     * @var int
-     * @deprecated
+     * @var string
      */
-    public $variation;
+    public $hashValue;
 
     /**
-     * @param Experiment<T> $experiment
-     * @param int $variation
+     * @param InlineExperiment<T> $experiment
+     * @param string $hashValue
+     * @param int $variationIndex
+     * @param bool $inExperiment
      */
-    public function __construct(Experiment $experiment, int $variation = -1)
+    public function __construct(InlineExperiment $experiment, string $hashValue = "", int $variationIndex = 0, bool $inExperiment = false)
     {
-        $this->inExperiment = true;
-        if ($variation < 0) {
-            $this->inExperiment = false;
-            $variation = 0;
+        $numVariations = count($experiment->variations);
+        if ($variationIndex < 0 || $variationIndex >= $numVariations) {
+            $variationIndex = 0;
         }
 
-        $this->variationId = $variation;
-        $this->value = $experiment->variations[$this->variationId];
-
-        $this->experiment = $experiment;
-        $this->variation = $variation;
+        $this->inExperiment = $inExperiment;
+        $this->variationId = $variationIndex;
+        $this->value = $experiment->variations[$variationIndex];
+        $this->hashAttribute = $experiment->hashAttribute ?? "id";
+        $this->hashValue = $hashValue;
     }
 }

@@ -2,6 +2,9 @@
 
 namespace Growthbook;
 
+/**
+ * @deprecated
+ */
 class User
 {
     /** @var array<string,string> */
@@ -78,40 +81,40 @@ class User
     /**
      * @template T
      * @param Experiment<T> $experiment
-     * @return ExperimentResult<T>
+     * @return OldExperimentResult<T>
      */
-    private function runExperiment(Experiment $experiment, bool $isOverride = false): ExperimentResult
+    private function runExperiment(Experiment $experiment, bool $isOverride = false): OldExperimentResult
     {
         // If experiments are disabled globally
         if (!$this->client->config->enabled) {
-            return new ExperimentResult($experiment);
+            return new OldExperimentResult($experiment);
         }
 
         // If querystring override is enabled
         if ($this->client->config->enableQueryStringOverride) {
             $variation = Util::getQueryStringOverride($experiment->key);
             if ($variation !== null) {
-                return new ExperimentResult($experiment, $variation);
+                return new OldExperimentResult($experiment, $variation);
             }
         }
 
         if (!$this->isIncluded($experiment)) {
-            return new ExperimentResult($experiment);
+            return new OldExperimentResult($experiment);
         }
 
         // A specific variation is forced, return it without tracking
         if ($experiment->force !== null) {
-            return new ExperimentResult($experiment, $experiment->force);
+            return new OldExperimentResult($experiment, $experiment->force);
         }
 
         $userId = $this->getRandomizationId($experiment->randomizationUnit);
         if (!$userId) {
-            return new ExperimentResult($experiment);
+            return new OldExperimentResult($experiment);
         }
 
         // Hash unique id and experiment id to randomly choose a variation given weights
         $variation = Util::chooseVariation($userId, $experiment);
-        $result = new ExperimentResult($experiment, $variation);
+        $result = new OldExperimentResult($experiment, $variation);
 
         $this->trackView($experiment, $result);
 
@@ -121,9 +124,9 @@ class User
     /**
      * @template T
      * @param Experiment<T> $experiment
-     * @return ExperimentResult<T>
+     * @return OldExperimentResult<T>
      */
-    public function experiment(Experiment $experiment): ExperimentResult
+    public function experiment(Experiment $experiment): OldExperimentResult
     {
         $override = $this->client->getExperimentOverride($experiment->key);
         if ($override) {
@@ -135,9 +138,9 @@ class User
 
     /**
      * @param Experiment<mixed> $experiment
-     * @param ExperimentResult<mixed> $result
+     * @param OldExperimentResult<mixed> $result
      */
-    private function trackView(Experiment $experiment, ExperimentResult $result): void
+    private function trackView(Experiment $experiment, OldExperimentResult $result): void
     {
         if (!$result->inExperiment) {
             return;

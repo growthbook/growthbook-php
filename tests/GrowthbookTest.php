@@ -192,7 +192,7 @@ final class GrowthbookTest extends TestCase
     public function testFeature(array $ctx, string $key, array $expected): void
     {
         $gb = new Growthbook($ctx);
-        $res = $gb->feature($key);
+        $res = $gb->getFeature($key);
 
         $actual = [
             'value' => $res->value,
@@ -251,7 +251,7 @@ final class GrowthbookTest extends TestCase
     {
         $gb = new Growthbook($ctx);
         $experiment = new InlineExperiment($exp["key"], $exp["variations"], $exp);
-        $res = $gb->run($experiment);
+        $res = $gb->runInlineExperiment($experiment);
 
         $this->assertSame($res->value, $expectedValue);
         $this->assertSame($res->inExperiment, $inExperiment);
@@ -262,5 +262,55 @@ final class GrowthbookTest extends TestCase
     public function getRunProvider(): array
     {
         return $this->getCases("run");
+    }
+
+
+    public function testFluentInterface(): void {
+        $attributes = ['id'=>1];
+        $callback = function ($exp, $res) {
+            // do nothing
+        };
+        $features = [
+            'feature-1'=>['defaultValue'=>1, 'rules'=>[]]
+        ];
+        $url = "/home";
+        $forcedVariations = ['exp1'=>0];
+
+        $gb = Growthbook::create()
+            ->withFeatures($features)
+            ->withAttributes($attributes)
+            ->withTrackingCallback($callback)
+            ->withUrl($url)
+            ->withForcedVariations($forcedVariations);
+
+        $this->assertSame($attributes, $gb->getAttributes());
+        $this->assertSame($callback, $gb->getTrackingCallback());
+        $this->assertSame($url, $gb->getUrl());
+        $this->assertSame($forcedVariations, $gb->getForcedVariations());
+
+        $this->assertSame(
+            json_encode($features),
+            json_encode($gb->getFeatures())
+        );
+    }
+
+    public function testInlineExperiment(): void {
+        $condition = ['country'=>'US'];
+        $weights = [.4,.6];
+        $coverage = 0.5;
+        $hashAttribute = 'anonId';
+
+        $exp = InlineExperiment::create("my-test", [0,1])
+            ->withCondition($condition)
+            ->withWeights($weights)
+            ->withCoverage($coverage)
+            ->withHashAttribute($hashAttribute)
+            ->withNamespace("pricing", 0, 0.5);
+
+        $this->assertSame($condition, $exp->condition);
+        $this->assertSame($weights, $exp->weights);
+        $this->assertSame($coverage, $exp->coverage);
+        $this->assertSame($hashAttribute, $exp->hashAttribute);
+        $this->assertSame(['pricing', 0.0, 0.5], $exp->namespace);
     }
 }

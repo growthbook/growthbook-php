@@ -24,10 +24,14 @@ class Growthbook
   /** @var array<string,ViewedExperiment> */
   private $tracks = [];
 
+  public static function create(): Growthbook {
+    return new Growthbook();
+  }
+
   /**
    * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable} $options
    */
-  public function __construct(array $options)
+  public function __construct(array $options = [])
   {
     // Warn if any unknown options are passed
     $knownOptions = ["enabled", "logger", "url", "attributes", "features", "forcedVariations", "qaMode", "trackingCallback"];
@@ -59,6 +63,15 @@ class Growthbook
   public function withAttributes(array $attributes): Growthbook
   {
     $this->attributes = $attributes;
+    return $this;
+  }
+  /**
+   * @param callable|null $trackingCallback
+   * @return Growthbook
+   */
+  public function withTrackingCallback($trackingCallback): Growthbook
+  {
+    $this->trackingCallback = $trackingCallback;
     return $this;
   }
   /**
@@ -96,6 +109,11 @@ class Growthbook
     $this->url = $url;
     return $this;
   }
+  public function withLogger(\Psr\Log\LoggerInterface $logger = null): Growthbook
+  {
+    $this->logger = $logger;
+    return $this;
+  }
 
 
   /**
@@ -126,6 +144,12 @@ class Growthbook
   {
     return $this->url;
   }
+  /**
+   * @return callable|null
+   */
+  public function getTrackingCallback() {
+    return $this->trackingCallback;
+  }
 
   /**
    * @return ViewedExperiment[]
@@ -133,13 +157,30 @@ class Growthbook
   public function getViewedExperiments(): array {
     return array_values($this->tracks);
   }
+  public function isOn(string $key): bool {
+    return $this->getFeature($key)->on;
+  }
+  public function isOff(string $key): bool {
+    return $this->getFeature($key)->off;
+  }
+
+  /**
+   * @template T
+   * @param string $key
+   * @param T $default
+   * @return T
+   */
+  public function getValue(string $key, $default) {
+    $res = $this->getFeature($key);
+    return $res->value ?? $default;
+  }
 
   /**
    * @template T
    * @param string $key
    * @return FeatureResult<T>|FeatureResult<null>
    */
-  public function feature(string $key): FeatureResult
+  public function getFeature(string $key): FeatureResult
   {
     if (!array_key_exists($key, $this->features)) {
       return new FeatureResult(null, "unknownFeature");
@@ -169,7 +210,7 @@ class Growthbook
         if(!$exp) {
           continue;
         }
-        $result = $this->run($exp);
+        $result = $this->runInlineExperiment($exp);
         if (!$result->inExperiment) {
           continue;
         }
@@ -184,7 +225,7 @@ class Growthbook
    * @param InlineExperiment<T> $exp
    * @return ExperimentResult<T>
    */
-  public function run(InlineExperiment $exp): ExperimentResult
+  public function runInlineExperiment(InlineExperiment $exp): ExperimentResult
   {
     // 1. Too few variations
     if (count($exp->variations) < 2) {

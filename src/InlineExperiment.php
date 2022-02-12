@@ -28,6 +28,16 @@ class InlineExperiment {
     /**
      * @param string $key
      * @param T[] $variations
+     * @return InlineExperiment<T>
+     */
+    public static function create(string $key, $variations): InlineExperiment
+    {
+      return new InlineExperiment($key, $variations);
+    }
+
+    /**
+     * @param string $key
+     * @param T[] $variations
      * @param array{weights?:float[],coverage?:float,force?:int|null,active?:boolean,condition?:array<string,mixed>,namespace?:array{0:string,1:float,2:float},hashAttribute?:string} $options
      */
     public function __construct(string $key, $variations, array $options = [])

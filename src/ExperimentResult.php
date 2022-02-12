@@ -35,10 +35,10 @@ class ExperimentResult
      * @param int $variationIndex
      * @param bool $inExperiment
      */
-    function __construct(InlineExperiment $experiment, string $hashValue = "", int $variationIndex = 0, bool $inExperiment = false)
+    public function __construct(InlineExperiment $experiment, string $hashValue = "", int $variationIndex = 0, bool $inExperiment = false)
     {
         $numVariations = count($experiment->variations);
-        if($variationIndex < 0 || $variationIndex >= $numVariations) {
+        if ($variationIndex < 0 || $variationIndex >= $numVariations) {
             $variationIndex = 0;
         }
 

@@ -5,7 +5,8 @@ namespace Growthbook;
 /**
  * @template T
  */
-class InlineExperiment {
+class InlineExperiment
+{
     /** @var string */
     public $key;
     /** @var T[] */
@@ -32,7 +33,7 @@ class InlineExperiment {
      */
     public static function create(string $key, $variations): InlineExperiment
     {
-      return new InlineExperiment($key, $variations);
+        return new InlineExperiment($key, $variations);
     }
 
     /**

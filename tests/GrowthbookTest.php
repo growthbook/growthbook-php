@@ -21,7 +21,7 @@ final class GrowthbookTest extends TestCase
     {
         if (!$this->cases) {
             $cases = file_get_contents(__DIR__ . '/cases.json');
-            if(!$cases) {
+            if (!$cases) {
                 throw new \Exception("Could not load cases.json");
             }
             $this->cases = json_decode($cases, true);
@@ -106,7 +106,7 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider getQueryStringOverrideProvider
-     * 
+     *
      */
     public function testGetQueryStringOverride(string $key, string $url, int $numVariations, ?int $expected): void
     {
@@ -218,7 +218,7 @@ final class GrowthbookTest extends TestCase
     public function removeNulls($obj, array $ref): array
     {
         $encoded = json_encode($obj);
-        if(!$encoded) {
+        if (!$encoded) {
             throw new \Exception("Failed to encode object");
         }
         $arr = json_decode($encoded, true);
@@ -265,7 +265,8 @@ final class GrowthbookTest extends TestCase
     }
 
 
-    public function testFluentInterface(): void {
+    public function testFluentInterface(): void
+    {
         $attributes = ['id'=>1];
         $callback = function ($exp, $res) {
             // do nothing
@@ -294,7 +295,8 @@ final class GrowthbookTest extends TestCase
         );
     }
 
-    public function testInlineExperiment(): void {
+    public function testInlineExperiment(): void
+    {
         $condition = ['country'=>'US'];
         $weights = [.4,.6];
         $coverage = 0.5;

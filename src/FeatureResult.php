@@ -38,7 +38,8 @@ class FeatureResult
      * @param null|InlineExperiment<T> $experiment
      * @param null|ExperimentResult<T> $experimentResult
      */
-    public function __construct($value, string $source, ?InlineExperiment $experiment = null, ?ExperimentResult $experimentResult = null) {
+    public function __construct($value, string $source, ?InlineExperiment $experiment = null, ?ExperimentResult $experimentResult = null)
+    {
         $this->value = $value;
         $this->on = !!$value;
         $this->off = !$value;

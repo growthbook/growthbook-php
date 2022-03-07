@@ -1,4 +1,4 @@
-<p align="center"><img src="https://www.growthbook.io/logos/growthbook-logo@2x.png" width="400px" /></p>
+<p align="center"><img src="https://cdn.growthbook.io/growthbook-logo@2x.png" width="400px" /></p>
 
 # Growth Book - PHP
 

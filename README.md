@@ -30,7 +30,7 @@ $apiResponse = json_decode(file_get_contents(FEATURES_ENDPOINT), true);
 $features = $apiResponse["features"];
 
 // Create a GrowthBook instance
-$growthbook = Growthbook\Growthbook::create()
+$growthbook = GrowthBook\GrowthBook::create()
   ->withFeatures($features)
   ->withAttributes([
     'id' => $userId,
@@ -73,16 +73,16 @@ foreach($impressions as $impression) {
 
 
 
-The `Growthbook` class has a number of properties.  These can be set using a Fluent interface or can be passed into a constructor using an associative array. Every property also has a getter method if needed. Here's an example:
+The `GrowthBook` class has a number of properties.  These can be set using a Fluent interface or can be passed into a constructor using an associative array. Every property also has a getter method if needed. Here's an example:
 
 ```php
 // Using the fluent interface
-$growthbook = Growthbook\Growthbook::create()
+$growthbook = GrowthBook\GrowthBook::create()
   ->withFeatures($features)
   ->withAttributes($attributes);
 
 // Using the constructor
-$growthbook = new Growthbook\Growthbook([
+$growthbook = new GrowthBook\GrowthBook([
   'features' => $features,
   'attributes' => $attributes
 ]);
@@ -158,8 +158,8 @@ You can either do this via a callback function:
 
 ```php
 $trackingCallback = function (
-  Growthbook\InlineExperiment $experiment, 
-  Growthbook\ExperimentResult $result
+  GrowthBook\InlineExperiment $experiment, 
+  GrowthBook\ExperimentResult $result
 ) {  
   // Segment.io example
   Segment::track([
@@ -173,7 +173,7 @@ $trackingCallback = function (
 };
 
 // Fluent interface
-$growthbook = Growthbook\Growthbook::create()
+$growthbook = GrowthBook\GrowthBook::create()
   ->withTrackingCallback($callback);
 
 // Using the construtor
@@ -280,7 +280,7 @@ As you can see, there are 2 required parameters for experiments, a string key, a
 There are a number of additional settings to control the experiment behavior. The methods are all chainable. Here's an example that shows all of the possible settings:
 
 ```php
-$exp = Growthbook\InlineExperiment::create("my-experiment", ["red","blue"])
+$exp = GrowthBook\InlineExperiment::create("my-experiment", ["red","blue"])
   // Run a 40/60 experiment instead of the default even split (50/50)
   ->withWeights([0.4, 0.6])
   // Only include 20% of users in the experiment

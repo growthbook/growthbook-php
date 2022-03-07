@@ -2,9 +2,9 @@
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
-use Growthbook\Condition;
-use Growthbook\Growthbook;
-use Growthbook\InlineExperiment;
+use GrowthBook\Condition;
+use GrowthBook\GrowthBook;
+use GrowthBook\InlineExperiment;
 use PHPUnit\Framework\TestCase;
 
 final class GrowthbookTest extends TestCase
@@ -52,7 +52,7 @@ final class GrowthbookTest extends TestCase
      */
     public function testGetBucketRange(array $args, array $expected): void
     {
-        $actual = Growthbook::getBucketRanges($args[0], $args[1], $args[2]);
+        $actual = GrowthBook::getBucketRanges($args[0], $args[1], $args[2]);
         $this->assertSame(count($expected), count($actual));
         foreach ($actual as $k => $v) {
             $this->assertSame(count($expected[$k]), count($v));
@@ -75,7 +75,7 @@ final class GrowthbookTest extends TestCase
      */
     public function testHash(string $value, float $expected): void
     {
-        $this->assertSame(Growthbook::hash($value), $expected);
+        $this->assertSame(GrowthBook::hash($value), $expected);
     }
     /**
      * @return array<int|string,mixed[]>
@@ -110,7 +110,7 @@ final class GrowthbookTest extends TestCase
      */
     public function testGetQueryStringOverride(string $key, string $url, int $numVariations, ?int $expected): void
     {
-        $this->assertSame(Growthbook::getQueryStringOverride($key, $url, $numVariations), $expected);
+        $this->assertSame(GrowthBook::getQueryStringOverride($key, $url, $numVariations), $expected);
     }
     /**
      * @return array<int|string,mixed[]>
@@ -129,7 +129,7 @@ final class GrowthbookTest extends TestCase
      */
     public function testChooseVariation(float $n, array $ranges, int $expected): void
     {
-        $this->assertSame(Growthbook::chooseVariation($n, $ranges), $expected);
+        $this->assertSame(GrowthBook::chooseVariation($n, $ranges), $expected);
     }
     /**
      * @return array<int|string,mixed[]>
@@ -148,7 +148,7 @@ final class GrowthbookTest extends TestCase
      */
     public function testInNamespace(string $id, array $namespace, bool $expected): void
     {
-        $this->assertSame(Growthbook::inNamespace($id, $namespace), $expected);
+        $this->assertSame(GrowthBook::inNamespace($id, $namespace), $expected);
     }
     /**
      * @return array<int|string,mixed[]>
@@ -166,7 +166,7 @@ final class GrowthbookTest extends TestCase
      */
     public function testGetEqualWeights(int $numVariations, array $expected): void
     {
-        $weights = Growthbook::getEqualWeights($numVariations);
+        $weights = GrowthBook::getEqualWeights($numVariations);
 
         $this->assertSame(array_map(function ($w) {
             return round($w, 8);
@@ -191,7 +191,7 @@ final class GrowthbookTest extends TestCase
      */
     public function testFeature(array $ctx, string $key, array $expected): void
     {
-        $gb = new Growthbook($ctx);
+        $gb = new GrowthBook($ctx);
         $res = $gb->getFeature($key);
 
         $actual = [
@@ -249,7 +249,7 @@ final class GrowthbookTest extends TestCase
      */
     public function testRun(array $ctx, array $exp, $expectedValue, bool $inExperiment): void
     {
-        $gb = new Growthbook($ctx);
+        $gb = new GrowthBook($ctx);
         $experiment = new InlineExperiment($exp["key"], $exp["variations"], $exp);
         $res = $gb->runInlineExperiment($experiment);
 
@@ -277,7 +277,7 @@ final class GrowthbookTest extends TestCase
         $url = "/home";
         $forcedVariations = ['exp1'=>0];
 
-        $gb = Growthbook::create()
+        $gb = GrowthBook::create()
             ->withFeatures($features)
             ->withAttributes($attributes)
             ->withTrackingCallback($callback)

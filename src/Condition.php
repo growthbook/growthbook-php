@@ -1,6 +1,6 @@
 <?php
 
-namespace Growthbook;
+namespace GrowthBook;
 
 class Condition
 {

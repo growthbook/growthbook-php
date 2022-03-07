@@ -1,0 +1,8 @@
+/.github export-ignore
+/tests export-ignore
+.gitattributes export-ignore
+.gitignore export-ignore
+composer.lock export-ignore
+composer.sh export-ignore
+Dockerfile.dev export-ignore
+phpstan.neon export-ignore

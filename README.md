@@ -1,6 +1,6 @@
 <p align="center"><img src="https://cdn.growthbook.io/growthbook-logo@2x.png" width="400px" /></p>
 
-# Growth Book - PHP
+# GrowthBook - PHP
 
 Powerful Feature flagging and A/B testing for PHP.
 
@@ -16,7 +16,7 @@ Powerful Feature flagging and A/B testing for PHP.
 
 ## Installation
 
-Growth Book is available on Composer:
+GrowthBook is available on Composer:
 
 `composer require growthbook/growthbook`
 

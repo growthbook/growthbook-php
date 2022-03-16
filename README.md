@@ -176,7 +176,7 @@ $trackingCallback = function (
 $growthbook = Growthbook\Growthbook::create()
   ->withTrackingCallback($callback);
 
-// Using the construtor
+// Using the constructor
 $growthbook = new Growthbook([
   'trackingCallback' => $trackingCallback
 ]);

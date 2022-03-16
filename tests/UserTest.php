@@ -2,10 +2,10 @@
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
-use Growthbook\Client;
-use Growthbook\Experiment;
-use Growthbook\User;
-use Growthbook\Util;
+use GrowthBook\Client;
+use GrowthBook\Experiment;
+use GrowthBook\User;
+use GrowthBook\Util;
 use PHPUnit\Framework\TestCase;
 
 final class UserTest extends TestCase

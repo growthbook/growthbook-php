@@ -1,8 +1,8 @@
 <?php
 
-namespace Growthbook;
+namespace GrowthBook;
 
-class Growthbook
+class GrowthBook
 {
     /** @var bool */
     public $enabled = true;
@@ -24,9 +24,9 @@ class Growthbook
     /** @var array<string,ViewedExperiment> */
     private $tracks = [];
 
-    public static function create(): Growthbook
+    public static function create(): GrowthBook
     {
-        return new Growthbook();
+        return new GrowthBook();
     }
 
     /**
@@ -59,27 +59,27 @@ class Growthbook
 
     /**
      * @param array<string,mixed> $attributes
-     * @return Growthbook
+     * @return GrowthBook
      */
-    public function withAttributes(array $attributes): Growthbook
+    public function withAttributes(array $attributes): GrowthBook
     {
         $this->attributes = $attributes;
         return $this;
     }
     /**
      * @param callable|null $trackingCallback
-     * @return Growthbook
+     * @return GrowthBook
      */
-    public function withTrackingCallback($trackingCallback): Growthbook
+    public function withTrackingCallback($trackingCallback): GrowthBook
     {
         $this->trackingCallback = $trackingCallback;
         return $this;
     }
     /**
      * @param array<string,Feature<mixed>|mixed> $features
-     * @return Growthbook
+     * @return GrowthBook
      */
-    public function withFeatures(array $features): Growthbook
+    public function withFeatures(array $features): GrowthBook
     {
         $this->features = [];
         foreach ($features as $key=>$feature) {
@@ -93,23 +93,23 @@ class Growthbook
     }
     /**
      * @param array<string,int> $forcedVariations
-     * @return Growthbook
+     * @return GrowthBook
      */
-    public function withForcedVariations(array $forcedVariations): Growthbook
+    public function withForcedVariations(array $forcedVariations): GrowthBook
     {
         $this->forcedVariations = $forcedVariations;
         return $this;
     }
     /**
      * @param string $url
-     * @return Growthbook
+     * @return GrowthBook
      */
-    public function withUrl(string $url): Growthbook
+    public function withUrl(string $url): GrowthBook
     {
         $this->url = $url;
         return $this;
     }
-    public function withLogger(\Psr\Log\LoggerInterface $logger = null): Growthbook
+    public function withLogger(\Psr\Log\LoggerInterface $logger = null): GrowthBook
     {
         $this->logger = $logger;
         return $this;

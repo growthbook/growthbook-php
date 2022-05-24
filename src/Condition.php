@@ -120,7 +120,7 @@ class Condition
         $current = $attributes;
         $parts = explode(".", $path);
         foreach ($parts as $part) {
-            if (!array_key_exists($part, $current)) {
+            if (!is_array($current) || !array_key_exists($part, $current)) {
                 return null;
             }
             $current = $current[$part];

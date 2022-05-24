@@ -12,6 +12,10 @@ class ExperimentResult
      */
     public $inExperiment;
     /**
+     * @var boolean
+     */
+    public $hashUsed;
+    /**
      * @var int
      */
     public $variationId;
@@ -33,16 +37,20 @@ class ExperimentResult
      * @param InlineExperiment<T> $experiment
      * @param string $hashValue
      * @param int $variationIndex
-     * @param bool $inExperiment
+     * @param bool $hashUsed
      */
-    public function __construct(InlineExperiment $experiment, string $hashValue = "", int $variationIndex = 0, bool $inExperiment = false)
+    public function __construct(InlineExperiment $experiment, string $hashValue = "", int $variationIndex = -1, bool $hashUsed = false)
     {
+        $inExperiment = true;
+        // If the assigned variation is invalid, the user is not in the experiment and should get assigned the baseline
         $numVariations = count($experiment->variations);
         if ($variationIndex < 0 || $variationIndex >= $numVariations) {
             $variationIndex = 0;
+            $inExperiment = false;
         }
 
         $this->inExperiment = $inExperiment;
+        $this->hashUsed = $hashUsed;
         $this->variationId = $variationIndex;
         $this->value = $experiment->variations[$variationIndex];
         $this->hashAttribute = $experiment->hashAttribute ?? "id";

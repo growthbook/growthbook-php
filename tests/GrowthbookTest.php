@@ -246,8 +246,9 @@ final class GrowthbookTest extends TestCase
      * @param array<string,mixed> $exp
      * @param mixed $expectedValue
      * @param bool $inExperiment
+     * @param bool $hashUsed
      */
-    public function testRun(array $ctx, array $exp, $expectedValue, bool $inExperiment): void
+    public function testRun(array $ctx, array $exp, $expectedValue, bool $inExperiment, bool $hashUsed): void
     {
         $gb = new Growthbook($ctx);
         $experiment = new InlineExperiment($exp["key"], $exp["variations"], $exp);
@@ -255,6 +256,7 @@ final class GrowthbookTest extends TestCase
 
         $this->assertSame($res->value, $expectedValue);
         $this->assertSame($res->inExperiment, $inExperiment);
+        $this->assertSame($res->hashUsed, $hashUsed);
     }
     /**
      * @return array<int|string,mixed[]>

@@ -316,11 +316,16 @@ echo($result->variationId); // e.g. 0 or 1
 // The value of the assigned variation
 echo($result->value); // e.g. "A" or "B"
 
-// The user attribute used to assign a variation
+// If the variations was randomly assigned based on a hash
+echo($result->hashUsed); // true or false
+
+// The user attribute that was hashed
 echo($result->hashAttribute); // "id"
 
 // The value of that attribute
 echo($result->hashValue); // e.g. "123"
 ```
 
-The `inExperiment` flag is only set to true if the user was randomly assigned a variation. If the user failed any targeting rules or was forced into a specific variation, this flag will be false.
+The `inExperiment` flag will be false if the user was excluded from being part of the experiment for any reason (e.g. failed targeting conditions).
+
+The `hashUsed` flag will only be true if the user was randomly assigned a variation. If the user was forced into a specific variation instead, this flag will be false.

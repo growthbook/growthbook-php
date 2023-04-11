@@ -275,16 +275,21 @@ class Growthbook
                         continue;
                     }
                 }
+                if ($rule->filters) {
+                    if (self::isFilteredOut($rule->filters)) {
+                        continue;
+                    }
+                }
+
                 if (isset($rule->force)) {
-                    if (isset($rule->coverage)) {
-                        $hashValue = $this->attributes[$rule->hashAttribute ?? "id"] ?? "";
-                        if (!$hashValue) {
-                            continue;
-                        }
-                        $n = static::hash($hashValue . $key);
-                        if ($n > $rule->coverage) {
-                            continue;
-                        }
+                    if (!$this->isIncludedInRollout(
+                        $rule->seed ?? $key,
+                        $rule->hashAttribute,
+                        $rule->range,
+                        $rule->coverage,
+                        $rule->hashVersion
+                    )) {
+                        continue;
                     }
                     return new FeatureResult($rule->force, "force");
                 }
@@ -293,7 +298,7 @@ class Growthbook
                     continue;
                 }
                 $result = $this->runExperiment($exp, $key);
-                if (!$result->inExperiment) {
+                if (!$result->inExperiment || $result->passthrough) {
                     continue;
                 }
                 return new FeatureResult($result->value, "experiment", $exp, $result);
@@ -331,7 +336,7 @@ class Growthbook
         }
 
         $hashAttribute = $exp->hashAttribute ?? "id";
-        $hashValue = strval($this->attributes[$hashAttribute] ?? "");
+        $hashValue = $this->getHashValue($hashAttribute);
 
         // 3. Forced via querystring
         if ($this->url) {
@@ -356,8 +361,12 @@ class Growthbook
             return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
-        // 7. Not in namespace
-        if ($exp->namespace && !static::inNamespace($hashValue, $exp->namespace)) {
+        // 7. Filtered out / not in namespace
+        if ($exp->filters) {
+            if ($this->isFilteredOut($exp->filters)) {
+                return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
+            }
+        } elseif ($exp->namespace && !static::inNamespace($hashValue, $exp->namespace)) {
             return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
@@ -367,8 +376,12 @@ class Growthbook
         }
 
         // 9. Calculate bucket ranges
-        $ranges = static::getBucketRanges(count($exp->variations), $exp->coverage, $exp->weights ?? []);
-        $n = static::hash($hashValue . $exp->key);
+        $ranges = $exp->ranges ?? static::getBucketRanges(count($exp->variations), $exp->coverage, $exp->weights ?? []);
+        $n = static::hash(
+            $exp->seed ?? $exp->key,
+            $hashValue,
+            $exp->hashVersion ?? 1
+        );
         $assigned = static::chooseVariation($n, $ranges);
 
         // 10. Not assigned
@@ -387,7 +400,7 @@ class Growthbook
         }
 
         // 13. Build the result object
-        $result = new ExperimentResult($exp, $hashValue, $assigned, true, $featureId);
+        $result = new ExperimentResult($exp, $hashValue, $assigned, true, $featureId, $n);
 
         // 14. Fire tracking callback
         $this->tracks[$exp->key] = new ViewedExperiment($exp, $result);
@@ -404,14 +417,94 @@ class Growthbook
     }
 
 
-    /**
-     * @param string $str
-     * @return float
-     */
-    public static function hash(string $str): float
+
+    public static function hash(string $seed, string $value, int $version): float
     {
-        $n = hexdec(hash("fnv1a32", $str));
-        return ($n % 1000) / 1000;
+        // New hashing algorithm
+        if ($version === 2) {
+            $n = hexdec(hash("fnv1a32", hexdec(hash("fnv1a32", $seed . $value)) . ""));
+            return ($n % 10000) / 10000;
+        }
+        // Original hashing algorithm (with a bias flaw)
+        elseif ($version === 1) {
+            $n = hexdec(hash("fnv1a32", $value . $seed));
+            return ($n % 1000) / 1000;
+        }
+
+        return -1;
+    }
+
+    /**
+     * @param float $n
+     * @param array{0:float,1:float} $range
+     * @return bool
+     */
+    public static function inRange(float $n, array $range): bool
+    {
+        return $n >= $range[0] && $n < $range[1];
+    }
+
+    /**
+     * @param string $seed
+     * @param string|null $hashAttribute
+     * @param array{0:float,1:float}|null $range
+     * @param float|null $coverage
+     * @param int|null $hashVersion
+     * @return bool
+     */
+    private function isIncludedInRollout(string $seed, string $hashAttribute = null, array $range = null, float $coverage = null, int $hashVersion = null): bool
+    {
+        if ($coverage === null && $range === null) {
+            return true;
+        }
+
+        $hashValue = strval($this->attributes[$hashAttribute ?? "id"] ?? "");
+        if ($hashValue === "") {
+            return false;
+        }
+
+        $n = self::hash($seed, $hashValue, $hashVersion ?? 1);
+        if ($range) {
+            return self::inRange($n, $range);
+        } elseif ($coverage !== null) {
+            return $n <= $coverage;
+        }
+
+        return true;
+    }
+
+    private function getHashValue(string $hashAttribute): string
+    {
+        return strval($this->attributes[$hashAttribute ?? "id"] ?? "");
+    }
+
+    /**
+     * @param array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[] $filters
+     * @return bool
+     */
+    private function isFilteredOut(array $filters): bool
+    {
+        foreach ($filters as $filter) {
+            $hashValue = $this->getHashValue($filter["attribute"] ?? "id");
+            if ($hashValue === "") {
+                return false;
+            }
+
+            $n = self::hash($filter["seed"] ?? "", $hashValue, $filter["hashVersion"] ?? 2);
+
+            $filtered = false;
+            foreach ($filter["ranges"] as $range) {
+                if (self::inRange($n, $range)) {
+                    $filtered = true;
+                    break;
+                }
+            }
+            if (!$filtered) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -425,7 +518,7 @@ class Growthbook
         if (count($namespace) < 3) {
             return false;
         }
-        $n = static::hash($userId . "__" . $namespace[0]);
+        $n = static::hash("__" . $namespace[0], $userId, 1);
         return $n >= $namespace[1] && $n < $namespace[2];
     }
 
@@ -478,7 +571,7 @@ class Growthbook
     public static function chooseVariation(float $n, array $ranges): int
     {
         foreach ($ranges as $i => $range) {
-            if ($n >= $range[0] && $n < $range[1]) {
+            if (self::inRange($n, $range)) {
                 return (int) $i;
             }
         }
@@ -515,6 +608,26 @@ class Growthbook
         return $variation;
     }
 
+    public function decrypt(string $encryptedString): mixed
+    {
+        if (!$this->decryptionKey) {
+            throw new \Error("Must specify a decryption key in order to use encrypted feature flags");
+        }
+
+        $parts = explode(".", $encryptedString, 2);
+        $iv = $parts[0];
+        $cipherText = $parts[1];
+
+        $password = base64_decode($this->decryptionKey);
+
+        $decrypted = openssl_decrypt($cipherText, "aes-128-cbc", $password, 0, $iv);
+        if (!$decrypted) {
+            throw new \Error("Could not decrypt features");
+        }
+
+        return json_decode($decrypted, true);
+    }
+
     public function loadFeatures(): void
     {
         if (!$this->clientKey) {
@@ -527,38 +640,33 @@ class Growthbook
             throw new \Exception("Must set an HTTP Request Factory before loading features");
         }
 
+        // First try fetching from cache
         if ($this->cache) {
-            try {
-                $featuresJSON = $this->cache->get(self::CACHE_KEY);
-                if ($featuresJSON) {
-                    $features = json_decode($featuresJSON, true);
-                    if ($features && is_array($features)) {
-                        $this->withFeatures($features);
-                        return;
-                    }
+            $featuresJSON = $this->cache->get(self::CACHE_KEY);
+            if ($featuresJSON) {
+                $features = json_decode($featuresJSON, true);
+                if ($features && is_array($features)) {
+                    $this->withFeatures($features);
+                    return;
                 }
-            } catch (\Throwable $e) {
-                // Ignore cache exceptions
             }
         }
 
-        try {
-            $url = rtrim($this->apiHost ?? self::DEFAULT_API_HOST, "/") . "/api/features/" . $this->clientKey;
-            $req = $this->requestFactory->createRequest('GET', $url);
-            $res = $this->httpClient->sendRequest($req);
-            $body = $res->getBody();
-            $parsed = json_decode($body, true);
-            if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
-                return;
-            }
+        // Otherwise, fetch from API
+        $url = rtrim($this->apiHost ?? self::DEFAULT_API_HOST, "/") . "/api/features/" . $this->clientKey;
+        $req = $this->requestFactory->createRequest('GET', $url);
+        $res = $this->httpClient->sendRequest($req);
+        $body = $res->getBody();
+        $parsed = json_decode($body, true);
+        if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
+            return;
+        }
 
-            $features = $parsed["features"];
-            $this->withFeatures($features);
-            if ($this->cache) {
-                $this->cache->set(self::CACHE_KEY, json_encode($features), $this->cacheTTL);
-            }
-        } catch (\Throwable $e) {
-            // Ignore fetch/cache exceptions
+        // Set features and cache for next time
+        $features = array_key_exists("encryptedFeatures", $parsed) ? $this->decrypt($parsed["encryptedFeatures"]) : $parsed["features"];
+        $this->withFeatures($features);
+        if ($this->cache) {
+            $this->cache->set(self::CACHE_KEY, json_encode($features), $this->cacheTTL);
         }
     }
 }

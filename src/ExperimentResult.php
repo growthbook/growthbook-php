@@ -36,6 +36,22 @@ class ExperimentResult
      * @var string|null
      */
     public $featureId;
+    /**
+     * @var string
+     */
+    public $key;
+    /**
+     * @var float|null
+     */
+    public $bucket;
+    /**
+     * @var string|null
+     */
+    public $name;
+    /**
+     * @var boolean
+     */
+    public $passthrough;
 
 
     /**
@@ -43,8 +59,9 @@ class ExperimentResult
      * @param string $hashValue
      * @param int $variationIndex
      * @param bool $hashUsed
+     * @param float $bucket
      */
-    public function __construct(InlineExperiment $experiment, string $hashValue = "", int $variationIndex = -1, bool $hashUsed = false, string $featureId = null)
+    public function __construct(InlineExperiment $experiment, string $hashValue = "", int $variationIndex = -1, bool $hashUsed = false, string $featureId = null, float $bucket=null)
     {
         $inExperiment = true;
         // If the assigned variation is invalid, the user is not in the experiment and should get assigned the baseline
@@ -61,5 +78,22 @@ class ExperimentResult
         $this->hashAttribute = $experiment->hashAttribute ?? "id";
         $this->hashValue = $hashValue;
         $this->featureId = $featureId;
+        $this->bucket = $bucket;
+
+        $this->key = "" . $variationIndex;
+        if ($experiment->meta) {
+            $meta = $experiment->meta[$variationIndex] ?? null;
+            if ($meta) {
+                if (array_key_exists("key", $meta)) {
+                    $this->key = $meta["key"];
+                }
+                if (array_key_exists("name", $meta)) {
+                    $this->name = $meta["name"];
+                }
+                if (array_key_exists("passthrough", $meta)) {
+                    $this->passthrough = $meta["passthrough"];
+                }
+            }
+        }
     }
 }

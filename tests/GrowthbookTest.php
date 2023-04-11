@@ -73,9 +73,10 @@ final class GrowthbookTest extends TestCase
     /**
      * @dataProvider hashProvider
      */
-    public function testHash(string $value, float $expected): void
+    public function testHash(string $seed, string $value, int $version, float $expected): void
     {
-        $this->assertSame(Growthbook::hash($value), $expected);
+        $actual = Growthbook::hash($seed, $value, $version);
+        $this->assertSame($actual, $expected);
     }
     /**
      * @return array<int|string,mixed[]>

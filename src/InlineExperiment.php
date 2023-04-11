@@ -25,6 +25,20 @@ class InlineExperiment
     public $namespace;
     /** @var string */
     public $hashAttribute;
+    /** @var null|array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[] */
+    public $filters;
+    /** @var null|string */
+    public $seed;
+    /** @var null|int */
+    public $hashVersion;
+    /** @var null|array{key?:string,name?:string,passthrough?:bool}[] */
+    public $meta;
+    /** @var null|array{0:float,1:float}[] */
+    public $ranges;
+    /** @var null|string */
+    public $name;
+    /** @var null|string */
+    public $phase;
 
     /**
      * @param string $key
@@ -39,7 +53,7 @@ class InlineExperiment
     /**
      * @param string $key
      * @param T[] $variations
-     * @param array{weights?:float[],coverage?:float,force?:int|null,active?:boolean,condition?:array<string,mixed>,namespace?:array{0:string,1:float,2:float},hashAttribute?:string} $options
+     * @param array{weights?:float[],coverage?:float,force?:int|null,active?:boolean,condition?:array<string,mixed>,namespace?:array{0:string,1:float,2:float},hashAttribute?:string,filters?:array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[],seed?:string,hashVersion?:int,meta?:array{key?:string,name?:string,passthrough?:bool}[],ranges?:array{0:float,1:float}[],name?:string,phase?:string} $options
      */
     public function __construct(string $key, $variations, array $options = [])
     {
@@ -52,6 +66,13 @@ class InlineExperiment
         $this->namespace = $options["namespace"] ?? null;
         $this->force = $options["force"] ?? null;
         $this->hashAttribute = $options["hashAttribute"] ?? "id";
+        $this->filters = $options["filters"] ?? null;
+        $this->seed = $options["seed"] ?? null;
+        $this->hashVersion = $options["hashVersion"] ?? null;
+        $this->meta = $options["meta"] ?? null;
+        $this->ranges = $options["ranges"] ?? null;
+        $this->name = $options["name"] ?? null;
+        $this->phase = $options["phase"] ?? null;
     }
 
     /**

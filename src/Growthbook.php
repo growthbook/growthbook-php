@@ -4,6 +4,9 @@ namespace Growthbook;
 
 class Growthbook
 {
+    private const DEFAULT_API_HOST = "https://cdn.growthbook.io";
+    private const CACHE_KEY = "growthbook_features_v1";
+
     /** @var bool */
     public $enabled = true;
     /** @var null|\Psr\Log\LoggerInterface */
@@ -21,6 +24,32 @@ class Growthbook
     /** @var callable|null */
     private $trackingCallback = null;
 
+    /**
+     * @var null|\Psr\SimpleCache\CacheInterface
+     */
+    private $cache = null;
+    /**
+     * @var integer
+     */
+    private $cacheTTL = 60;
+
+    /**
+     * @var null|\Psr\Http\Client\ClientInterface
+     */
+    private $httpClient = null;
+
+    /**
+     * @var null|\Psr\Http\Message\RequestFactoryInterface;
+     */
+    public $requestFactory = null;
+
+    /** @var string */
+    private $apiHost = "";
+    /** @var string */
+    private $clientKey = "";
+    /** @var string */
+    private $decryptionKey = "";
+
     /** @var array<string,ViewedExperiment> */
     private $tracks = [];
 
@@ -30,12 +59,27 @@ class Growthbook
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,httpRequestFactory?:\Psr\Http\Message\RequestFactoryInterface,clientKey?:string,apiHost?:string,decryptionKey?:string} $options
      */
     public function __construct(array $options = [])
     {
         // Warn if any unknown options are passed
-        $knownOptions = ["enabled", "logger", "url", "attributes", "features", "forcedVariations", "qaMode", "trackingCallback"];
+        $knownOptions = [
+            "enabled",
+            "logger",
+            "url",
+            "attributes",
+            "features",
+            "forcedVariations",
+            "qaMode",
+            "trackingCallback",
+            "cache",
+            "httpClient",
+            "httpRequestFactory",
+            "clientKey",
+            "apiHost",
+            "decryptionKey",
+        ];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
             trigger_error('Unknown Config options: ' . implode(", ", $unknownOptions), E_USER_NOTICE);
@@ -48,6 +92,17 @@ class Growthbook
         $this->qaMode = $options["qaMode"] ?? false;
         $this->trackingCallback = $options["trackingCallback"] ?? null;
 
+        $this->cache = $options["cache"] ?? null;
+        $this->httpClient = $options["httpClient"] ?? null;
+        $this->requestFactory = $options["httpRequestFactory"] ?? null;
+
+        if (array_key_exists("clientKey", $options)) {
+            $this->withApi(
+                $options["clientKey"],
+                $options["apiHost"] ?? self::DEFAULT_API_HOST,
+                $options["decryptionKey"] ?? ""
+            );
+        }
         if (array_key_exists("features", $options)) {
             $this->withFeatures(($options["features"]));
         }
@@ -56,6 +111,13 @@ class Growthbook
         }
     }
 
+    public function withApi(string $clientKey, string $apiHost = self::DEFAULT_API_HOST, string $decryptionKey = ""): Growthbook
+    {
+        $this->clientKey = $clientKey;
+        $this->apiHost = $apiHost;
+        $this->decryptionKey = $decryptionKey;
+        return $this;
+    }
 
     /**
      * @param array<string,mixed> $attributes
@@ -82,7 +144,7 @@ class Growthbook
     public function withFeatures(array $features): Growthbook
     {
         $this->features = [];
-        foreach ($features as $key=>$feature) {
+        foreach ($features as $key => $feature) {
             if ($feature instanceof Feature) {
                 $this->features[$key] = $feature;
             } else {
@@ -115,6 +177,21 @@ class Growthbook
         return $this;
     }
 
+    public function withHttpClient(\Psr\Http\Client\ClientInterface $client, \Psr\Http\Message\RequestFactoryInterface $requestFactory): Growthbook
+    {
+        $this->httpClient = $client;
+        $this->requestFactory = $requestFactory;
+        return $this;
+    }
+
+    public function withCache(\Psr\SimpleCache\CacheInterface $cache, int $ttl = null): Growthbook
+    {
+        $this->cache = $cache;
+        if ($ttl !== null) {
+            $this->cacheTTL = $ttl;
+        }
+        return $this;
+    }
 
     /**
      * @return array<string,mixed>
@@ -215,7 +292,7 @@ class Growthbook
                 if (!$exp) {
                     continue;
                 }
-                $result = $this->runInlineExperiment($exp);
+                $result = $this->runExperiment($exp, $key);
                 if (!$result->inExperiment) {
                     continue;
                 }
@@ -232,50 +309,61 @@ class Growthbook
      */
     public function runInlineExperiment(InlineExperiment $exp): ExperimentResult
     {
+        return $this->runExperiment($exp, null);
+    }
+
+    /**
+     * @template T
+     * @param InlineExperiment<T> $exp
+     * @param string|null $featureId
+     * @return ExperimentResult<T>
+     */
+    private function runExperiment(InlineExperiment $exp, string $featureId = null): ExperimentResult
+    {
         // 1. Too few variations
         if (count($exp->variations) < 2) {
-            return new ExperimentResult($exp);
+            return new ExperimentResult($exp, "", -1, false, $featureId);
         }
 
         // 2. Growthbook disabled
         if (!$this->enabled) {
-            return new ExperimentResult($exp);
+            return new ExperimentResult($exp, "", -1, false, $featureId);
         }
 
         $hashAttribute = $exp->hashAttribute ?? "id";
-        $hashValue = $this->attributes[$hashAttribute] ?? "";
+        $hashValue = strval($this->attributes[$hashAttribute] ?? "");
 
         // 3. Forced via querystring
         if ($this->url) {
             $qsOverride = static::getQueryStringOverride($exp->key, $this->url, count($exp->variations));
             if ($qsOverride !== null) {
-                return new ExperimentResult($exp, $hashValue, $qsOverride);
+                return new ExperimentResult($exp, $hashValue, $qsOverride, false, $featureId);
             }
         }
 
         // 4. Forced via forcedVariations
         if (array_key_exists($exp->key, $this->forcedVariations)) {
-            return new ExperimentResult($exp, $hashValue, $this->forcedVariations[$exp->key]);
+            return new ExperimentResult($exp, $hashValue, $this->forcedVariations[$exp->key], false, $featureId);
         }
 
         // 5. Experiment is not active
         if (!$exp->active) {
-            return new ExperimentResult($exp, $hashValue);
+            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
         // 6. Hash value is empty
         if (!$hashValue) {
-            return new ExperimentResult($exp);
+            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
         // 7. Not in namespace
         if ($exp->namespace && !static::inNamespace($hashValue, $exp->namespace)) {
-            return new ExperimentResult($exp, $hashValue);
+            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
         // 8. Condition fails
         if ($exp->condition && !Condition::evalCondition($this->attributes, $exp->condition)) {
-            return new ExperimentResult($exp, $hashValue);
+            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
         // 9. Calculate bucket ranges
@@ -285,21 +373,21 @@ class Growthbook
 
         // 10. Not assigned
         if ($assigned === -1) {
-            return new ExperimentResult($exp, $hashValue);
+            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
         // 11. Forced variation
         if ($exp->force !== null) {
-            return new ExperimentResult($exp, $hashValue, $exp->force);
+            return new ExperimentResult($exp, $hashValue, $exp->force, false, $featureId);
         }
 
         // 12. QA mode
         if ($this->qaMode) {
-            return new ExperimentResult($exp, $hashValue);
+            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
         // 13. Build the result object
-        $result = new ExperimentResult($exp, $hashValue, $assigned, true);
+        $result = new ExperimentResult($exp, $hashValue, $assigned, true, $featureId);
 
         // 14. Fire tracking callback
         $this->tracks[$exp->key] = new ViewedExperiment($exp, $result);
@@ -425,5 +513,52 @@ class Growthbook
         }
 
         return $variation;
+    }
+
+    public function loadFeatures(): void
+    {
+        if (!$this->clientKey) {
+            throw new \Exception("Must specify a clientKey before loading features.");
+        }
+        if (!$this->httpClient) {
+            throw new \Exception("Must set an HTTP Client before loading features.");
+        }
+        if (!$this->requestFactory) {
+            throw new \Exception("Must set an HTTP Request Factory before loading features");
+        }
+
+        if ($this->cache) {
+            try {
+                $featuresJSON = $this->cache->get(self::CACHE_KEY);
+                if ($featuresJSON) {
+                    $features = json_decode($featuresJSON, true);
+                    if ($features && is_array($features)) {
+                        $this->withFeatures($features);
+                        return;
+                    }
+                }
+            } catch (\Throwable $e) {
+                // Ignore cache exceptions
+            }
+        }
+
+        try {
+            $url = rtrim($this->apiHost ?? self::DEFAULT_API_HOST, "/") . "/api/features/" . $this->clientKey;
+            $req = $this->requestFactory->createRequest('GET', $url);
+            $res = $this->httpClient->sendRequest($req);
+            $body = $res->getBody();
+            $parsed = json_decode($body, true);
+            if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
+                return;
+            }
+
+            $features = $parsed["features"];
+            $this->withFeatures($features);
+            if ($this->cache) {
+                $this->cache->set(self::CACHE_KEY, json_encode($features), $this->cacheTTL);
+            }
+        } catch (\Throwable $e) {
+            // Ignore fetch/cache exceptions
+        }
     }
 }

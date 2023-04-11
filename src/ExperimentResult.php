@@ -32,6 +32,11 @@ class ExperimentResult
      * @var string
      */
     public $hashValue;
+    /**
+     * @var string|null
+     */
+    public $featureId;
+
 
     /**
      * @param InlineExperiment<T> $experiment
@@ -39,7 +44,7 @@ class ExperimentResult
      * @param int $variationIndex
      * @param bool $hashUsed
      */
-    public function __construct(InlineExperiment $experiment, string $hashValue = "", int $variationIndex = -1, bool $hashUsed = false)
+    public function __construct(InlineExperiment $experiment, string $hashValue = "", int $variationIndex = -1, bool $hashUsed = false, string $featureId = null)
     {
         $inExperiment = true;
         // If the assigned variation is invalid, the user is not in the experiment and should get assigned the baseline
@@ -55,5 +60,6 @@ class ExperimentResult
         $this->value = $experiment->variations[$variationIndex];
         $this->hashAttribute = $experiment->hashAttribute ?? "id";
         $this->hashValue = $hashValue;
+        $this->featureId = $featureId;
     }
 }

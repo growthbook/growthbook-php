@@ -98,7 +98,7 @@ class Growthbook
 
         $this->decryptionKey = $options["decryptionKey"] ?? "";
         $this->apiHost = $options["apiHost"] ?? self::DEFAULT_API_HOST;
-        $this->clientKey = $options["clientKey"] ?? null;
+        $this->clientKey = $options["clientKey"] ?? "";
 
         if (array_key_exists("features", $options)) {
             $this->withFeatures(($options["features"]));

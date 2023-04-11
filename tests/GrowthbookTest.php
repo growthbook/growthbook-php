@@ -185,6 +185,32 @@ final class GrowthbookTest extends TestCase
 
 
     /**
+     * @dataProvider decryptProvider
+     * @param string $encryptedString
+     * @param string $key
+     * @param string $expected
+     */
+    public function testDecrypt(string $encryptedString, string $key, string $expected): void
+    {
+        $gb = new Growthbook([
+            'decryptionKey' => $key
+        ]);
+
+        $actual = json_encode($gb->decrypt($encryptedString));
+
+        $this->assertSame($actual, $expected);
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function decryptProvider(): array
+    {
+        return $this->getCases("decrypt");
+    }
+
+
+    /**
      * @dataProvider featureProvider
      * @param array<string,mixed> $ctx
      * @param string $key
@@ -238,7 +264,6 @@ final class GrowthbookTest extends TestCase
     {
         return $this->getCases("feature");
     }
-
 
 
     /**

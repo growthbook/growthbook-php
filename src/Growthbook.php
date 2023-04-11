@@ -96,13 +96,10 @@ class Growthbook
         $this->httpClient = $options["httpClient"] ?? null;
         $this->requestFactory = $options["httpRequestFactory"] ?? null;
 
-        if (array_key_exists("clientKey", $options)) {
-            $this->withApi(
-                $options["clientKey"],
-                $options["apiHost"] ?? self::DEFAULT_API_HOST,
-                $options["decryptionKey"] ?? ""
-            );
-        }
+        $this->decryptionKey = $options["decryptionKey"] ?? "";
+        $this->apiHost = $options["apiHost"] ?? self::DEFAULT_API_HOST;
+        $this->clientKey = $options["clientKey"] ?? null;
+
         if (array_key_exists("features", $options)) {
             $this->withFeatures(($options["features"]));
         }
@@ -608,24 +605,32 @@ class Growthbook
         return $variation;
     }
 
-    public function decrypt(string $encryptedString): mixed
+    /**
+     * @param string $encryptedString
+     * @return mixed
+     */
+    public function decrypt(string $encryptedString)
     {
         if (!$this->decryptionKey) {
             throw new \Error("Must specify a decryption key in order to use encrypted feature flags");
         }
 
-        $parts = explode(".", $encryptedString, 2);
-        $iv = $parts[0];
-        $cipherText = $parts[1];
+        try {
+            $parts = explode(".", $encryptedString, 2);
+            $iv = base64_decode($parts[0]);
+            $cipherText = $parts[1];
 
-        $password = base64_decode($this->decryptionKey);
+            $password = base64_decode($this->decryptionKey);
 
-        $decrypted = openssl_decrypt($cipherText, "aes-128-cbc", $password, 0, $iv);
-        if (!$decrypted) {
-            throw new \Error("Could not decrypt features");
+            $decrypted = openssl_decrypt($cipherText, "aes-128-cbc", $password, 0, $iv);
+            if (!$decrypted) {
+                return null;
+            }
+
+            return json_decode($decrypted, true);
+        } catch (\Throwable $e) {
+            return null;
         }
-
-        return json_decode($decrypted, true);
     }
 
     public function loadFeatures(): void

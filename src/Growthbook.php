@@ -2,6 +2,9 @@
 
 namespace Growthbook;
 
+use Http\Discovery\Psr18ClientDiscovery;
+use Http\Discovery\Psr17FactoryDiscovery;
+
 class Growthbook
 {
     private const DEFAULT_API_HOST = "https://cdn.growthbook.io";
@@ -59,7 +62,7 @@ class Growthbook
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,httpRequestFactory?:\Psr\Http\Message\RequestFactoryInterface,clientKey?:string,apiHost?:string,decryptionKey?:string} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string} $options
      */
     public function __construct(array $options = [])
     {
@@ -75,10 +78,8 @@ class Growthbook
             "trackingCallback",
             "cache",
             "httpClient",
-            "httpRequestFactory",
-            "clientKey",
-            "apiHost",
-            "decryptionKey",
+            "requestFactory",
+            "decryptionKey"
         ];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
@@ -92,13 +93,15 @@ class Growthbook
         $this->qaMode = $options["qaMode"] ?? false;
         $this->trackingCallback = $options["trackingCallback"] ?? null;
 
-        $this->cache = $options["cache"] ?? null;
-        $this->httpClient = $options["httpClient"] ?? null;
-        $this->requestFactory = $options["httpRequestFactory"] ?? null;
-
         $this->decryptionKey = $options["decryptionKey"] ?? "";
-        $this->apiHost = $options["apiHost"] ?? self::DEFAULT_API_HOST;
-        $this->clientKey = $options["clientKey"] ?? "";
+
+        $this->cache = $options["cache"] ?? null;
+        try {
+            $this->httpClient = $options["httpClient"] ?? Psr18ClientDiscovery::find();
+            $this->requestFactory = $options["requestFactory"] ?? Psr17FactoryDiscovery::findRequestFactory();
+        } catch (\Throwable $e) {
+            // Ignore errors from discovery
+        }
 
         if (array_key_exists("features", $options)) {
             $this->withFeatures(($options["features"]));
@@ -106,14 +109,6 @@ class Growthbook
         if (array_key_exists("attributes", $options)) {
             $this->withAttributes(($options["attributes"]));
         }
-    }
-
-    public function withApi(string $clientKey, string $apiHost = self::DEFAULT_API_HOST, string $decryptionKey = ""): Growthbook
-    {
-        $this->clientKey = $clientKey;
-        $this->apiHost = $apiHost;
-        $this->decryptionKey = $decryptionKey;
-        return $this;
     }
 
     /**
@@ -379,6 +374,9 @@ class Growthbook
             $hashValue,
             $exp->hashVersion ?? 1
         );
+        if ($n === null) {
+            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
+        }
         $assigned = static::chooseVariation($n, $ranges);
 
         // 10. Not assigned
@@ -415,7 +413,7 @@ class Growthbook
 
 
 
-    public static function hash(string $seed, string $value, int $version): float
+    public static function hash(string $seed, string $value, int $version): ?float
     {
         // New hashing algorithm
         if ($version === 2) {
@@ -428,7 +426,7 @@ class Growthbook
             return ($n % 1000) / 1000;
         }
 
-        return -1;
+        return null;
     }
 
     /**
@@ -461,6 +459,9 @@ class Growthbook
         }
 
         $n = self::hash($seed, $hashValue, $hashVersion ?? 1);
+        if ($n === null) {
+            return false;
+        }
         if ($range) {
             return self::inRange($n, $range);
         } elseif ($coverage !== null) {
@@ -488,6 +489,9 @@ class Growthbook
             }
 
             $n = self::hash($filter["seed"] ?? "", $hashValue, $filter["hashVersion"] ?? 2);
+            if ($n === null) {
+                return false;
+            }
 
             $filtered = false;
             foreach ($filter["ranges"] as $range) {
@@ -516,6 +520,9 @@ class Growthbook
             return false;
         }
         $n = static::hash("__" . $namespace[0], $userId, 1);
+        if ($n === null) {
+            return false;
+        }
         return $n >= $namespace[1] && $n < $namespace[2];
     }
 
@@ -605,36 +612,32 @@ class Growthbook
         return $variation;
     }
 
-    /**
-     * @param string $encryptedString
-     * @return mixed
-     */
-    public function decrypt(string $encryptedString)
+    public function decrypt(string $encryptedString): string
     {
         if (!$this->decryptionKey) {
             throw new \Error("Must specify a decryption key in order to use encrypted feature flags");
         }
 
-        try {
-            $parts = explode(".", $encryptedString, 2);
-            $iv = base64_decode($parts[0]);
-            $cipherText = $parts[1];
+        $parts = explode(".", $encryptedString, 2);
+        $iv = base64_decode($parts[0]);
+        $cipherText = $parts[1];
 
-            $password = base64_decode($this->decryptionKey);
+        $password = base64_decode($this->decryptionKey);
 
-            $decrypted = openssl_decrypt($cipherText, "aes-128-cbc", $password, 0, $iv);
-            if (!$decrypted) {
-                return null;
-            }
-
-            return json_decode($decrypted, true);
-        } catch (\Throwable $e) {
-            return null;
+        $decrypted = openssl_decrypt($cipherText, "aes-128-cbc", $password, 0, $iv);
+        if (!$decrypted) {
+            throw new \Error("Failed to decrypt");
         }
+
+        return $decrypted;
     }
 
-    public function loadFeatures(): void
+    public function loadFeatures(string $clientKey, string $apiHost = "", string $decryptionKey = ""): void
     {
+        $this->clientKey = $clientKey;
+        $this->apiHost = $apiHost;
+        $this->decryptionKey = $decryptionKey;
+
         if (!$this->clientKey) {
             throw new \Exception("Must specify a clientKey before loading features.");
         }
@@ -668,7 +671,9 @@ class Growthbook
         }
 
         // Set features and cache for next time
-        $features = array_key_exists("encryptedFeatures", $parsed) ? $this->decrypt($parsed["encryptedFeatures"]) : $parsed["features"];
+        $features = array_key_exists("encryptedFeatures", $parsed)
+            ? json_decode($this->decrypt($parsed["encryptedFeatures"]), true)
+            : $parsed["features"];
         $this->withFeatures($features);
         if ($this->cache) {
             $this->cache->set(self::CACHE_KEY, json_encode($features), $this->cacheTTL);

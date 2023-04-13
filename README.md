@@ -267,6 +267,22 @@ mixpanel.track("Experiment Viewed", <?=json_encode([
 ])?>);
 ```
 
+### Logging
+
+GrowthBook can output log messages to help you debug your feature flags and experiments.
+
+We support any PSR-3 comaptible logger. We implement a fluent interface (`withLogger`) as well as the standard LoggerAware interface (`setLogger`).
+
+```php
+// Fluent interface
+$growthbook
+  ->withLogger($logger)
+  ->with...;
+
+// Setter
+$growthbook->setLogger($logger);
+```
+
 ## Using Features
 
 There are 3 main methods for interacting with features.

@@ -6,9 +6,8 @@ Powerful Feature flagging and A/B testing for PHP.
 
 ![Build Status](https://github.com/growthbook/growthbook-php/workflows/Build/badge.svg)
 
--  **No external dependencies**
--  **Lightweight and fast**
--  **No HTTP requests** everything is defined and evaluated locally
+-  **No external dependencies** (besides PSR interfaces)
+-  **Extremely fast**, all evaluation happens locally
 -  **PHP 7.1+** with 100% test coverage and phpstan on the highest level
 -  **Advanced user and page targeting**
 -  **Use your existing event tracking** (GA, Segment, Mixpanel, custom)
@@ -68,7 +67,7 @@ foreach($impressions as $impression) {
 
 ### Loading Features
 
-There are 2 ways to load features into the SDK.  You can use `loadFeatures` with an API Host and Client Key.  Or, you can manually fetch and cache feature flags and pass them in with the `withFeatures` method.
+There are 2 ways to load features into the SDK.  You can use `loadFeatures` with a Client Key and API Host.  Or, you can manually fetch and cache feature flags and pass them in with the `withFeatures` method.
 
 #### loadFeatures method
 
@@ -92,7 +91,9 @@ $growthbook = Growthbook\Growthbook::create()
   ->withCache($cache, 120); // Cache for 120s instead
 ```
 
-If you have Guzzle (or any other popular HttpClient library) installed, we will auto-detect it, so there's no configuration required. If you prefer to specify it explicitly, you can use the `withHttpClient` method.  Note - you'll need to specify both an `HttpClient` and a `RequestFactoryInterface` implementation.
+To load features, we require a PSR-17 (HttpClient) and PSR-18 (RequestFactoryInterface) compatible library like Guzzle to be installed.
+
+We will auto-discover most HTTP libraries without any configuration required, but if you prefer to specify it explicitly, you can use the `withHttpClient` method.  Note - you'll need to specify both an `HttpClient` and a `RequestFactoryInterface` implementation.
 
 The `loadFeatures` method takes 3 arguments:
 

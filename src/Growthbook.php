@@ -262,18 +262,28 @@ class Growthbook implements LoggerAwareInterface
     public function getFeature(string $key): FeatureResult
     {
         if (!array_key_exists($key, $this->features)) {
+            $this->log(LogLevel::DEBUG, "Unknown feature - $key");
             return new FeatureResult(null, "unknownFeature");
         }
+        $this->log(LogLevel::DEBUG, "Evaluating feature - $key");
         $feature = $this->features[$key];
         if ($feature->rules) {
             foreach ($feature->rules as $rule) {
                 if ($rule->condition) {
                     if (!Condition::evalCondition($this->attributes, $rule->condition)) {
+                        $this->log(LogLevel::DEBUG, "Skip rule because of targeting condition", [
+                            "feature" => $key,
+                            "condition" => $rule->condition
+                        ]);
                         continue;
                     }
                 }
                 if ($rule->filters) {
                     if (self::isFilteredOut($rule->filters)) {
+                        $this->log(LogLevel::DEBUG, "Skip rule because of filtering (e.g. namespace)", [
+                            "feature" => $key,
+                            "filters" => $rule->filters
+                        ]);
                         continue;
                     }
                 }
@@ -286,18 +296,42 @@ class Growthbook implements LoggerAwareInterface
                         $rule->coverage,
                         $rule->hashVersion
                     )) {
+                        $this->log(LogLevel::DEBUG, "Skip rule because of rollout percent", [
+                            "feature" => $key
+                        ]);
                         continue;
                     }
+                    $this->log(LogLevel::DEBUG, "Force feature value from rule", [
+                        "feature" => $key,
+                        "value" => $rule->force
+                    ]);
                     return new FeatureResult($rule->force, "force");
                 }
                 $exp = $rule->toExperiment($key);
                 if (!$exp) {
+                    $this->log(LogLevel::DEBUG, "Skip rule because could not convert to an experiment", [
+                        "feature" => $key,
+                        "filters" => $rule->filters
+                    ]);
                     continue;
                 }
                 $result = $this->runExperiment($exp, $key);
-                if (!$result->inExperiment || $result->passthrough) {
+                if (!$result->inExperiment) {
+                    $this->log(LogLevel::DEBUG, "Skip rule because user not included in experiment", [
+                        "feature" => $key
+                    ]);
                     continue;
                 }
+                if ($result->passthrough) {
+                    $this->log(LogLevel::DEBUG, "User put into holdout experiment, continue to next rule", [
+                        "feature" => $key
+                    ]);
+                    continue;
+                }
+                $this->log(LogLevel::DEBUG, "Use feature value from experiment", [
+                    "feature" => $key,
+                    "value" => $result->value
+                ]);
                 return new FeatureResult($result->value, "experiment", $exp, $result);
             }
         }
@@ -322,13 +356,20 @@ class Growthbook implements LoggerAwareInterface
      */
     private function runExperiment(InlineExperiment $exp, string $featureId = null): ExperimentResult
     {
+        $this->log(LogLevel::DEBUG, "Attempting to run experiment - " . $exp->key);
         // 1. Too few variations
         if (count($exp->variations) < 2) {
+            $this->log(LogLevel::DEBUG, "Skip experiment because there aren't enough variations", [
+                "experiment" => $exp->key
+            ]);
             return new ExperimentResult($exp, "", -1, false, $featureId);
         }
 
         // 2. Growthbook disabled
         if (!$this->enabled) {
+            $this->log(LogLevel::DEBUG, "Skip experiment because the Growthbook instance is disabled", [
+                "experiment" => $exp->key
+            ]);
             return new ExperimentResult($exp, "", -1, false, $featureId);
         }
 
@@ -339,36 +380,59 @@ class Growthbook implements LoggerAwareInterface
         if ($this->url) {
             $qsOverride = static::getQueryStringOverride($exp->key, $this->url, count($exp->variations));
             if ($qsOverride !== null) {
+                $this->log(LogLevel::DEBUG, "Force variation from querystring", [
+                    "experiment" => $exp->key,
+                    "variation" => $qsOverride
+                ]);
                 return new ExperimentResult($exp, $hashValue, $qsOverride, false, $featureId);
             }
         }
 
         // 4. Forced via forcedVariations
         if (array_key_exists($exp->key, $this->forcedVariations)) {
+            $this->log(LogLevel::DEBUG, "Force variation from context", [
+                "experiment" => $exp->key,
+                "variation" => $this->forcedVariations[$exp->key]
+            ]);
             return new ExperimentResult($exp, $hashValue, $this->forcedVariations[$exp->key], false, $featureId);
         }
 
         // 5. Experiment is not active
         if (!$exp->active) {
+            $this->log(LogLevel::DEBUG, "Skip experiment because it is inactive", [
+                "experiment" => $exp->key
+            ]);
             return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
         // 6. Hash value is empty
         if (!$hashValue) {
+            $this->log(LogLevel::DEBUG, "Skip experiment because of empty attribute - $hashAttribute", [
+                "experiment" => $exp->key
+            ]);
             return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
         // 7. Filtered out / not in namespace
         if ($exp->filters) {
             if ($this->isFilteredOut($exp->filters)) {
+                $this->log(LogLevel::DEBUG, "Skip experiment because of filters (e.g. namespace)", [
+                    "experiment" => $exp->key
+                ]);
                 return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
             }
         } elseif ($exp->namespace && !static::inNamespace($hashValue, $exp->namespace)) {
+            $this->log(LogLevel::DEBUG, "Skip experiment because not in namespace", [
+                "experiment" => $exp->key
+            ]);
             return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
         // 8. Condition fails
         if ($exp->condition && !Condition::evalCondition($this->attributes, $exp->condition)) {
+            $this->log(LogLevel::DEBUG, "Skip experiment because of targeting conditions", [
+                "experiment" => $exp->key
+            ]);
             return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
@@ -380,22 +444,35 @@ class Growthbook implements LoggerAwareInterface
             $exp->hashVersion ?? 1
         );
         if ($n === null) {
+            $this->log(LogLevel::DEBUG, "Skip experiment because of invalid hash version", [
+                "experiment" => $exp->key
+            ]);
             return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
         $assigned = static::chooseVariation($n, $ranges);
 
         // 10. Not assigned
         if ($assigned === -1) {
+            $this->log(LogLevel::DEBUG, "Skip experiment because user is not included in a variation", [
+                "experiment" => $exp->key
+            ]);
             return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
         // 11. Forced variation
         if ($exp->force !== null) {
+            $this->log(LogLevel::DEBUG, "Force variation from the experiment config", [
+                "experiment" => $exp->key,
+                "variation" => $exp->force
+            ]);
             return new ExperimentResult($exp, $hashValue, $exp->force, false, $featureId);
         }
 
         // 12. QA mode
         if ($this->qaMode) {
+            $this->log(LogLevel::DEBUG, "Skip experiment because Growthbook instance in QA Mode", [
+                "experiment" => $exp->key
+            ]);
             return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
@@ -408,11 +485,18 @@ class Growthbook implements LoggerAwareInterface
             try {
                 call_user_func($this->trackingCallback, $exp, $result);
             } catch (\Throwable $e) {
-                // Do nothing
+                $this->log(LogLevel::ERROR, "Error calling the trackingCallback function", [
+                    "experiment" => $exp->key,
+                    "error" => $e
+                ]);
             }
         }
 
         // 15. Return the result
+        $this->log(LogLevel::DEBUG, "Assigned user a variation", [
+            "experiment" => $exp->key,
+            "variation" => $assigned
+        ]);
         return $result;
     }
 

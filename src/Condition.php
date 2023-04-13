@@ -179,65 +179,65 @@ class Condition
     private static function evalOperatorCondition(string $operator, $attributeValue, $conditionValue): bool
     {
         switch ($operator) {
-      case '$eq':
-        return $attributeValue == $conditionValue;
-      case '$ne':
-        return $attributeValue != $conditionValue;
-      case '$lt':
-        return $attributeValue < $conditionValue;
-      case '$lte':
-        return $attributeValue <= $conditionValue;
-      case '$gt':
-        return $attributeValue > $conditionValue;
-      case '$gte':
-        return $attributeValue >= $conditionValue;
-      case '$regex':
-        return @preg_match('/'.$conditionValue.'/', $attributeValue) === 1;
-      case '$in':
-        if (!is_array($conditionValue)) {
-            return false;
-        }
-        return in_array($attributeValue, $conditionValue);
-      case '$nin':
-        if (!is_array($conditionValue)) {
-            return false;
-        }
-        return !in_array($attributeValue, $conditionValue);
-      case '$elemMatch':
-        return static::elemMatch($conditionValue, $attributeValue);
-      case '$size':
-        if (!is_array($attributeValue)) {
-            return false;
-        }
-        return static::evalConditionValue($conditionValue, count($attributeValue));
-      case '$all':
-        if (!is_array($attributeValue) || !is_array($conditionValue)) {
-            return false;
-        }
-        foreach ($conditionValue as $a) {
-            $pass = false;
-            foreach ($attributeValue as $b) {
-                if (static::evalConditionValue($a, $b)) {
-                    $pass = true;
-                    break;
+            case '$eq':
+                return $attributeValue == $conditionValue;
+            case '$ne':
+                return $attributeValue != $conditionValue;
+            case '$lt':
+                return $attributeValue < $conditionValue;
+            case '$lte':
+                return $attributeValue <= $conditionValue;
+            case '$gt':
+                return $attributeValue > $conditionValue;
+            case '$gte':
+                return $attributeValue >= $conditionValue;
+            case '$regex':
+                return @preg_match('/'.$conditionValue.'/', $attributeValue) === 1;
+            case '$in':
+                if (!is_array($conditionValue)) {
+                    return false;
                 }
-            }
-            if (!$pass) {
+                return in_array($attributeValue, $conditionValue);
+            case '$nin':
+                if (!is_array($conditionValue)) {
+                    return false;
+                }
+                return !in_array($attributeValue, $conditionValue);
+            case '$elemMatch':
+                return static::elemMatch($conditionValue, $attributeValue);
+            case '$size':
+                if (!is_array($attributeValue)) {
+                    return false;
+                }
+                return static::evalConditionValue($conditionValue, count($attributeValue));
+            case '$all':
+                if (!is_array($attributeValue) || !is_array($conditionValue)) {
+                    return false;
+                }
+                foreach ($conditionValue as $a) {
+                    $pass = false;
+                    foreach ($attributeValue as $b) {
+                        if (static::evalConditionValue($a, $b)) {
+                            $pass = true;
+                            break;
+                        }
+                    }
+                    if (!$pass) {
+                        return false;
+                    }
+                }
+                return true;
+            case '$exists':
+                if (!$conditionValue) {
+                    return $attributeValue === null;
+                }
+                return $attributeValue !== null;
+            case '$type':
+                return static::getType($attributeValue) === $conditionValue;
+            case '$not':
+                return !static::evalConditionValue($conditionValue, $attributeValue);
+            default:
                 return false;
-            }
         }
-        return true;
-      case '$exists':
-        if (!$conditionValue) {
-            return $attributeValue === null;
-        }
-        return $attributeValue !== null;
-      case '$type':
-        return static::getType($attributeValue) === $conditionValue;
-      case '$not':
-        return !static::evalConditionValue($conditionValue, $attributeValue);
-      default:
-        return false;
-    }
     }
 }

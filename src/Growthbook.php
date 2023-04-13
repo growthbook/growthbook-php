@@ -4,11 +4,12 @@ namespace Growthbook;
 
 use Http\Discovery\Psr18ClientDiscovery;
 use Http\Discovery\Psr17FactoryDiscovery;
+use Psr\Log\LoggerAwareInterface;
+use Psr\Log\LogLevel;
 
-class Growthbook
+class Growthbook implements LoggerAwareInterface
 {
     private const DEFAULT_API_HOST = "https://cdn.growthbook.io";
-    private const CACHE_KEY = "growthbook_features_v1";
 
     /** @var bool */
     public $enabled = true;
@@ -167,6 +168,10 @@ class Growthbook
     {
         $this->logger = $logger;
         return $this;
+    }
+    public function setLogger(\Psr\Log\LoggerInterface $logger = null): void
+    {
+        $this->logger = $logger;
     }
 
     public function withHttpClient(\Psr\Http\Client\ClientInterface $client, \Psr\Http\Message\RequestFactoryInterface $requestFactory): Growthbook
@@ -411,7 +416,17 @@ class Growthbook
         return $result;
     }
 
-
+    /**
+     * @param string $level
+     * @param string $message
+     * @param mixed $context
+     */
+    public function log(string $level, string $message, $context = []): void
+    {
+        if ($this->logger) {
+            $this->logger->log($level, $message, $context);
+        }
+    }
 
     public static function hash(string $seed, string $value, int $version): ?float
     {
@@ -648,12 +663,17 @@ class Growthbook
             throw new \Exception("Must set an HTTP Request Factory before loading features");
         }
 
+        // The features URL is also the cache key
+        $url = rtrim($this->apiHost ?? self::DEFAULT_API_HOST, "/") . "/api/features/" . $this->clientKey;
+        $cacheKey = md5($url);
+
         // First try fetching from cache
         if ($this->cache) {
-            $featuresJSON = $this->cache->get(self::CACHE_KEY);
+            $featuresJSON = $this->cache->get($cacheKey);
             if ($featuresJSON) {
                 $features = json_decode($featuresJSON, true);
                 if ($features && is_array($features)) {
+                    $this->log(LogLevel::INFO, "Load features from cache", ["url" => $url, "numFeatures" => count($features)]);
                     $this->withFeatures($features);
                     return;
                 }
@@ -661,12 +681,12 @@ class Growthbook
         }
 
         // Otherwise, fetch from API
-        $url = rtrim($this->apiHost ?? self::DEFAULT_API_HOST, "/") . "/api/features/" . $this->clientKey;
         $req = $this->requestFactory->createRequest('GET', $url);
         $res = $this->httpClient->sendRequest($req);
         $body = $res->getBody();
         $parsed = json_decode($body, true);
         if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
+            $this->log(LogLevel::WARNING, "Could not load features", ["url" => $url, "responseBody" => $body]);
             return;
         }
 
@@ -674,9 +694,12 @@ class Growthbook
         $features = array_key_exists("encryptedFeatures", $parsed)
             ? json_decode($this->decrypt($parsed["encryptedFeatures"]), true)
             : $parsed["features"];
+
+        $this->log(LogLevel::INFO, "Load features from URL", ["url" => $url, "numFeatures" => count($features)]);
         $this->withFeatures($features);
         if ($this->cache) {
-            $this->cache->set(self::CACHE_KEY, json_encode($features), $this->cacheTTL);
+            $this->cache->set($cacheKey, json_encode($features), $this->cacheTTL);
+            $this->log(LogLevel::INFO, "Cache features", ["url" => $url, "numFeatures" => count($features), "ttl" => $this->cacheTTL]);
         }
     }
 }

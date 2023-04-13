@@ -430,14 +430,25 @@ final class UserTest extends TestCase
 
     public function testDeprecatedIntegerVariations(): void
     {
+        set_error_handler(
+            static function ($errno, $errstr) {
+                restore_error_handler();
+                throw new Exception($errstr, $errno);
+            },
+            E_ALL
+        );
+
         $user = $this->client->user(["id"=>"1"]);
-        $this->expectDeprecation();
+        $this->expectException(Exception::class);
+        $this->expectExceptionMessageMatches('/Passing an integer is deprecated/i');
         $user->experiment(new Experiment("my-test", 2));
+
+        restore_error_handler();
     }
 
     public function testLogs(): void
     {
-        $logger = new class() extends \Psr\Log\AbstractLogger {
+        $logger = new class () extends \Psr\Log\AbstractLogger {
             /** @var mixed[] */
             public $logs = [];
 

@@ -350,4 +350,52 @@ final class GrowthbookTest extends TestCase
         $this->assertSame($hashAttribute, $exp->hashAttribute);
         $this->assertSame(['pricing', 0.0, 0.5], $exp->namespace);
     }
+
+    public function testLoggingAndTrackingCallback(): void
+    {
+        $calls = [];
+        $callback = function ($exp, $res) use (&$calls) {
+            $calls[] = [$exp, $res];
+        };
+
+        $logger = $this->createMock('Psr\Log\AbstractLogger');
+        $logger->expects($this->exactly(4))->method("log")->withConsecutive(
+            [$this->equalTo("debug"),$this->stringContains("Evaluating feature")],
+            [$this->equalTo("debug"),$this->stringContains("Attempting to run experiment")],
+            [$this->equalTo("debug"),$this->stringContains("Assigned user a variation")],
+            [$this->equalTo("debug"),$this->stringContains("Use feature value from experiment")],
+        );
+
+        $gb = Growthbook::create()
+            ->withTrackingCallback($callback)
+            ->withLogger($logger)
+            ->withAttributes(['id' => '1'])
+            ->withFeatures([
+                'feature'=>[
+                    'defaultValue'=>false,
+                    'rules'=>[
+                        [
+                            'variations'=>[false,true],
+                            'meta'=>[
+                                ['key'=>'control'],
+                                ['key'=>'variation']
+                            ]
+                        ]
+                    ]
+                ]
+            ]);
+
+        $this->assertSame($calls, []);
+
+        $gb->isOn("feature");
+
+        $this->assertSame(count($calls), 1);
+        $this->assertSame($calls[0][0]->key, "feature");
+        $this->assertSame($calls[0][1]->key, "variation");
+        $this->assertSame($calls[0][1]->variationId, 1);
+        $this->assertSame($calls[0][1]->value, true);
+        $this->assertSame($calls[0][1]->inExperiment, true);
+        $this->assertSame($calls[0][1]->bucket, 0.906);
+        $this->assertSame($calls[0][1]->featureId, "feature");
+    }
 }

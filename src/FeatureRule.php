@@ -23,9 +23,25 @@ class FeatureRule
     public $namespace;
     /** @var null|string */
     public $hashAttribute;
+    /** @var null|array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[] */
+    public $filters;
+    /** @var null|string */
+    public $seed;
+    /** @var null|int */
+    public $hashVersion;
+    /** @var null|array{0:float,1:float} */
+    public $range;
+    /** @var null|array{key?:string,name?:string,passthrough?:bool}[] */
+    public $meta;
+    /** @var null|array{0:float,1:float}[] */
+    public $ranges;
+    /** @var null|string */
+    public $name;
+    /** @var null|string */
+    public $phase;
 
     /**
-     * @param array{condition:?array<string,mixed>,coverage:?float,force:?T,variations:?T[],key:?string,weights:?float[],namespace:?array{0:string,1:float,2:float},hashAttribute:?string} $rule
+     * @param array{condition:?array<string,mixed>,coverage:?float,force:?T,variations:?T[],key:?string,weights:?float[],namespace:?array{0:string,1:float,2:float},hashAttribute:?string,filters?:array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[],seed?:string,hashVersion?:int,range?:array{0:float,1:float},meta?:array{key?:string,name?:string,passthrough?:bool}[],ranges?:array{0:float,1:float}[],name?:string,phase?:string} $rule
      */
     public function __construct(array $rule)
     {
@@ -53,6 +69,30 @@ class FeatureRule
         if (array_key_exists("hashAttribute", $rule)) {
             $this->hashAttribute = $rule["hashAttribute"];
         }
+        if (array_key_exists("filters", $rule)) {
+            $this->filters = $rule["filters"];
+        }
+        if (array_key_exists("seed", $rule)) {
+            $this->seed = $rule["seed"];
+        }
+        if (array_key_exists("hashVersion", $rule)) {
+            $this->hashVersion = $rule["hashVersion"];
+        }
+        if (array_key_exists("range", $rule)) {
+            $this->range = $rule["range"];
+        }
+        if (array_key_exists("meta", $rule)) {
+            $this->meta = $rule["meta"];
+        }
+        if (array_key_exists("ranges", $rule)) {
+            $this->ranges = $rule["ranges"];
+        }
+        if (array_key_exists("name", $rule)) {
+            $this->name = $rule["name"];
+        }
+        if (array_key_exists("phase", $rule)) {
+            $this->phase = $rule["phase"];
+        }
     }
 
     /**
@@ -78,6 +118,27 @@ class FeatureRule
         }
         if (isset($this->namespace)) {
             $exp->namespace = $this->namespace;
+        }
+        if (isset($this->meta)) {
+            $exp->meta = $this->meta;
+        }
+        if (isset($this->ranges)) {
+            $exp->ranges = $this->ranges;
+        }
+        if (isset($this->name)) {
+            $exp->name = $this->name;
+        }
+        if (isset($this->phase)) {
+            $exp->phase = $this->phase;
+        }
+        if (isset($this->seed)) {
+            $exp->seed = $this->seed;
+        }
+        if (isset($this->filters)) {
+            $exp->filters = $this->filters;
+        }
+        if (isset($this->hashVersion)) {
+            $exp->hashVersion = $this->hashVersion;
         }
 
         return $exp;

@@ -2,8 +2,15 @@
 
 namespace Growthbook;
 
-class Growthbook
+use Http\Discovery\Psr18ClientDiscovery;
+use Http\Discovery\Psr17FactoryDiscovery;
+use Psr\Log\LoggerAwareInterface;
+use Psr\Log\LogLevel;
+
+class Growthbook implements LoggerAwareInterface
 {
+    private const DEFAULT_API_HOST = "https://cdn.growthbook.io";
+
     /** @var bool */
     public $enabled = true;
     /** @var null|\Psr\Log\LoggerInterface */
@@ -21,6 +28,32 @@ class Growthbook
     /** @var callable|null */
     private $trackingCallback = null;
 
+    /**
+     * @var null|\Psr\SimpleCache\CacheInterface
+     */
+    private $cache = null;
+    /**
+     * @var integer
+     */
+    private $cacheTTL = 60;
+
+    /**
+     * @var null|\Psr\Http\Client\ClientInterface
+     */
+    private $httpClient = null;
+
+    /**
+     * @var null|\Psr\Http\Message\RequestFactoryInterface;
+     */
+    public $requestFactory = null;
+
+    /** @var string */
+    private $apiHost = "";
+    /** @var string */
+    private $clientKey = "";
+    /** @var string */
+    private $decryptionKey = "";
+
     /** @var array<string,ViewedExperiment> */
     private $tracks = [];
 
@@ -30,12 +63,25 @@ class Growthbook
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string} $options
      */
     public function __construct(array $options = [])
     {
         // Warn if any unknown options are passed
-        $knownOptions = ["enabled", "logger", "url", "attributes", "features", "forcedVariations", "qaMode", "trackingCallback"];
+        $knownOptions = [
+            "enabled",
+            "logger",
+            "url",
+            "attributes",
+            "features",
+            "forcedVariations",
+            "qaMode",
+            "trackingCallback",
+            "cache",
+            "httpClient",
+            "requestFactory",
+            "decryptionKey"
+        ];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
             trigger_error('Unknown Config options: ' . implode(", ", $unknownOptions), E_USER_NOTICE);
@@ -48,6 +94,16 @@ class Growthbook
         $this->qaMode = $options["qaMode"] ?? false;
         $this->trackingCallback = $options["trackingCallback"] ?? null;
 
+        $this->decryptionKey = $options["decryptionKey"] ?? "";
+
+        $this->cache = $options["cache"] ?? null;
+        try {
+            $this->httpClient = $options["httpClient"] ?? Psr18ClientDiscovery::find();
+            $this->requestFactory = $options["requestFactory"] ?? Psr17FactoryDiscovery::findRequestFactory();
+        } catch (\Throwable $e) {
+            // Ignore errors from discovery
+        }
+
         if (array_key_exists("features", $options)) {
             $this->withFeatures(($options["features"]));
         }
@@ -55,7 +111,6 @@ class Growthbook
             $this->withAttributes(($options["attributes"]));
         }
     }
-
 
     /**
      * @param array<string,mixed> $attributes
@@ -82,7 +137,7 @@ class Growthbook
     public function withFeatures(array $features): Growthbook
     {
         $this->features = [];
-        foreach ($features as $key=>$feature) {
+        foreach ($features as $key => $feature) {
             if ($feature instanceof Feature) {
                 $this->features[$key] = $feature;
             } else {
@@ -114,7 +169,26 @@ class Growthbook
         $this->logger = $logger;
         return $this;
     }
+    public function setLogger(\Psr\Log\LoggerInterface $logger = null): void
+    {
+        $this->logger = $logger;
+    }
 
+    public function withHttpClient(\Psr\Http\Client\ClientInterface $client, \Psr\Http\Message\RequestFactoryInterface $requestFactory): Growthbook
+    {
+        $this->httpClient = $client;
+        $this->requestFactory = $requestFactory;
+        return $this;
+    }
+
+    public function withCache(\Psr\SimpleCache\CacheInterface $cache, int $ttl = null): Growthbook
+    {
+        $this->cache = $cache;
+        if ($ttl !== null) {
+            $this->cacheTTL = $ttl;
+        }
+        return $this;
+    }
 
     /**
      * @return array<string,mixed>
@@ -188,37 +262,76 @@ class Growthbook
     public function getFeature(string $key): FeatureResult
     {
         if (!array_key_exists($key, $this->features)) {
+            $this->log(LogLevel::DEBUG, "Unknown feature - $key");
             return new FeatureResult(null, "unknownFeature");
         }
+        $this->log(LogLevel::DEBUG, "Evaluating feature - $key");
         $feature = $this->features[$key];
         if ($feature->rules) {
             foreach ($feature->rules as $rule) {
                 if ($rule->condition) {
                     if (!Condition::evalCondition($this->attributes, $rule->condition)) {
+                        $this->log(LogLevel::DEBUG, "Skip rule because of targeting condition", [
+                            "feature" => $key,
+                            "condition" => $rule->condition
+                        ]);
                         continue;
                     }
                 }
-                if (isset($rule->force)) {
-                    if (isset($rule->coverage)) {
-                        $hashValue = $this->attributes[$rule->hashAttribute ?? "id"] ?? "";
-                        if (!$hashValue) {
-                            continue;
-                        }
-                        $n = static::hash($hashValue . $key);
-                        if ($n > $rule->coverage) {
-                            continue;
-                        }
+                if ($rule->filters) {
+                    if (self::isFilteredOut($rule->filters)) {
+                        $this->log(LogLevel::DEBUG, "Skip rule because of filtering (e.g. namespace)", [
+                            "feature" => $key,
+                            "filters" => $rule->filters
+                        ]);
+                        continue;
                     }
+                }
+
+                if (isset($rule->force)) {
+                    if (!$this->isIncludedInRollout(
+                        $rule->seed ?? $key,
+                        $rule->hashAttribute,
+                        $rule->range,
+                        $rule->coverage,
+                        $rule->hashVersion
+                    )) {
+                        $this->log(LogLevel::DEBUG, "Skip rule because of rollout percent", [
+                            "feature" => $key
+                        ]);
+                        continue;
+                    }
+                    $this->log(LogLevel::DEBUG, "Force feature value from rule", [
+                        "feature" => $key,
+                        "value" => $rule->force
+                    ]);
                     return new FeatureResult($rule->force, "force");
                 }
                 $exp = $rule->toExperiment($key);
                 if (!$exp) {
+                    $this->log(LogLevel::DEBUG, "Skip rule because could not convert to an experiment", [
+                        "feature" => $key,
+                        "filters" => $rule->filters
+                    ]);
                     continue;
                 }
-                $result = $this->runInlineExperiment($exp);
+                $result = $this->runExperiment($exp, $key);
                 if (!$result->inExperiment) {
+                    $this->log(LogLevel::DEBUG, "Skip rule because user not included in experiment", [
+                        "feature" => $key
+                    ]);
                     continue;
                 }
+                if ($result->passthrough) {
+                    $this->log(LogLevel::DEBUG, "User put into holdout experiment, continue to next rule", [
+                        "feature" => $key
+                    ]);
+                    continue;
+                }
+                $this->log(LogLevel::DEBUG, "Use feature value from experiment", [
+                    "feature" => $key,
+                    "value" => $result->value
+                ]);
                 return new FeatureResult($result->value, "experiment", $exp, $result);
             }
         }
@@ -232,74 +345,139 @@ class Growthbook
      */
     public function runInlineExperiment(InlineExperiment $exp): ExperimentResult
     {
+        return $this->runExperiment($exp, null);
+    }
+
+    /**
+     * @template T
+     * @param InlineExperiment<T> $exp
+     * @param string|null $featureId
+     * @return ExperimentResult<T>
+     */
+    private function runExperiment(InlineExperiment $exp, string $featureId = null): ExperimentResult
+    {
+        $this->log(LogLevel::DEBUG, "Attempting to run experiment - " . $exp->key);
         // 1. Too few variations
         if (count($exp->variations) < 2) {
-            return new ExperimentResult($exp);
+            $this->log(LogLevel::DEBUG, "Skip experiment because there aren't enough variations", [
+                "experiment" => $exp->key
+            ]);
+            return new ExperimentResult($exp, "", -1, false, $featureId);
         }
 
         // 2. Growthbook disabled
         if (!$this->enabled) {
-            return new ExperimentResult($exp);
+            $this->log(LogLevel::DEBUG, "Skip experiment because the Growthbook instance is disabled", [
+                "experiment" => $exp->key
+            ]);
+            return new ExperimentResult($exp, "", -1, false, $featureId);
         }
 
         $hashAttribute = $exp->hashAttribute ?? "id";
-        $hashValue = $this->attributes[$hashAttribute] ?? "";
+        $hashValue = $this->getHashValue($hashAttribute);
 
         // 3. Forced via querystring
         if ($this->url) {
             $qsOverride = static::getQueryStringOverride($exp->key, $this->url, count($exp->variations));
             if ($qsOverride !== null) {
-                return new ExperimentResult($exp, $hashValue, $qsOverride);
+                $this->log(LogLevel::DEBUG, "Force variation from querystring", [
+                    "experiment" => $exp->key,
+                    "variation" => $qsOverride
+                ]);
+                return new ExperimentResult($exp, $hashValue, $qsOverride, false, $featureId);
             }
         }
 
         // 4. Forced via forcedVariations
         if (array_key_exists($exp->key, $this->forcedVariations)) {
-            return new ExperimentResult($exp, $hashValue, $this->forcedVariations[$exp->key]);
+            $this->log(LogLevel::DEBUG, "Force variation from context", [
+                "experiment" => $exp->key,
+                "variation" => $this->forcedVariations[$exp->key]
+            ]);
+            return new ExperimentResult($exp, $hashValue, $this->forcedVariations[$exp->key], false, $featureId);
         }
 
         // 5. Experiment is not active
         if (!$exp->active) {
-            return new ExperimentResult($exp, $hashValue);
+            $this->log(LogLevel::DEBUG, "Skip experiment because it is inactive", [
+                "experiment" => $exp->key
+            ]);
+            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
         // 6. Hash value is empty
         if (!$hashValue) {
-            return new ExperimentResult($exp);
+            $this->log(LogLevel::DEBUG, "Skip experiment because of empty attribute - $hashAttribute", [
+                "experiment" => $exp->key
+            ]);
+            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
-        // 7. Not in namespace
-        if ($exp->namespace && !static::inNamespace($hashValue, $exp->namespace)) {
-            return new ExperimentResult($exp, $hashValue);
+        // 7. Filtered out / not in namespace
+        if ($exp->filters) {
+            if ($this->isFilteredOut($exp->filters)) {
+                $this->log(LogLevel::DEBUG, "Skip experiment because of filters (e.g. namespace)", [
+                    "experiment" => $exp->key
+                ]);
+                return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
+            }
+        } elseif ($exp->namespace && !static::inNamespace($hashValue, $exp->namespace)) {
+            $this->log(LogLevel::DEBUG, "Skip experiment because not in namespace", [
+                "experiment" => $exp->key
+            ]);
+            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
         // 8. Condition fails
         if ($exp->condition && !Condition::evalCondition($this->attributes, $exp->condition)) {
-            return new ExperimentResult($exp, $hashValue);
+            $this->log(LogLevel::DEBUG, "Skip experiment because of targeting conditions", [
+                "experiment" => $exp->key
+            ]);
+            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
         // 9. Calculate bucket ranges
-        $ranges = static::getBucketRanges(count($exp->variations), $exp->coverage, $exp->weights ?? []);
-        $n = static::hash($hashValue . $exp->key);
+        $ranges = $exp->ranges ?? static::getBucketRanges(count($exp->variations), $exp->coverage, $exp->weights ?? []);
+        $n = static::hash(
+            $exp->seed ?? $exp->key,
+            $hashValue,
+            $exp->hashVersion ?? 1
+        );
+        if ($n === null) {
+            $this->log(LogLevel::DEBUG, "Skip experiment because of invalid hash version", [
+                "experiment" => $exp->key
+            ]);
+            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
+        }
         $assigned = static::chooseVariation($n, $ranges);
 
         // 10. Not assigned
         if ($assigned === -1) {
-            return new ExperimentResult($exp, $hashValue);
+            $this->log(LogLevel::DEBUG, "Skip experiment because user is not included in a variation", [
+                "experiment" => $exp->key
+            ]);
+            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
         // 11. Forced variation
         if ($exp->force !== null) {
-            return new ExperimentResult($exp, $hashValue, $exp->force);
+            $this->log(LogLevel::DEBUG, "Force variation from the experiment config", [
+                "experiment" => $exp->key,
+                "variation" => $exp->force
+            ]);
+            return new ExperimentResult($exp, $hashValue, $exp->force, false, $featureId);
         }
 
         // 12. QA mode
         if ($this->qaMode) {
-            return new ExperimentResult($exp, $hashValue);
+            $this->log(LogLevel::DEBUG, "Skip experiment because Growthbook instance in QA Mode", [
+                "experiment" => $exp->key
+            ]);
+            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
         }
 
         // 13. Build the result object
-        $result = new ExperimentResult($exp, $hashValue, $assigned, true);
+        $result = new ExperimentResult($exp, $hashValue, $assigned, true, $featureId, $n);
 
         // 14. Fire tracking callback
         $this->tracks[$exp->key] = new ViewedExperiment($exp, $result);
@@ -307,23 +485,126 @@ class Growthbook
             try {
                 call_user_func($this->trackingCallback, $exp, $result);
             } catch (\Throwable $e) {
-                // Do nothing
+                $this->log(LogLevel::ERROR, "Error calling the trackingCallback function", [
+                    "experiment" => $exp->key,
+                    "error" => $e
+                ]);
             }
         }
 
         // 15. Return the result
+        $this->log(LogLevel::DEBUG, "Assigned user a variation", [
+            "experiment" => $exp->key,
+            "variation" => $assigned
+        ]);
         return $result;
     }
 
+    /**
+     * @param string $level
+     * @param string $message
+     * @param mixed $context
+     */
+    public function log(string $level, string $message, $context = []): void
+    {
+        if ($this->logger) {
+            $this->logger->log($level, $message, $context);
+        }
+    }
+
+    public static function hash(string $seed, string $value, int $version): ?float
+    {
+        // New hashing algorithm
+        if ($version === 2) {
+            $n = hexdec(hash("fnv1a32", hexdec(hash("fnv1a32", $seed . $value)) . ""));
+            return ($n % 10000) / 10000;
+        }
+        // Original hashing algorithm (with a bias flaw)
+        elseif ($version === 1) {
+            $n = hexdec(hash("fnv1a32", $value . $seed));
+            return ($n % 1000) / 1000;
+        }
+
+        return null;
+    }
 
     /**
-     * @param string $str
-     * @return float
+     * @param float $n
+     * @param array{0:float,1:float} $range
+     * @return bool
      */
-    public static function hash(string $str): float
+    public static function inRange(float $n, array $range): bool
     {
-        $n = hexdec(hash("fnv1a32", $str));
-        return ($n % 1000) / 1000;
+        return $n >= $range[0] && $n < $range[1];
+    }
+
+    /**
+     * @param string $seed
+     * @param string|null $hashAttribute
+     * @param array{0:float,1:float}|null $range
+     * @param float|null $coverage
+     * @param int|null $hashVersion
+     * @return bool
+     */
+    private function isIncludedInRollout(string $seed, string $hashAttribute = null, array $range = null, float $coverage = null, int $hashVersion = null): bool
+    {
+        if ($coverage === null && $range === null) {
+            return true;
+        }
+
+        $hashValue = strval($this->attributes[$hashAttribute ?? "id"] ?? "");
+        if ($hashValue === "") {
+            return false;
+        }
+
+        $n = self::hash($seed, $hashValue, $hashVersion ?? 1);
+        if ($n === null) {
+            return false;
+        }
+        if ($range) {
+            return self::inRange($n, $range);
+        } elseif ($coverage !== null) {
+            return $n <= $coverage;
+        }
+
+        return true;
+    }
+
+    private function getHashValue(string $hashAttribute): string
+    {
+        return strval($this->attributes[$hashAttribute ?? "id"] ?? "");
+    }
+
+    /**
+     * @param array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[] $filters
+     * @return bool
+     */
+    private function isFilteredOut(array $filters): bool
+    {
+        foreach ($filters as $filter) {
+            $hashValue = $this->getHashValue($filter["attribute"] ?? "id");
+            if ($hashValue === "") {
+                return false;
+            }
+
+            $n = self::hash($filter["seed"] ?? "", $hashValue, $filter["hashVersion"] ?? 2);
+            if ($n === null) {
+                return false;
+            }
+
+            $filtered = false;
+            foreach ($filter["ranges"] as $range) {
+                if (self::inRange($n, $range)) {
+                    $filtered = true;
+                    break;
+                }
+            }
+            if (!$filtered) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -337,7 +618,10 @@ class Growthbook
         if (count($namespace) < 3) {
             return false;
         }
-        $n = static::hash($userId . "__" . $namespace[0]);
+        $n = static::hash("__" . $namespace[0], $userId, 1);
+        if ($n === null) {
+            return false;
+        }
         return $n >= $namespace[1] && $n < $namespace[2];
     }
 
@@ -390,7 +674,7 @@ class Growthbook
     public static function chooseVariation(float $n, array $ranges): int
     {
         foreach ($ranges as $i => $range) {
-            if ($n >= $range[0] && $n < $range[1]) {
+            if (self::inRange($n, $range)) {
                 return (int) $i;
             }
         }
@@ -425,5 +709,81 @@ class Growthbook
         }
 
         return $variation;
+    }
+
+    public function decrypt(string $encryptedString): string
+    {
+        if (!$this->decryptionKey) {
+            throw new \Error("Must specify a decryption key in order to use encrypted feature flags");
+        }
+
+        $parts = explode(".", $encryptedString, 2);
+        $iv = base64_decode($parts[0]);
+        $cipherText = $parts[1];
+
+        $password = base64_decode($this->decryptionKey);
+
+        $decrypted = openssl_decrypt($cipherText, "aes-128-cbc", $password, 0, $iv);
+        if (!$decrypted) {
+            throw new \Error("Failed to decrypt");
+        }
+
+        return $decrypted;
+    }
+
+    public function loadFeatures(string $clientKey, string $apiHost = "", string $decryptionKey = ""): void
+    {
+        $this->clientKey = $clientKey;
+        $this->apiHost = $apiHost;
+        $this->decryptionKey = $decryptionKey;
+
+        if (!$this->clientKey) {
+            throw new \Exception("Must specify a clientKey before loading features.");
+        }
+        if (!$this->httpClient) {
+            throw new \Exception("Must set an HTTP Client before loading features.");
+        }
+        if (!$this->requestFactory) {
+            throw new \Exception("Must set an HTTP Request Factory before loading features");
+        }
+
+        // The features URL is also the cache key
+        $url = rtrim($this->apiHost ?? self::DEFAULT_API_HOST, "/") . "/api/features/" . $this->clientKey;
+        $cacheKey = md5($url);
+
+        // First try fetching from cache
+        if ($this->cache) {
+            $featuresJSON = $this->cache->get($cacheKey);
+            if ($featuresJSON) {
+                $features = json_decode($featuresJSON, true);
+                if ($features && is_array($features)) {
+                    $this->log(LogLevel::INFO, "Load features from cache", ["url" => $url, "numFeatures" => count($features)]);
+                    $this->withFeatures($features);
+                    return;
+                }
+            }
+        }
+
+        // Otherwise, fetch from API
+        $req = $this->requestFactory->createRequest('GET', $url);
+        $res = $this->httpClient->sendRequest($req);
+        $body = $res->getBody();
+        $parsed = json_decode($body, true);
+        if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
+            $this->log(LogLevel::WARNING, "Could not load features", ["url" => $url, "responseBody" => $body]);
+            return;
+        }
+
+        // Set features and cache for next time
+        $features = array_key_exists("encryptedFeatures", $parsed)
+            ? json_decode($this->decrypt($parsed["encryptedFeatures"]), true)
+            : $parsed["features"];
+
+        $this->log(LogLevel::INFO, "Load features from URL", ["url" => $url, "numFeatures" => count($features)]);
+        $this->withFeatures($features);
+        if ($this->cache) {
+            $this->cache->set($cacheKey, json_encode($features), $this->cacheTTL);
+            $this->log(LogLevel::INFO, "Cache features", ["url" => $url, "numFeatures" => count($features), "ttl" => $this->cacheTTL]);
+        }
     }
 }

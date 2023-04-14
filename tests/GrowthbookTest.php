@@ -73,9 +73,10 @@ final class GrowthbookTest extends TestCase
     /**
      * @dataProvider hashProvider
      */
-    public function testHash(string $value, float $expected): void
+    public function testHash(string $seed, string $value, int $version, float $expected = null): void
     {
-        $this->assertSame(Growthbook::hash($value), $expected);
+        $actual = Growthbook::hash($seed, $value, $version);
+        $this->assertSame($actual, $expected);
     }
     /**
      * @return array<int|string,mixed[]>
@@ -184,6 +185,39 @@ final class GrowthbookTest extends TestCase
 
 
     /**
+     * @dataProvider decryptProvider
+     * @param string $encryptedString
+     * @param string $key
+     * @param string|null $expected
+     */
+    public function testDecrypt(string $encryptedString, string $key, string $expected = null): void
+    {
+        $gb = new Growthbook([
+            'decryptionKey' => $key
+        ]);
+
+        $actual = null;
+        try {
+            $actual = $gb->decrypt($encryptedString);
+        } catch (\Throwable $e) {
+            if ($expected) {
+                throw $e;
+            }
+        }
+
+        $this->assertSame($actual, $expected);
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function decryptProvider(): array
+    {
+        return $this->getCases("decrypt");
+    }
+
+
+    /**
      * @dataProvider featureProvider
      * @param array<string,mixed> $ctx
      * @param string $key
@@ -237,7 +271,6 @@ final class GrowthbookTest extends TestCase
     {
         return $this->getCases("feature");
     }
-
 
 
     /**
@@ -316,5 +349,53 @@ final class GrowthbookTest extends TestCase
         $this->assertSame($coverage, $exp->coverage);
         $this->assertSame($hashAttribute, $exp->hashAttribute);
         $this->assertSame(['pricing', 0.0, 0.5], $exp->namespace);
+    }
+
+    public function testLoggingAndTrackingCallback(): void
+    {
+        $calls = [];
+        $callback = function ($exp, $res) use (&$calls) {
+            $calls[] = [$exp, $res];
+        };
+
+        $logger = $this->createMock('Psr\Log\AbstractLogger');
+        $logger->expects($this->exactly(4))->method("log")->withConsecutive(
+            [$this->equalTo("debug"),$this->stringContains("Evaluating feature")],
+            [$this->equalTo("debug"),$this->stringContains("Attempting to run experiment")],
+            [$this->equalTo("debug"),$this->stringContains("Assigned user a variation")],
+            [$this->equalTo("debug"),$this->stringContains("Use feature value from experiment")],
+        );
+
+        $gb = Growthbook::create()
+            ->withTrackingCallback($callback)
+            ->withLogger($logger)
+            ->withAttributes(['id' => '1'])
+            ->withFeatures([
+                'feature'=>[
+                    'defaultValue'=>false,
+                    'rules'=>[
+                        [
+                            'variations'=>[false,true],
+                            'meta'=>[
+                                ['key'=>'control'],
+                                ['key'=>'variation']
+                            ]
+                        ]
+                    ]
+                ]
+            ]);
+
+        $this->assertSame($calls, []);
+
+        $gb->isOn("feature");
+
+        $this->assertSame(count($calls), 1);
+        $this->assertSame($calls[0][0]->key, "feature");
+        $this->assertSame($calls[0][1]->key, "variation");
+        $this->assertSame($calls[0][1]->variationId, 1);
+        $this->assertSame($calls[0][1]->value, true);
+        $this->assertSame($calls[0][1]->inExperiment, true);
+        $this->assertSame($calls[0][1]->bucket, 0.906);
+        $this->assertSame($calls[0][1]->featureId, "feature");
     }
 }

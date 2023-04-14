@@ -45,11 +45,11 @@ class Util
 
     private static function url_origin(): string
     {
-        $ssl      = ($_SERVER['HTTPS']??'off')==='on';
+        $ssl      = ($_SERVER['HTTPS'] ?? 'off') === 'on';
         $protocol = $ssl ? 'https' : 'http';
         $port     = $_SERVER['SERVER_PORT'] ?? ($ssl ? '443' : '80');
-        $port     = ((!$ssl && $port=='80') || ($ssl && $port=='443')) ? '' : ':'.$port;
-        $host     = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME']??"localhost").$port;
+        $port     = ((!$ssl && $port == '80') || ($ssl && $port == '443')) ? '' : ':' . $port;
+        $host     = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? "localhost") . $port;
         return $protocol . '://' . $host;
     }
 
@@ -74,10 +74,10 @@ class Util
         $pathOnly = $_SERVER['REQUEST_URI'];
 
         try {
-            if (preg_match('/'.$escaped.'/', $url)) {
+            if (preg_match('/' . $escaped . '/', $url)) {
                 return true;
             }
-            if (preg_match('/'.$escaped.'/', $pathOnly)) {
+            if (preg_match('/' . $escaped . '/', $pathOnly)) {
                 return true;
             }
             return false;

@@ -6,9 +6,8 @@ Powerful Feature flagging and A/B testing for PHP.
 
 ![Build Status](https://github.com/growthbook/growthbook-php/workflows/Build/badge.svg)
 
--  **No external dependencies**
--  **Lightweight and fast**
--  **No HTTP requests** everything is defined and evaluated locally
+-  **No external dependencies** (besides PSR interfaces)
+-  **Extremely fast**, all evaluation happens locally
 -  **PHP 7.1+** with 100% test coverage and phpstan on the highest level
 -  **Advanced user and page targeting**
 -  **Use your existing event tracking** (GA, Segment, Mixpanel, custom)
@@ -23,19 +22,17 @@ GrowthBook is available on Composer:
 ## Quick Usage
 
 ```php
-// Get current feature flags from GrowthBook API
-// TODO: persist the JSON in a database or cache in production
-const FEATURES_ENDPOINT = 'https://cdn.growthbook.io/api/features/key_prod_abc123';
-$apiResponse = json_decode(file_get_contents(FEATURES_ENDPOINT), true);
-$features = $apiResponse["features"];
-
 // Create a GrowthBook instance
 $growthbook = Growthbook\Growthbook::create()
-  ->withFeatures($features)
   ->withAttributes([
+    // Targeting attributes
     'id' => $userId,
     'someCustomAttribute' => true
   ]);
+
+// Load feature flags from the GrowthBook API
+// Make sure to use caching in production! (see 'Loading Features' below)
+$growthbook->loadFeatures("sdk-abc123", "https://cdn.growthbook.io");
 
 // Feature gating
 if ($growthbook->isOn("my-feature")) {
@@ -46,7 +43,6 @@ if ($growthbook->isOn("my-feature")) {
 
 // Remote configuration with fallback
 $color = $growthbook->getValue("button-color", "blue");
-
 echo "<button style='color:${color}'>Click Me!</button>";
 ```
 
@@ -63,15 +59,65 @@ foreach($impressions as $impression) {
     "event" => "Experiment Viewed",
     "properties" => [
       "experimentId" => $impression->experiment->key,
-      "variationId" => $impression->result->variationId
+      "variationId" => $impression->result->key
     ]
   ]);
 }
 ```
 
+### Loading Features
+
+There are 2 ways to load features into the SDK.  You can use `loadFeatures` with a Client Key and API Host.  Or, you can manually fetch and cache feature flags and pass them in with the `withFeatures` method.
+
+#### loadFeatures method
+
+The `loadFeatures` method can fetch features from the GrowthBook API for you.
+
+By default, there is no caching enabled. You can enable it by passing any PSR16-compatible instance into the `withCache` method.
+
+**Caching is required for production usage**
+
+```php
+// Any psr-16 library will work
+use Cache\Adapter\Apcu\ApcuCachePool;
+
+$cache = new ApcuCachePool()
+
+$growthbook = Growthbook\Growthbook::create()
+  ->withCache($cache);
+
+// You can optionally pass in a TTL (default 60s)
+$growthbook = Growthbook\Growthbook::create()
+  ->withCache($cache, 120); // Cache for 120s instead
+```
+
+To load features, we require a PSR-17 (HttpClient) and PSR-18 (RequestFactoryInterface) compatible library like Guzzle to be installed.
+
+We will auto-discover most HTTP libraries without any configuration required, but if you prefer to specify it explicitly, you can use the `withHttpClient` method.  Note - you'll need to specify both an `HttpClient` and a `RequestFactoryInterface` implementation.
+
+The `loadFeatures` method takes 3 arguments:
+
+- `$clientKey` (required) - Get this from your SDK Connection in GrowthBook.
+- `$apiHost` (optional) - Defaults to `https://cdn.growthbook.io`. If self-hosting GrowthBook, set this to your API host.
+- `$decryptionKey` (optional) - Only required if you've enabled encryption for your SDK Connection.
+
+#### withFeatures method
+
+If you prefer to have full control over the fetching/caching behavior, you can use the `withFeatures` method instead to pass an associative array of features into the SDK.
+
+```php
+// From the GrowthBook API, a custom cache layer, or somewhere else
+$featuresJSON = '{"my-feature":{"defaultValue":true}}';
+
+// Decode into an associative array
+$features = json_decode($featuresJSON, true);
+
+// Pass into the Growthbook instance
+$growthbook = Growthbook\Growthbook::create()
+  ->withFeatures($features);
+```
+
 ## The Growthbook Class
-
-
 
 The `Growthbook` class has a number of properties.  These can be set using a Fluent interface or can be passed into a constructor using an associative array. Every property also has a getter method if needed. Here's an example:
 
@@ -93,28 +139,6 @@ print_r($growthbook->getAttributes());
 ```
 
 Note: you can also use the fluent methods (e.g. `withFeatures`) at any point to update properties.
-
-### Features
-
-Defines all of the available features plus rules for how to assign values to users. Features are usually fetched from the GrowthBook API and persisted in cache or a database in production.
-
-Feature definitions are defined in a JSON format. You can fetch them directly from the GrowthBook API:
-
-```php
-const FEATURES_ENDPOINT = 'https://cdn.growthbook.io/api/features/key_prod_abc123';
-$apiResponse = json_decode(file_get_contents(FEATURES_ENDPOINT), true);
-$features = $apiResponse["features"];
-```
-
-Or, you can use a copy stored in your database or cache server instead:
-
-```php
-// From database/cache
-$jsonString = '{"feature-1": {...}, "feature-2": {...}}';
-$features = json_decode($jsonString, true);
-```
-
-We recomend the cache approach for production.
 
 ### Attributes
 
@@ -167,7 +191,7 @@ $trackingCallback = function (
     "event" => "Experiment Viewed",
     "properties" => [
       "experimentId" => $experiment->key,
-      "variationId" => $result->variationId
+      "variationId" => $result->key
     ]
   ]);
 };
@@ -196,7 +220,7 @@ foreach($impressions as $impression) {
     "event" => "Experiment Viewed",
     "properties" => [
       "experimentId" => $impression->experiment->key,
-      "variationId" => $impression->result->variationId
+      "variationId" => $impression->result->key
     ]
   ]);
 }
@@ -222,7 +246,7 @@ ga('send', 'event', 'experiment',
   {
     // Custom dimension for easier analysis
     'dimension1': "<?= 
-      $impression->experiment->key.':'.$impression->result->variationId 
+      $impression->experiment->key.':'.$impression->result->key 
     ?>"
   }
 );
@@ -232,7 +256,7 @@ ga('send', 'event', 'experiment',
 ```php
 analytics.track("Experiment Viewed", <?=json_encode([
   "experimentId" => $impression->experiment->key,
-  "variationId" => $impression->result->variationId 
+  "variationId" => $impression->result->key 
 ])?>);
 ```
 
@@ -240,8 +264,24 @@ analytics.track("Experiment Viewed", <?=json_encode([
 ```php
 mixpanel.track("Experiment Viewed", <?=json_encode([
   'Experiment name' => $impression->experiment->key,
-  'Variant name' => $impression->result->variationId 
+  'Variant name' => $impression->result->key 
 ])?>);
+```
+
+### Logging
+
+GrowthBook can output log messages to help you debug your feature flags and experiments.
+
+We support any PSR-3 comaptible logger. We implement a fluent interface (`withLogger`) as well as the standard LoggerAware interface (`setLogger`).
+
+```php
+// Fluent interface
+$growthbook
+  ->withLogger($logger)
+  ->with...;
+
+// Setter
+$growthbook->setLogger($logger);
 ```
 
 ## Using Features
@@ -312,6 +352,9 @@ echo($result->inExperiment); // true or false
 
 // The index of the assigned variation
 echo($result->variationId); // e.g. 0 or 1
+
+// The key used to identify this variation when tracking the event
+echo($result->key); // e.g. "control"
 
 // The value of the assigned variation
 echo($result->value); // e.g. "A" or "B"

@@ -59,7 +59,8 @@ class ExperimentResult
      * @param string $hashValue
      * @param int $variationIndex
      * @param bool $hashUsed
-     * @param float $bucket
+     * @param string|null $featureId
+     * @param float|null $bucket
      */
     public function __construct(InlineExperiment $experiment, string $hashValue = "", int $variationIndex = -1, bool $hashUsed = false, string $featureId = null, float $bucket=null)
     {

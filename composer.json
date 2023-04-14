@@ -1,6 +1,6 @@
 {
     "name": "growthbook/growthbook",
-    "description": "Library to run AB tests using the Growth Book experiment platform",
+    "description": "PHP SDK for GrowthBook, the feature flagging and A/B testing platform",
     "type": "library",
     "require": {
         "psr/log": "^1.0|^2.0|^3.0",

@@ -192,7 +192,7 @@ class Condition
             case '$gte':
                 return $attributeValue >= $conditionValue;
             case '$regex':
-                return @preg_match('/'.$conditionValue.'/', $attributeValue) === 1;
+                return preg_match('/'.$conditionValue.'/', $attributeValue ?? '') === 1;
             case '$in':
                 if (!is_array($conditionValue)) {
                     return false;

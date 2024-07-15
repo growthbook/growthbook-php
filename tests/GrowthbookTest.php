@@ -3,6 +3,7 @@
 require_once __DIR__ . '/../vendor/autoload.php';
 
 use Growthbook\Condition;
+use Growthbook\FeatureResult;
 use Growthbook\Growthbook;
 use Growthbook\InlineExperiment;
 use PHPUnit\Framework\TestCase;
@@ -328,6 +329,19 @@ final class GrowthbookTest extends TestCase
             json_encode($features),
             json_encode($gb->getFeatures())
         );
+    }
+
+    public function testForcedFeatures(): void
+    {
+        $gb = Growthbook::create()
+            ->withFeatures([
+                'feature-1'=>['defaultValue' => false, 'rules' => []]
+            ])
+            ->withForcedFeatures([
+                'feature-1' => new FeatureResult(true, 'forcedFeature')
+            ]);
+
+        $this->assertSame(true, $gb->getFeature('feature-1')->value);
     }
 
     public function testInlineExperiment(): void

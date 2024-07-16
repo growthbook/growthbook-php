@@ -21,6 +21,8 @@ class Growthbook implements LoggerAwareInterface
     private $attributes = [];
     /** @var Feature<mixed>[] */
     private $features = [];
+    /** @var array<string, FeatureResult<mixed>> */
+    private $forcedFeatures = [];
     /** @var array<string,int> */
     private $forcedVariations = [];
     /** @var bool */
@@ -63,7 +65,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>} $options
      */
     public function __construct(array $options = [])
     {
@@ -75,6 +77,7 @@ class Growthbook implements LoggerAwareInterface
             "attributes",
             "features",
             "forcedVariations",
+            "forcedFeatures",
             "qaMode",
             "trackingCallback",
             "cache",
@@ -102,6 +105,10 @@ class Growthbook implements LoggerAwareInterface
             $this->requestFactory = $options["requestFactory"] ?? Psr17FactoryDiscovery::findRequestFactory();
         } catch (\Throwable $e) {
             // Ignore errors from discovery
+        }
+
+        if(array_key_exists("forcedFeatures", $options)) {
+            $this->withForcedFeatures($options['forcedFeatures']);
         }
 
         if (array_key_exists("features", $options)) {
@@ -153,6 +160,16 @@ class Growthbook implements LoggerAwareInterface
     public function withForcedVariations(array $forcedVariations): Growthbook
     {
         $this->forcedVariations = $forcedVariations;
+        return $this;
+    }
+
+    /**
+     * @param array<string, FeatureResult<mixed>> $forcedFeatures
+     * @return Growthbook
+     */
+    public function withForcedFeatures(array $forcedFeatures)
+    {
+        $this->forcedFeatures = $forcedFeatures;
         return $this;
     }
     /**
@@ -212,6 +229,13 @@ class Growthbook implements LoggerAwareInterface
         return $this->forcedVariations;
     }
     /**
+     * @return array<string, FeatureResult<mixed>>
+     */
+    public function getForcedFeatured()
+    {
+        return $this->forcedFeatures;
+    }
+    /**
      * @return string
      */
     public function getUrl(): string
@@ -267,6 +291,17 @@ class Growthbook implements LoggerAwareInterface
         }
         $this->log(LogLevel::DEBUG, "Evaluating feature - $key");
         $feature = $this->features[$key];
+
+        // Check if the feature is forced
+        if (array_key_exists($key, $this->forcedFeatures)) {
+            $this->log(LogLevel::DEBUG, "Feature Forced - $key", [
+                "feature" => $key,
+                "result" => $this->forcedFeatures[$key],
+            ]);
+
+            return $this->forcedFeatures[$key];
+        }
+
         if ($feature->rules) {
             foreach ($feature->rules as $rule) {
                 if ($rule->condition) {

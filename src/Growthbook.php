@@ -231,7 +231,7 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @return array<string, FeatureResult<mixed>>
      */
-    public function getForcedFeatured()
+    public function getForcedFeatures()
     {
         return $this->forcedFeatures;
     }

@@ -38,6 +38,10 @@ class Growthbook implements LoggerAwareInterface
      * @var integer
      */
     private $cacheTTL = 60;
+    /**
+     * @var string
+     */
+    private $cacheKey = "";
 
     /**
      * @var null|\Psr\Http\Client\ClientInterface
@@ -107,7 +111,7 @@ class Growthbook implements LoggerAwareInterface
             // Ignore errors from discovery
         }
 
-        if(array_key_exists("forcedFeatures", $options)) {
+        if (array_key_exists("forcedFeatures", $options)) {
             $this->withForcedFeatures($options['forcedFeatures']);
         }
 
@@ -198,12 +202,13 @@ class Growthbook implements LoggerAwareInterface
         return $this;
     }
 
-    public function withCache(\Psr\SimpleCache\CacheInterface $cache, int $ttl = null): Growthbook
+    public function withCache(\Psr\SimpleCache\CacheInterface $cache, int $ttl = null, string $cacheKey = ""): Growthbook
     {
         $this->cache = $cache;
         if ($ttl !== null) {
             $this->cacheTTL = $ttl;
         }
+        $this->cacheKey = $cacheKey;
         return $this;
     }
 
@@ -783,8 +788,12 @@ class Growthbook implements LoggerAwareInterface
         }
 
         // The features URL is also the cache key
-        $url = rtrim($this->apiHost ?? self::DEFAULT_API_HOST, "/") . "/api/features/" . $this->clientKey;
-        $cacheKey = md5($url);
+        $cacheKey = $this->cacheKey;
+        if ($cacheKey === "") {
+            $url = rtrim($this->apiHost ?? self::DEFAULT_API_HOST, "/") . "/api/features/" . $this->clientKey;
+            $cacheKey = md5($url);
+        }
+
 
         // First try fetching from cache
         if ($this->cache) {

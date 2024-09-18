@@ -783,7 +783,7 @@ class Growthbook implements LoggerAwareInterface
         }
 
         // The features URL is also the cache key
-        $url = rtrim($this->apiHost ?? self::DEFAULT_API_HOST, "/") . "/api/features/" . $this->clientKey;
+        $url = rtrim(empty($this->apiHost) ? self::DEFAULT_API_HOST : $this->apiHost, "/") . "/api/features/" . $this->clientKey;
         $cacheKey = md5($url);
 
         // First try fetching from cache

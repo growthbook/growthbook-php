@@ -62,7 +62,7 @@ class ExperimentResult
      * @param string|null $featureId
      * @param float|null $bucket
      */
-    public function __construct(InlineExperiment $experiment, string $hashValue = "", int $variationIndex = -1, bool $hashUsed = false, string $featureId = null, float $bucket=null)
+    public function __construct(InlineExperiment $experiment, string $hashValue = "", int $variationIndex = -1, bool $hashUsed = false, ?string $featureId = null, ?float $bucket = null)
     {
         $inExperiment = true;
         // If the assigned variation is invalid, the user is not in the experiment and should get assigned the baseline

@@ -32,6 +32,9 @@ final class GrowthbookTest extends TestCase
             throw new \Exception("Unknown test case: $section");
         }
         $raw = $this->cases[$section];
+        if (!$this->arrayIsList($raw)) {
+            return $raw;
+        }
 
         $arr = [];
         foreach ($raw as $row) {
@@ -102,7 +105,25 @@ final class GrowthbookTest extends TestCase
      */
     public function evalConditionProvider(): array
     {
-        return $this->getCases("evalCondition");
+        $versionCompare = $this->getCases("versionCompare");
+        $versionCases = [];
+        foreach ($versionCompare as $comparison => $testCases) {
+            foreach ($testCases as $case) {
+                $versionCases["versionCompare: " . $case[0] . ' ' . $comparison . ' ' . $case[1]] = [
+                    [
+                        'v' => [
+                            '$v' . $comparison => $case[0]
+                        ]
+                    ],
+                    [
+                        'v' => $case[1]
+                    ],
+                    $case[2]
+                ];
+            }
+        }
+
+        return array_merge($this->getCases("evalCondition"), $versionCases);
     }
 
 

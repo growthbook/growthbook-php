@@ -16,7 +16,7 @@ class Client
     /** @var array<string,ExperimentOverride> */
     private $overrides = [];
 
-    public function __construct(Config $config = null)
+    public function __construct(?Config $config = null)
     {
         $this->config = $config ?? new Config([]);
     }

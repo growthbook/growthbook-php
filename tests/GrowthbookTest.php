@@ -74,7 +74,7 @@ final class GrowthbookTest extends TestCase
     /**
      * @dataProvider hashProvider
      */
-    public function testHash(string $seed, string $value, int $version, float $expected = null): void
+    public function testHash(string $seed, string $value, int $version, ?float $expected = null): void
     {
         $actual = Growthbook::hash($seed, $value, $version);
         $this->assertSame($actual, $expected);
@@ -191,7 +191,7 @@ final class GrowthbookTest extends TestCase
      * @param string $key
      * @param string|null $expected
      */
-    public function testDecrypt(string $encryptedString, string $key, string $expected = null): void
+    public function testDecrypt(string $encryptedString, string $key, ?string $expected = null): void
     {
         $gb = new Growthbook([
             'decryptionKey' => $key

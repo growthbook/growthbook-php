@@ -181,12 +181,12 @@ class Growthbook implements LoggerAwareInterface
         $this->url = $url;
         return $this;
     }
-    public function withLogger(\Psr\Log\LoggerInterface $logger = null): Growthbook
+    public function withLogger(?\Psr\Log\LoggerInterface $logger = null): Growthbook
     {
         $this->logger = $logger;
         return $this;
     }
-    public function setLogger(\Psr\Log\LoggerInterface $logger = null): void
+    public function setLogger(?\Psr\Log\LoggerInterface $logger = null): void
     {
         $this->logger = $logger;
     }
@@ -198,7 +198,7 @@ class Growthbook implements LoggerAwareInterface
         return $this;
     }
 
-    public function withCache(\Psr\SimpleCache\CacheInterface $cache, int $ttl = null): Growthbook
+    public function withCache(\Psr\SimpleCache\CacheInterface $cache, ?int $ttl = null): Growthbook
     {
         $this->cache = $cache;
         if ($ttl !== null) {
@@ -389,7 +389,7 @@ class Growthbook implements LoggerAwareInterface
      * @param string|null $featureId
      * @return ExperimentResult<T>
      */
-    private function runExperiment(InlineExperiment $exp, string $featureId = null): ExperimentResult
+    private function runExperiment(InlineExperiment $exp, ?string $featureId = null): ExperimentResult
     {
         $this->log(LogLevel::DEBUG, "Attempting to run experiment - " . $exp->key);
         // 1. Too few variations
@@ -581,7 +581,7 @@ class Growthbook implements LoggerAwareInterface
      * @param int|null $hashVersion
      * @return bool
      */
-    private function isIncludedInRollout(string $seed, string $hashAttribute = null, array $range = null, float $coverage = null, int $hashVersion = null): bool
+    private function isIncludedInRollout(string $seed, ?string $hashAttribute = null, ?array $range = null, ?float $coverage = null, ?int $hashVersion = null): bool
     {
         if ($coverage === null && $range === null) {
             return true;
@@ -679,7 +679,7 @@ class Growthbook implements LoggerAwareInterface
      * @param null|(float[]) $weights
      * @return array{0:float,1:float}[]
      */
-    public static function getBucketRanges(int $numVariations, float $coverage, array $weights = null): array
+    public static function getBucketRanges(int $numVariations, float $coverage, ?array $weights = null): array
     {
         $coverage = max(0, min(1, $coverage));
 

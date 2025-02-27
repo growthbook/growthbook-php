@@ -269,7 +269,12 @@ class Condition
         // Remove build info and leading `v` if any
         // Split version into parts (both core version numbers and pre-release tags)
         // "v1.2.3-rc.1+build123" -> ["1","2","3","rc","1"]
-        $parts = preg_split('/[-.]/', preg_replace('/(^v|\+.*$)/', '', $input));
+        $parts = preg_split('/[-.]/', preg_replace('/(^v|\+.*$)/', '', $input) ?? '');
+
+        // If preg_split fails, return the original input
+        if ($parts === false) {
+            return $input;
+        }
 
         // If it's SemVer without a pre-release, add `~` to the end
         // ["1","0","0"] -> ["1","0","0","~"]

@@ -259,52 +259,77 @@ class Condition
         }
     }
 
+    /**
+     * Compares two version strings according to semantic versioning rules.
+     * @param string $version1
+     * @param string $version2
+     * @param string $operator The comparison operator to use, one of:
+     *                         - "eq": Equal (=)
+     *                         - "gt": Greater than (>)
+     *                         - "gte": Greater than or equal (>=)
+     *                         - "lt": Less than (<)
+     *                         - "lte": Less than or equal (<=)
+     * @return bool
+     * @throws \InvalidArgumentException If an invalid operator is provided
+     */
     public static function compareVersions(string $version1, string $version2, string $operator): bool
     {
-        // Split the versions into parts, while dropping the build number
-        $parts1 = preg_split('/[-.]/', preg_replace('/(^v|\+.*$)/', '', $version1) ?? '');
-        $parts2 = preg_split('/[-.]/', preg_replace('/(^v|\+.*$)/', '', $version2) ?? '');
+        // Validate operator
+        $validOperators = ['eq', 'gt', 'gte', 'lt', 'lte'];
+        if (!in_array($operator, $validOperators)) {
+            throw new \InvalidArgumentException(sprintf(
+                'Invalid operator "%s". Valid operators are: %s',
+                $operator,
+                implode(', ', $validOperators)
+            ));
+        }
 
-        // Compare the strings naively if we were unable to parse
-        if (!is_array($parts1) || !is_array($parts2)) {
+        // Parse and normalize versions
+        $parseVersion = function (string $version) {
+            // Remove 'v' prefix and build metadata
+            $parts = preg_split('/[-.]/', preg_replace('/(^v|\+.*$)/', '', $version) ?? '');
+
+            if (!is_array($parts)) {
+                return false; // Couldn't parse
+            }
+
+            // Remove empty parts
+            $parts = array_values(array_filter($parts, function ($part) {
+                return $part !== '';
+            }));
+
+            // Pad numeric parts with zeros
+            $parts = array_map(function ($part) {
+                return preg_match('/^\d+$/', $part) ? str_pad($part, 5, "0", STR_PAD_LEFT) : $part;
+            }, $parts);
+
+            // Split into main version and prerelease
+            $mainParts = array_slice($parts, 0, min(3, count($parts)));
+            $prereleaseParts = array_slice($parts, 3);
+
+            $mainVersion = implode('.', $mainParts);
+            $prerelease = implode('.', $prereleaseParts);
+
+            return [$mainVersion, $prerelease];
+        };
+
+        // Parse both versions
+        $result1 = $parseVersion($version1);
+        $result2 = $parseVersion($version2);
+
+        // Handle parsing failures
+        if ($result1 === false || $result2 === false) {
             return $version1 === $version2;
         }
 
-        // Remove any empty parts
-        $parts1 = array_filter($parts1, function ($part) {
-            return $part !== '';
-        });
-        $parts2 = array_filter($parts2, function ($part) {
-            return $part !== '';
-        });
+        [$mainVersion1, $prerelease1] = $result1;
+        [$mainVersion2, $prerelease2] = $result2;
 
-        // Pad numeric parts with leading zeros
-        $parts1 = array_map(function ($part) {
-            if (preg_match('/^\d+$/', $part)) {
-                return str_pad($part, 5, "0", STR_PAD_LEFT);
-            }
-            return $part;
-        }, $parts1);
-        $parts2 = array_map(function ($part) {
-            if (preg_match('/^\d+$/', $part)) {
-                return str_pad($part, 5, "0", STR_PAD_LEFT);
-            }
-            return $part;
-        }, $parts2);
-
-        // Create main version strings
-        $mainVersion1 = implode('.', array_slice($parts1, 0, 3));
-        $mainVersion2 = implode('.', array_slice($parts2, 0, 3));
-
-        // Store prerelease info
-        $prerelease1 = count($parts1) > 3 ? implode('.', array_slice($parts1, 3)) : '';
-        $prerelease2 = count($parts2) > 3 ? implode('.', array_slice($parts2, 3)) : '';
-
-        // If there are no prerelease strings, we can just compare the main versions strings
-        if ($prerelease1 === '' && $prerelease2 === '') {
+        // Compare main versions first
+        if ($mainVersion1 !== $mainVersion2) {
             switch ($operator) {
                 case 'eq':
-                    return $mainVersion1 === $mainVersion2;
+                    return false;
                 case 'gt':
                     return $mainVersion1 > $mainVersion2;
                 case 'gte':
@@ -316,36 +341,49 @@ class Condition
             }
         }
 
-        // If one of the prerelease strings is empty, consider it a lower version
+        // Main versions are equal, now compare prereleases
+
+        // If prereleases are identical, simple comparison
+        if ($prerelease1 === $prerelease2) {
+            return in_array($operator, ['eq', 'gte', 'lte']);
+        }
+
+        // Special handling for empty prereleases (they are greater than any prerelease)
+        // In SemVer: 1.0.0 > 1.0.0-alpha
         if ($prerelease1 === '' || $prerelease2 === '') {
+            // Determine which is greater
+            $isFirstGreater = $prerelease1 === '';
+
+            // Apply comparison based on operator
             switch ($operator) {
                 case 'eq':
-                    return $mainVersion1 === $mainVersion2 && ($prerelease1 === '' ? true : false);
+                    return false; // Different prereleases cannot be equal
                 case 'gt':
-                    return $mainVersion1 > $mainVersion2 || ($prerelease1 === '' ? true : false);
+                    return $isFirstGreater; // First is greater if it has no prerelease
                 case 'gte':
-                    return $mainVersion1 >= $mainVersion2 || ($prerelease1 === '' ? true : false);
+                    return $isFirstGreater; // Same logic as 'gt' since they can't be equal
                 case 'lt':
-                    return $mainVersion1 < $mainVersion2 || ($prerelease1 === '' ? false : true);
+                    return !$isFirstGreater; // First is less if it has a prerelease and second doesn't
                 case 'lte':
-                    return $mainVersion1 <= $mainVersion2 || ($prerelease1 === '' ? false : true);
+                    return !$isFirstGreater; // Same logic as 'lt' since they can't be equal
             }
         }
 
-        // Then compare the prerelease strings
+        // Both have different prereleases, compare them directly
         switch ($operator) {
             case 'eq':
-                return $mainVersion1 === $mainVersion2 || $prerelease1 === $prerelease2;
+                return false; // Already checked equality above
             case 'gt':
-                return $mainVersion1 > $mainVersion2 || $prerelease1 > $prerelease2;
+                return $prerelease1 > $prerelease2;
             case 'gte':
-                return $mainVersion1 >= $mainVersion2 || $prerelease1 >= $prerelease2;
+                return $prerelease1 >= $prerelease2;
             case 'lt':
-                return $mainVersion1 < $mainVersion2 || $prerelease1 < $prerelease2;
+                return $prerelease1 < $prerelease2;
             case 'lte':
-                return $mainVersion1 <= $mainVersion2 || $prerelease1 <= $prerelease2;
+                return $prerelease1 <= $prerelease2;
         }
 
-        return true;
+        // This should never be reached if all operators are handled
+        return false;
     }
 }

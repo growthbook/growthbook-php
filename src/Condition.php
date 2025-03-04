@@ -24,7 +24,7 @@ class Condition
             return !static::evalCondition($attributes, $condition['$not']);
         }
 
-        foreach ($condition as $key=>$value) {
+        foreach ($condition as $key => $value) {
             if (!static::evalConditionValue($value, static::getPath($attributes, $key))) {
                 return false;
             }
@@ -72,7 +72,7 @@ class Condition
      */
     private static function isOperatorObject(array $obj): bool
     {
-        foreach ($obj as $key=>$value) {
+        foreach ($obj as $key => $value) {
             if (!is_string($key) || $key[0] !== '$') {
                 return false;
             }
@@ -136,7 +136,7 @@ class Condition
     private static function evalConditionValue($conditionValue, $attributeValue): bool
     {
         if (is_array($conditionValue) && static::isOperatorObject($conditionValue)) {
-            foreach ($conditionValue as $key=>$value) {
+            foreach ($conditionValue as $key => $value) {
                 if (!static::evalOperatorCondition($key, $attributeValue, $value)) {
                     return false;
                 }
@@ -204,7 +204,7 @@ class Condition
             case '$vlte':
                 return static::compareVersions($attributeValue, $conditionValue, 'lte');
             case '$regex':
-                return @preg_match('/'.$conditionValue.'/', $attributeValue ?? '') === 1;
+                return @preg_match('/' . $conditionValue . '/', $attributeValue ?? '') === 1;
             case '$in':
                 if (!is_array($conditionValue)) {
                     return false;
@@ -264,6 +264,11 @@ class Condition
         // Split the versions into parts, while dropping the build number
         $parts1 = preg_split('/[-.]/', preg_replace('/(^v|\+.*$)/', '', strtolower($version1)) ?? '');
         $parts2 = preg_split('/[-.]/', preg_replace('/(^v|\+.*$)/', '', strtolower($version2)) ?? '');
+
+        // Compare the strings naively if we were unable to parse
+        if (!is_array($parts1) || !is_array($parts2)) {
+            return $version1 === $version2;
+        }
 
         // Remove any empty parts
         $parts1 = array_filter($parts1, function ($part) {

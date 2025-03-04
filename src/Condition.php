@@ -192,17 +192,17 @@ class Condition
             case '$gte':
                 return $attributeValue >= $conditionValue;
             case '$veq':
-                return static::parseVersionString($attributeValue) === static::parseVersionString($conditionValue);
+                return static::compareVersions($attributeValue, $conditionValue, 'eq');
             case '$vne':
-                return static::parseVersionString($attributeValue) !== static::parseVersionString($conditionValue);
+                return !static::compareVersions($attributeValue, $conditionValue, 'eq');
             case '$vgt':
-                return static::parseVersionString($attributeValue) > static::parseVersionString($conditionValue);
+                return static::compareVersions($attributeValue, $conditionValue, 'gt');
             case '$vgte':
-                return static::parseVersionString($attributeValue) >= static::parseVersionString($conditionValue);
+                return static::compareVersions($attributeValue, $conditionValue, 'gte');
             case '$vlt':
-                return static::parseVersionString($attributeValue) < static::parseVersionString($conditionValue);
+                return static::compareVersions($attributeValue, $conditionValue, 'lt');
             case '$vlte':
-                return static::parseVersionString($attributeValue) <= static::parseVersionString($conditionValue);
+                return static::compareVersions($attributeValue, $conditionValue, 'lte');
             case '$regex':
                 return @preg_match('/'.$conditionValue.'/', $attributeValue ?? '') === 1;
             case '$in':
@@ -259,35 +259,92 @@ class Condition
         }
     }
 
-    /**
-     * Returns a version string that can be used for comparison.
-     * @param string $input
-     * @return string
-     */
-    private static function parseVersionString(string $input): string
+    public static function compareVersions(string $version1, string $version2, string $operator): bool
     {
-        // Remove build info and leading `v` if any
-        // Split version into parts (both core version numbers and pre-release tags)
-        // "v1.2.3-rc.1+build123" -> ["1","2","3","rc","1"]
-        $parts = preg_split('/[-.]/', preg_replace('/(^v|\+.*$)/', '', $input) ?? '');
+        // Split the versions into parts, while dropping the build number
+        $parts1 = preg_split('/[-.]/', preg_replace('/(^v|\+.*$)/', '', strtolower($version1)) ?? '');
+        $parts2 = preg_split('/[-.]/', preg_replace('/(^v|\+.*$)/', '', strtolower($version2)) ?? '');
 
-        // If preg_split fails, return the original input
-        if ($parts === false) {
-            return $input;
+        // Remove any empty parts
+        $parts1 = array_filter($parts1, function ($part) {
+            return $part !== '';
+        });
+        $parts2 = array_filter($parts2, function ($part) {
+            return $part !== '';
+        });
+
+        // Pad numeric parts with leading zeros
+        $parts1 = array_map(function ($part) {
+            if (preg_match('/(\d+)/', $part, $matches)) {
+                $number = $matches[1];
+                $padded = str_pad($number, 5, "0", STR_PAD_LEFT);
+                return str_replace($number, $padded, $part);
+            }
+            return $part;
+        }, $parts1);
+        $parts2 = array_map(function ($part) {
+            if (preg_match('/(\d+)/', $part, $matches)) {
+                $number = $matches[1];
+                $padded = str_pad($number, 5, "0", STR_PAD_LEFT);
+                return str_replace($number, $padded, $part);
+            }
+            return $part;
+        }, $parts2);
+
+        // Create main version strings
+        $mainVersion1 = implode('.', array_slice($parts1, 0, 3));
+        $mainVersion2 = implode('.', array_slice($parts2, 0, 3));
+
+        // Store prerelease info
+        $prerelease1 = count($parts1) > 3 ? implode('.', array_slice($parts1, 3)) : '';
+        $prerelease2 = count($parts2) > 3 ? implode('.', array_slice($parts2, 3)) : '';
+
+        // If there are no prerelease strings, we can just compare the main versions strings
+        if ($prerelease1 === '' && $prerelease2 === '') {
+            switch ($operator) {
+                case 'eq':
+                    return $mainVersion1 === $mainVersion2;
+                case 'gt':
+                    return $mainVersion1 > $mainVersion2;
+                case 'gte':
+                    return $mainVersion1 >= $mainVersion2;
+                case 'lt':
+                    return $mainVersion1 < $mainVersion2;
+                case 'lte':
+                    return $mainVersion1 <= $mainVersion2;
+            }
         }
 
-        // If it's SemVer without a pre-release, add `~` to the end
-        // ["1","0","0"] -> ["1","0","0","~"]
-        // "~" is the largest ASCII character, so this will make "1.0.0" greater than "1.0.0-beta" for example
-        if (count($parts) == 3) {
-            $parts[] = '~';
+        // If one of the prerelease strings is empty, consider it a lower version
+        if ($prerelease1 === '' || $prerelease2 === '') {
+            switch ($operator) {
+                case 'eq':
+                    return $mainVersion1 === $mainVersion2 && ($prerelease1 === '' ? true : false);
+                case 'gt':
+                    return $mainVersion1 > $mainVersion2 || ($prerelease1 === '' ? true : false);
+                case 'gte':
+                    return $mainVersion1 >= $mainVersion2 || ($prerelease1 === '' ? true : false);
+                case 'lt':
+                    return $mainVersion1 < $mainVersion2 || ($prerelease1 === '' ? false : true);
+                case 'lte':
+                    return $mainVersion1 <= $mainVersion2 || ($prerelease1 === '' ? false : true);
+            }
         }
 
-        // Left pad each numeric part with spaces so string comparisons will work ("9">"10", but " 9"<"10")
-        $parts = array_map(function($part) {
-            return preg_match('/^[0-9]+$/', $part) ? str_pad($part, 5, " ", STR_PAD_LEFT) : $part;
-        }, $parts);
+        // Then compare the prerelease strings
+        switch ($operator) {
+            case 'eq':
+                return $mainVersion1 === $mainVersion2 || $prerelease1 === $prerelease2;
+            case 'gt':
+                return $mainVersion1 > $mainVersion2 || $prerelease1 > $prerelease2;
+            case 'gte':
+                return $mainVersion1 >= $mainVersion2 || $prerelease1 >= $prerelease2;
+            case 'lt':
+                return $mainVersion1 < $mainVersion2 || $prerelease1 < $prerelease2;
+            case 'lte':
+                return $mainVersion1 <= $mainVersion2 || $prerelease1 <= $prerelease2;
+        }
 
-        return implode('-', $parts);
+        return true;
     }
 }

@@ -112,11 +112,11 @@ final class GrowthbookTest extends TestCase
                 $versionCases["versionCompare: " . $case[0] . ' ' . $comparison . ' ' . $case[1]] = [
                     [
                         'v' => [
-                            '$v' . $comparison => $case[0]
+                            '$v' . $comparison => $case[1]
                         ]
                     ],
                     [
-                        'v' => $case[1]
+                        'v' => $case[0]
                     ],
                     $case[2]
                 ];

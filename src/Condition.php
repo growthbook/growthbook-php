@@ -262,8 +262,8 @@ class Condition
     public static function compareVersions(string $version1, string $version2, string $operator): bool
     {
         // Split the versions into parts, while dropping the build number
-        $parts1 = preg_split('/[-.]/', preg_replace('/(^v|\+.*$)/', '', strtolower($version1)) ?? '');
-        $parts2 = preg_split('/[-.]/', preg_replace('/(^v|\+.*$)/', '', strtolower($version2)) ?? '');
+        $parts1 = preg_split('/[-.]/', preg_replace('/(^v|\+.*$)/', '', $version1) ?? '');
+        $parts2 = preg_split('/[-.]/', preg_replace('/(^v|\+.*$)/', '', $version2) ?? '');
 
         // Compare the strings naively if we were unable to parse
         if (!is_array($parts1) || !is_array($parts2)) {
@@ -280,18 +280,14 @@ class Condition
 
         // Pad numeric parts with leading zeros
         $parts1 = array_map(function ($part) {
-            if (preg_match('/(\d+)/', $part, $matches)) {
-                $number = $matches[1];
-                $padded = str_pad($number, 5, "0", STR_PAD_LEFT);
-                return str_replace($number, $padded, $part);
+            if (preg_match('/^\d+$/', $part)) {
+                return str_pad($part, 5, "0", STR_PAD_LEFT);
             }
             return $part;
         }, $parts1);
         $parts2 = array_map(function ($part) {
-            if (preg_match('/(\d+)/', $part, $matches)) {
-                $number = $matches[1];
-                $padded = str_pad($number, 5, "0", STR_PAD_LEFT);
-                return str_replace($number, $padded, $part);
+            if (preg_match('/^\d+$/', $part)) {
+                return str_pad($part, 5, "0", STR_PAD_LEFT);
             }
             return $part;
         }, $parts2);

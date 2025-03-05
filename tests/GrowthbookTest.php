@@ -32,6 +32,9 @@ final class GrowthbookTest extends TestCase
             throw new \Exception("Unknown test case: $section");
         }
         $raw = $this->cases[$section];
+        if (!$this->arrayIsList($raw)) {
+            return $raw;
+        }
 
         $arr = [];
         foreach ($raw as $row) {
@@ -102,7 +105,25 @@ final class GrowthbookTest extends TestCase
      */
     public function evalConditionProvider(): array
     {
-        return $this->getCases("evalCondition");
+        $versionCompare = $this->getCases("versionCompare");
+        $versionCases = [];
+        foreach ($versionCompare as $comparison => $testCases) {
+            foreach ($testCases as $case) {
+                $versionCases["versionCompare: " . $case[0] . ' ' . $comparison . ' ' . $case[1]] = [
+                    [
+                        'v' => [
+                            '$v' . $comparison => $case[1]
+                        ]
+                    ],
+                    [
+                        'v' => $case[0]
+                    ],
+                    $case[2]
+                ];
+            }
+        }
+
+        return array_merge($this->getCases("evalCondition"), $versionCases);
     }
 
 
@@ -258,7 +279,7 @@ final class GrowthbookTest extends TestCase
         }
         $arr = json_decode($encoded, true);
         foreach ($arr as $k => $v) {
-            if ($v === null || ($k === "active" && $v && !isset($ref['active'])) || ($k === "coverage" && $v === 1 && !isset($ref['coverage'])) || ($k==="hashAttribute" && $v==="id" && !isset($ref['hashAttribute']))) {
+            if ($v === null || ($k === "active" && $v && !isset($ref['active'])) || ($k === "coverage" && $v === 1 && !isset($ref['coverage'])) || ($k === "hashAttribute" && $v === "id" && !isset($ref['hashAttribute']))) {
                 unset($arr[$k]);
             }
         }
@@ -303,15 +324,15 @@ final class GrowthbookTest extends TestCase
 
     public function testFluentInterface(): void
     {
-        $attributes = ['id'=>1];
+        $attributes = ['id' => 1];
         $callback = function ($exp, $res) {
             // do nothing
         };
         $features = [
-            'feature-1'=>['defaultValue'=>1, 'rules'=>[]]
+            'feature-1' => ['defaultValue' => 1, 'rules' => []]
         ];
         $url = "/home";
-        $forcedVariations = ['exp1'=>0];
+        $forcedVariations = ['exp1' => 0];
 
         $gb = Growthbook::create()
             ->withFeatures($features)
@@ -335,7 +356,7 @@ final class GrowthbookTest extends TestCase
     {
         $gb = Growthbook::create()
             ->withFeatures([
-                'feature-1'=>['defaultValue' => false, 'rules' => []]
+                'feature-1' => ['defaultValue' => false, 'rules' => []]
             ])
             ->withForcedFeatures([
                 'feature-1' => new FeatureResult(true, 'forcedFeature')
@@ -346,12 +367,12 @@ final class GrowthbookTest extends TestCase
 
     public function testInlineExperiment(): void
     {
-        $condition = ['country'=>'US'];
-        $weights = [.4,.6];
+        $condition = ['country' => 'US'];
+        $weights = [.4, .6];
         $coverage = 0.5;
         $hashAttribute = 'anonId';
 
-        $exp = InlineExperiment::create("my-test", [0,1])
+        $exp = InlineExperiment::create("my-test", [0, 1])
             ->withCondition($condition)
             ->withWeights($weights)
             ->withCoverage($coverage)
@@ -374,10 +395,10 @@ final class GrowthbookTest extends TestCase
 
         $logger = $this->createMock('Psr\Log\AbstractLogger');
         $logger->expects($this->exactly(4))->method("log")->withConsecutive(
-            [$this->equalTo("debug"),$this->stringContains("Evaluating feature")],
-            [$this->equalTo("debug"),$this->stringContains("Attempting to run experiment")],
-            [$this->equalTo("debug"),$this->stringContains("Assigned user a variation")],
-            [$this->equalTo("debug"),$this->stringContains("Use feature value from experiment")],
+            [$this->equalTo("debug"), $this->stringContains("Evaluating feature")],
+            [$this->equalTo("debug"), $this->stringContains("Attempting to run experiment")],
+            [$this->equalTo("debug"), $this->stringContains("Assigned user a variation")],
+            [$this->equalTo("debug"), $this->stringContains("Use feature value from experiment")],
         );
 
         $gb = Growthbook::create()
@@ -385,14 +406,14 @@ final class GrowthbookTest extends TestCase
             ->withLogger($logger)
             ->withAttributes(['id' => '1'])
             ->withFeatures([
-                'feature'=>[
-                    'defaultValue'=>false,
-                    'rules'=>[
+                'feature' => [
+                    'defaultValue' => false,
+                    'rules' => [
                         [
-                            'variations'=>[false,true],
-                            'meta'=>[
-                                ['key'=>'control'],
-                                ['key'=>'variation']
+                            'variations' => [false, true],
+                            'meta' => [
+                                ['key' => 'control'],
+                                ['key' => 'variation']
                             ]
                         ]
                     ]
@@ -411,5 +432,17 @@ final class GrowthbookTest extends TestCase
         $this->assertSame($calls[0][1]->inExperiment, true);
         $this->assertSame($calls[0][1]->bucket, 0.906);
         $this->assertSame($calls[0][1]->featureId, "feature");
+    }
+
+    /**
+     * Returns true if the array is JSON array instead of object
+     * @param array<int,mixed> $arr
+     */
+    protected function arrayIsList(array $arr): bool
+    {
+        if ($arr === []) {
+            return true;
+        }
+        return array_keys($arr) === range(0, count($arr) - 1);
     }
 }

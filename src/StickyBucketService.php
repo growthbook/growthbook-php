@@ -29,7 +29,7 @@ abstract class StickyBucketService
 
     /**
      * @param array<string, string> $attributes
-     * @return array<string, array>
+     * @return array<string, StickyAssignmentDocument>
      */
     public function getAllAssignments(array $attributes): array
     {

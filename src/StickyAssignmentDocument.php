@@ -18,17 +18,17 @@ class StickyAssignmentDocument
     private string $attributeValue;
 
     /**
-     * @var array
+     * @var array<string, string>
      */
     private array $assignments;
 
     /**
      * StickyAssignmentDocument constructor.
      * @param string $attributeName
-     * @param string $attributeValue
-     * @param array  $assignments
+     * @param mixed $attributeValue
+     * @param array<string,string>  $assignments
      */
-    public function __construct(string $attributeName, string $attributeValue, array $assignments)
+    public function __construct(string $attributeName, $attributeValue, array $assignments)
     {
         $this->attributeName = $attributeName;
         $this->attributeValue = $attributeValue;
@@ -52,7 +52,7 @@ class StickyAssignmentDocument
     }
 
     /**
-     * @return array
+     * @return array<string, string>
      */
     public function getAssignments(): array
     {

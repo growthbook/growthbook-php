@@ -13,7 +13,7 @@ class Feature
     public $rules = [];
 
     /**
-     * @param array{defaultValue:T,rules:?array{condition:?array<string,mixed>,coverage:?float,force:?T,variations:?T[],key:?string,weights:?float[],namespace:?array{0:string,1:float,2:float},hashAttribute:?string}[]} $feature
+     * @param array{defaultValue:T,rules:?array{condition:?array<string,mixed>,coverage:?float,force:?T,variations:?T[],key:?string,weights:?float[],namespace:?array{0:string,1:float,2:float},hashAttribute:?string,fallbackAttribute:?string,disableStickyBucketing:bool,bucketVersion:int,minBucketVersion:int}[]} $feature
      */
     public function __construct(array $feature)
     {

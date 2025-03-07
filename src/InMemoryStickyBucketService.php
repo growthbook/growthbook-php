@@ -4,14 +4,15 @@ namespace Growthbook;
 
 class InMemoryStickyBucketService extends StickyBucketService
 {
+    /** @var array<string, StickyAssignmentDocument>  */
     public array $docs = [];
 
     /**
      * @param string $attributeName
-     * @param string $attributeValue
+     * @param mixed $attributeValue
      * @return StickyAssignmentDocument|null
      */
-    public function getAssignments(string $attributeName, string $attributeValue): ?StickyAssignmentDocument
+    public function getAssignments(string $attributeName, $attributeValue): ?StickyAssignmentDocument
     {
         return $this->docs[$this->getKey($attributeName, $attributeValue)] ?? null;
     }

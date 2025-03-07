@@ -462,14 +462,14 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider getStickyBucketProvider
-     * @param array<string,mixed> $ctx
-     * @param                     $docs
-     * @param string              $key
-     * @param array|null          $expectedResult
-     * @param array               $expectedDocs
+     * @param array<string,mixed>       $ctx
+     * @param array<array>                     $docs
+     * @param string                    $key
+     * @param array<string, mixed>|null $expectedResult
+     * @param array<string, array>      $expectedDocs
      * @throws Exception
      */
-    public function testStickyBucket(array $ctx, $docs, string $key, ?array $expectedResult, array $expectedDocs)
+    public function testStickyBucket(array $ctx, array $docs, string $key, ?array $expectedResult, array $expectedDocs): void
     {
         $service = new InMemoryStickyBucketService();
 
@@ -512,7 +512,10 @@ final class GrowthbookTest extends TestCase
         return $this->getCases("stickyBucket");
     }
 
-    public function testStickyBucketService()
+    /**
+     * @return void
+     */
+    public function testStickyBucketService(): void
     {
         $features = [
             "feature" => [

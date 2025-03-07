@@ -2,8 +2,10 @@
 
 namespace Growthbook;
 
+use Exception;
 use Http\Discovery\Psr17FactoryDiscovery;
 use Http\Discovery\Psr18ClientDiscovery;
+use Psr\Http\Client\ClientExceptionInterface;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\LogLevel;
@@ -60,16 +62,16 @@ class Growthbook implements LoggerAwareInterface
     /** @var array<string,ViewedExperiment> */
     private $tracks = [];
 
-    /** @var StickyBucketService|mixed|null */
+    /** @var StickyBucketService|null */
     private ?StickyBucketService $stickyBucketService = null;
 
-    /** @var array|mixed|null */
+    /** @var array<string>|null */
     private ?array $stickyBucketIdentifierAttributes = null;
     /** @var array<string, StickyAssignmentDocument> */
     private array $stickyBucketAssignmentDocs = [];
     /** @var bool */
     private bool $usingDerivedStickyBucketAttributes;
-    /** @var null|array */
+    /** @var null|array<string, string> */
     private ?array $stickyBucketAttributes = null;
 
     public static function create(): Growthbook
@@ -124,7 +126,7 @@ class Growthbook implements LoggerAwareInterface
 
         $this->stickyBucketService = $options["stickyBucketService"] ?? null;
         $this->stickyBucketIdentifierAttributes = $options["stickyBucketIdentifierAttributes"] ?? null;
-        $this->usingDerivedStickyBucketAttributes = !$this->stickyBucketIdentifierAttributes;
+        $this->usingDerivedStickyBucketAttributes = !isset($this->stickyBucketIdentifierAttributes);
 
 
         if (array_key_exists("forcedFeatures", $options)) {
@@ -232,6 +234,19 @@ class Growthbook implements LoggerAwareInterface
         if ($ttl !== null) {
             $this->cacheTTL = $ttl;
         }
+        return $this;
+    }
+
+    /**
+     * @param StickyBucketService $stickyBucketService
+     * @param array<string>|null  $stickyBucketIdentifierAttributes
+     * @return $this
+     */
+    public function withStickyBucketing(StickyBucketService $stickyBucketService, ?array $stickyBucketIdentifierAttributes): Growthbook
+    {
+        $this->stickyBucketService = $stickyBucketService;
+        $this->stickyBucketIdentifierAttributes = $stickyBucketIdentifierAttributes;
+
         return $this;
     }
 
@@ -479,7 +494,7 @@ class Growthbook implements LoggerAwareInterface
             $this->log(LogLevel::DEBUG, "Skip experiment because of empty attribute - $hashAttribute", [
                 "experiment" => $exp->key
             ]);
-            return new ExperimentResult($exp, $hashAttribute, $hashValue, -1, false, $featureId);
+            return new ExperimentResult($exp, $hashAttribute, "", -1, false, $featureId);
         }
 
         $assigned = -1;
@@ -593,7 +608,7 @@ class Growthbook implements LoggerAwareInterface
             $data = $this->generateStickyBucketAssignmentDoc($hashAttribute, $hashValue, $assignments);
 
             $doc = $data['doc'] ?? null;
-            if ($doc && $data['changed'] ?? false) {
+            if ($data['changed'] ?? false) {
                 if (!$this->stickyBucketAssignmentDocs) {
                     $this->stickyBucketAssignmentDocs = [];
                 }
@@ -663,6 +678,7 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @param string                      $seed
      * @param string|null                 $hashAttribute
+     * @param string|null                 $fallbackAttribute
      * @param array{0:float,1:float}|null $range
      * @param float|null                  $coverage
      * @param int|null                    $hashVersion
@@ -692,6 +708,11 @@ class Growthbook implements LoggerAwareInterface
         return true;
     }
 
+    /**
+     * @param string|null $hashAttribute
+     * @param string|null $fallbackAttribute
+     * @return array{0:string,1:string}
+     */
     private function getHashValue(?string $hashAttribute = null, ?string $fallbackAttribute = null): array
     {
         $attribute = $hashAttribute ?? "id";
@@ -707,7 +728,7 @@ class Growthbook implements LoggerAwareInterface
                 $val = $this->attributes[$fallbackAttribute] ?? "";
             }
 
-            if (!$val || $val != "") {
+            if (!empty($val) || $val != "") {
                 $attribute = $fallbackAttribute;
             }
         }
@@ -851,6 +872,10 @@ class Growthbook implements LoggerAwareInterface
         return $variation;
     }
 
+    /**
+     * @param string $encryptedString
+     * @return string
+     */
     public function decrypt(string $encryptedString): string
     {
         if (!$this->decryptionKey) {
@@ -871,6 +896,14 @@ class Growthbook implements LoggerAwareInterface
         return $decrypted;
     }
 
+    /**
+     * @param string $clientKey
+     * @param string $apiHost
+     * @param string $decryptionKey
+     * @return void
+     * @throws ClientExceptionInterface
+     * @throws Exception
+     */
     public function loadFeatures(string $clientKey, string $apiHost = "", string $decryptionKey = ""): void
     {
         $this->clientKey = $clientKey;
@@ -878,13 +911,13 @@ class Growthbook implements LoggerAwareInterface
         $this->decryptionKey = $decryptionKey;
 
         if (!$this->clientKey) {
-            throw new \Exception("Must specify a clientKey before loading features.");
+            throw new Exception("Must specify a clientKey before loading features.");
         }
         if (!$this->httpClient) {
-            throw new \Exception("Must set an HTTP Client before loading features.");
+            throw new Exception("Must set an HTTP Client before loading features.");
         }
         if (!$this->requestFactory) {
-            throw new \Exception("Must set an HTTP Request Factory before loading features");
+            throw new Exception("Must set an HTTP Request Factory before loading features");
         }
 
         // The features URL is also the cache key
@@ -927,6 +960,15 @@ class Growthbook implements LoggerAwareInterface
         }
     }
 
+    /**
+     * @param string                                                   $key
+     * @param int|null                                                 $bucketVersion
+     * @param int|null                                                 $minBucketVersion
+     * @param array{key?:string,name?:string,passthrough?:bool}[]|null $meta
+     * @param string|null                                              $hashAttribute
+     * @param string|null                                              $fallbackAttribute
+     * @return array{variation:int,versionIsBlocked?:bool}
+     */
     private function getStickyBucketVariation(string $key, ?int $bucketVersion, ?int $minBucketVersion, ?array $meta, ?string $hashAttribute, ?string $fallbackAttribute): array
     {
         $bucketVersion = $bucketVersion ?? 0;
@@ -970,11 +1012,21 @@ class Growthbook implements LoggerAwareInterface
         return ['variation' => $variation];
     }
 
+    /**
+     * @param string $experimentKey
+     * @param int    $bucketVersion
+     * @return string
+     */
     private function getStickyBucketExperimentKey(string $experimentKey, int $bucketVersion = 0): string
     {
         return $experimentKey . "__" . $bucketVersion;
     }
 
+    /**
+     * @param string|null $hashAttribute
+     * @param string|null $fallbackAttribute
+     * @return array<string, string>
+     */
     private function getStickyBucketAssignments(?string $hashAttribute = null, ?string $fallbackAttribute = null): array
     {
         $merged = [];
@@ -999,7 +1051,12 @@ class Growthbook implements LoggerAwareInterface
         return $merged;
     }
 
-
+    /**
+     * @param string                $hashAttribute
+     * @param string                $hashValue
+     * @param array<string, string> $assignments
+     * @return array{key:string,doc:StickyAssignmentDocument,changed:bool}
+     */
     private function generateStickyBucketAssignmentDoc(string $hashAttribute, string $hashValue, array $assignments): array
     {
         $key = $hashAttribute . '||' . $hashValue;
@@ -1021,6 +1078,10 @@ class Growthbook implements LoggerAwareInterface
         ];
     }
 
+    /**
+     * @param bool $force
+     * @return void
+     */
     private function refreshStickyBuckets(bool $force = false): void
     {
         if (!$this->stickyBucketService) {
@@ -1029,7 +1090,7 @@ class Growthbook implements LoggerAwareInterface
 
         $attributes = $this->getStickyBucketAttributes();
 
-        if (!$force && $attributes ==$this->stickyBucketAttributes) {
+        if (!$force && $attributes === $this->stickyBucketAttributes) {
             $this->log(LogLevel::DEBUG, "Skipping refresh of sticky bucket assignments, no changes");
             return;
         }
@@ -1038,6 +1099,9 @@ class Growthbook implements LoggerAwareInterface
         $this->stickyBucketAssignmentDocs = $this->stickyBucketService->getAllAssignments($attributes);
     }
 
+    /**
+     * @return array<string, string>
+     */
     private function getStickyBucketAttributes(): array
     {
         $attributes = [];
@@ -1061,6 +1125,9 @@ class Growthbook implements LoggerAwareInterface
         return $attributes;
     }
 
+    /**
+     * @return array<string>
+     */
     private function deriveStickyBucketIdentifierAttributes(): array
     {
         $attributes = [];

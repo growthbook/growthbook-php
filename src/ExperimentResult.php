@@ -53,16 +53,21 @@ class ExperimentResult
      */
     public $passthrough;
 
+    /** @var bool  */
+    public $stickyBucketUsed;
+
 
     /**
      * @param InlineExperiment<T> $experiment
-     * @param string $hashValue
-     * @param int $variationIndex
-     * @param bool $hashUsed
-     * @param string|null $featureId
-     * @param float|null $bucket
+     * @param string              $hashAttribute
+     * @param string              $hashValue
+     * @param int                 $variationIndex
+     * @param bool                $hashUsed
+     * @param string|null         $featureId
+     * @param float|null          $bucket
+     * @param bool                $stickyBucketUsed
      */
-    public function __construct(InlineExperiment $experiment, string $hashValue = "", int $variationIndex = -1, bool $hashUsed = false, ?string $featureId = null, ?float $bucket = null)
+    public function __construct(InlineExperiment $experiment, string $hashAttribute = 'id', string $hashValue = "", int $variationIndex = -1, bool $hashUsed = false, ?string $featureId = null, ?float $bucket = null, bool $stickyBucketUsed = false)
     {
         $inExperiment = true;
         // If the assigned variation is invalid, the user is not in the experiment and should get assigned the baseline
@@ -76,10 +81,11 @@ class ExperimentResult
         $this->hashUsed = $hashUsed;
         $this->variationId = $variationIndex;
         $this->value = $experiment->variations[$variationIndex];
-        $this->hashAttribute = $experiment->hashAttribute ?? "id";
+        $this->hashAttribute = $hashAttribute;
         $this->hashValue = $hashValue;
         $this->featureId = $featureId;
         $this->bucket = $bucket;
+        $this->stickyBucketUsed = $stickyBucketUsed;
 
         $this->key = "" . $variationIndex;
         if ($experiment->meta) {

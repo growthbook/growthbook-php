@@ -6,6 +6,8 @@ use Growthbook\Condition;
 use Growthbook\FeatureResult;
 use Growthbook\Growthbook;
 use Growthbook\InlineExperiment;
+use Growthbook\InMemoryStickyBucketService;
+use Growthbook\StickyAssignmentDocument;
 use PHPUnit\Framework\TestCase;
 
 final class GrowthbookTest extends TestCase
@@ -52,7 +54,7 @@ final class GrowthbookTest extends TestCase
     /**
      * @dataProvider getBucketRangeProvider
      * @param array{0:int,1:float,2:null|float[]} $args
-     * @param array{0:float,1:float}[] $expected
+     * @param array{0:float,1:float}[]            $expected
      */
     public function testGetBucketRange(array $args, array $expected): void
     {
@@ -66,6 +68,7 @@ final class GrowthbookTest extends TestCase
             }
         }
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -82,6 +85,7 @@ final class GrowthbookTest extends TestCase
         $actual = Growthbook::hash($seed, $value, $version);
         $this->assertSame($actual, $expected);
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -94,12 +98,13 @@ final class GrowthbookTest extends TestCase
      * @dataProvider evalConditionProvider
      * @param array<string,mixed> $condition
      * @param array<string,mixed> $attributes
-     * @param bool $expected
+     * @param bool                $expected
      */
     public function testEvalCondition(array $condition, array $attributes, bool $expected): void
     {
         $this->assertSame(Condition::evalCondition($attributes, $condition), $expected);
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -135,6 +140,7 @@ final class GrowthbookTest extends TestCase
     {
         $this->assertSame(Growthbook::getQueryStringOverride($key, $url, $numVariations), $expected);
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -146,14 +152,15 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider chooseVariationProvider
-     * @param float $n
+     * @param float                    $n
      * @param array{0:float,1:float}[] $ranges
-     * @param int $expected
+     * @param int                      $expected
      */
     public function testChooseVariation(float $n, array $ranges, int $expected): void
     {
         $this->assertSame(Growthbook::chooseVariation($n, $ranges), $expected);
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -165,14 +172,15 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider inNamespaceProvider
-     * @param string $id
+     * @param string                          $id
      * @param array{0:string,1:float,2:float} $namespace
-     * @param bool $expected
+     * @param bool                            $expected
      */
     public function testInNamespace(string $id, array $namespace, bool $expected): void
     {
         $this->assertSame(Growthbook::inNamespace($id, $namespace), $expected);
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -184,7 +192,7 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider getEqualWeightsProvider
-     * @param int $numVariations
+     * @param int     $numVariations
      * @param float[] $expected
      */
     public function testGetEqualWeights(int $numVariations, array $expected): void
@@ -197,6 +205,7 @@ final class GrowthbookTest extends TestCase
             return round($w, 8);
         }, $expected));
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -208,8 +217,8 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider decryptProvider
-     * @param string $encryptedString
-     * @param string $key
+     * @param string      $encryptedString
+     * @param string      $key
      * @param string|null $expected
      */
     public function testDecrypt(string $encryptedString, string $key, ?string $expected = null): void
@@ -242,7 +251,7 @@ final class GrowthbookTest extends TestCase
     /**
      * @dataProvider featureProvider
      * @param array<string,mixed> $ctx
-     * @param string $key
+     * @param string              $key
      * @param array<string,mixed> $expected
      */
     public function testFeature(array $ctx, string $key, array $expected): void
@@ -266,12 +275,14 @@ final class GrowthbookTest extends TestCase
 
         $this->assertEquals($expected, $actual);
     }
+
     /**
-     * @param mixed $obj
+     * @param mixed               $obj
      * @param array<string,mixed> $ref
      * @return array<string,mixed>
+     * @throws Exception
      */
-    public function removeNulls($obj, array $ref): array
+    public function removeNulls($obj, ?array $ref): array
     {
         $encoded = json_encode($obj);
         if (!$encoded) {
@@ -286,6 +297,7 @@ final class GrowthbookTest extends TestCase
 
         return $arr;
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -299,9 +311,9 @@ final class GrowthbookTest extends TestCase
      * @dataProvider getRunProvider
      * @param array<string,mixed> $ctx
      * @param array<string,mixed> $exp
-     * @param mixed $expectedValue
-     * @param bool $inExperiment
-     * @param bool $hashUsed
+     * @param mixed               $expectedValue
+     * @param bool                $inExperiment
+     * @param bool                $hashUsed
      */
     public function testRun(array $ctx, array $exp, $expectedValue, bool $inExperiment, bool $hashUsed): void
     {
@@ -313,6 +325,7 @@ final class GrowthbookTest extends TestCase
         $this->assertSame($res->inExperiment, $inExperiment);
         $this->assertSame($res->hashUsed, $hashUsed);
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -444,5 +457,124 @@ final class GrowthbookTest extends TestCase
             return true;
         }
         return array_keys($arr) === range(0, count($arr) - 1);
+    }
+
+
+    /**
+     * @dataProvider getStickyBucketProvider
+     * @param array<string,mixed> $ctx
+     * @param                     $docs
+     * @param string              $key
+     * @param array|null          $expectedResult
+     * @param array               $expectedDocs
+     * @throws Exception
+     */
+    public function testStickyBucket(array $ctx, $docs, string $key, ?array $expectedResult, array $expectedDocs)
+    {
+        $service = new InMemoryStickyBucketService();
+
+        foreach ($docs as $doc) {
+            $service->saveAssignments(new StickyAssignmentDocument($doc['attributeName'], $doc['attributeValue'], $doc['assignments']));
+        }
+
+        $ctx['stickyBucketService'] = $service;
+
+        if (array_key_exists('stickyBucketAssignmentDocs', $ctx)) {
+            $service->docs = $ctx['stickyBucketAssignmentDocs'];
+            unset($ctx['stickyBucketAssignmentDocs']);
+        }
+
+        $gb = new Growthbook($ctx);
+
+        $res = $gb->getFeature($key);
+
+        if (!$res->experimentResult) {
+            $this->assertNull($expectedResult);
+        } else {
+            $this->assertEquals($expectedResult, $this->removeNulls($res->experimentResult, $expectedResult));
+        }
+
+        foreach ($expectedDocs as $key => $value) {
+            $this->assertEquals($service->docs[$key]->getAttributeName(), $value['attributeName']);
+            $this->assertEquals($service->docs[$key]->getAttributeValue(), $value['attributeValue']);
+            $this->assertEquals($service->docs[$key]->getAssignments(), $value['assignments']);
+        }
+
+        $service->destroy();
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     * @throws Exception
+     */
+    public function getStickyBucketProvider(): array
+    {
+        return $this->getCases("stickyBucket");
+    }
+
+    public function testStickyBucketService()
+    {
+        $features = [
+            "feature" => [
+                "defaultValue" => 5,
+                "rules" => [[
+                    "key" => "exp",
+                    "variations" => [0, 1],
+                    "weights" => [0, 1],
+                    "meta" => [
+                        ["key" => "control"],
+                        ["key" => "variation1"]
+                    ]
+                ]]
+            ],
+        ];
+
+        $service = new InMemoryStickyBucketService();
+
+        $gb = new Growthbook(
+            [
+                'stickyBucketService' => $service,
+                'attributes' => ['id' => 1],
+                'features' => $features
+            ]
+        );
+
+        $this->assertEquals(1, $gb->getFeature('feature')->value);
+        $this->assertEquals(
+            new StickyAssignmentDocument('id', 1, ['exp__0' => 'variation1']),
+            $service->getAssignments('id', 1)
+        );
+
+        $features['feature']['rules'][0]['weights'] = [1, 0];
+        $gb->withFeatures($features);
+        $this->assertEquals(1, $gb->getFeature('feature')->value);
+
+        //New GrowthBook instance should also get variation
+        $gb2 = new Growthbook(
+            [
+                'stickyBucketService' => $service,
+                'attributes' => ['id' => 1],
+                'features' => $features
+            ]
+        );
+        $this->assertEquals(1, $gb2->getFeature('feature')->value);
+
+        //New users should get control
+        $gb->withAttributes(['id' => 2]);
+        $this->assertEquals(0, $gb->getFeature('feature')->value);
+
+        //Bumping bucketVersion, should reset sticky buckets
+        $gb->withAttributes(['id' => 1]);
+        $features["feature"]["rules"][0]["bucketVersion"] = 1;
+        $gb->withFeatures($features);
+        $this->assertEquals(0, $gb->getFeature('feature')->value);
+
+        $this->assertEquals(
+            new StickyAssignmentDocument('id', 1, [
+                'exp__0' => 'variation1',
+                "exp__1" => "control",
+            ]),
+            $service->getAssignments('id', 1)
+        );
     }
 }

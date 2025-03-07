@@ -2,9 +2,10 @@
 
 namespace Growthbook;
 
-use Http\Discovery\Psr18ClientDiscovery;
 use Http\Discovery\Psr17FactoryDiscovery;
+use Http\Discovery\Psr18ClientDiscovery;
 use Psr\Log\LoggerAwareInterface;
+use Psr\Log\LoggerInterface;
 use Psr\Log\LogLevel;
 
 class Growthbook implements LoggerAwareInterface
@@ -59,6 +60,18 @@ class Growthbook implements LoggerAwareInterface
     /** @var array<string,ViewedExperiment> */
     private $tracks = [];
 
+    /** @var StickyBucketService|mixed|null */
+    private ?StickyBucketService $stickyBucketService = null;
+
+    /** @var array|mixed|null */
+    private ?array $stickyBucketIdentifierAttributes = null;
+    /** @var array<string, StickyAssignmentDocument> */
+    private array $stickyBucketAssignmentDocs = [];
+    /** @var bool */
+    private bool $usingDerivedStickyBucketAttributes;
+    /** @var null|array */
+    private ?array $stickyBucketAttributes = null;
+
     public static function create(): Growthbook
     {
         return new Growthbook();
@@ -83,7 +96,9 @@ class Growthbook implements LoggerAwareInterface
             "cache",
             "httpClient",
             "requestFactory",
-            "decryptionKey"
+            "decryptionKey",
+            "stickyBucketService",
+            "stickyBucketIdentifierAttributes"
         ];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
@@ -107,7 +122,12 @@ class Growthbook implements LoggerAwareInterface
             // Ignore errors from discovery
         }
 
-        if(array_key_exists("forcedFeatures", $options)) {
+        $this->stickyBucketService = $options["stickyBucketService"] ?? null;
+        $this->stickyBucketIdentifierAttributes = $options["stickyBucketIdentifierAttributes"] ?? null;
+        $this->usingDerivedStickyBucketAttributes = !$this->stickyBucketIdentifierAttributes;
+
+
+        if (array_key_exists("forcedFeatures", $options)) {
             $this->withForcedFeatures($options['forcedFeatures']);
         }
 
@@ -126,8 +146,10 @@ class Growthbook implements LoggerAwareInterface
     public function withAttributes(array $attributes): Growthbook
     {
         $this->attributes = $attributes;
+        $this->refreshStickyBuckets();
         return $this;
     }
+
     /**
      * @param callable|null $trackingCallback
      * @return Growthbook
@@ -137,6 +159,7 @@ class Growthbook implements LoggerAwareInterface
         $this->trackingCallback = $trackingCallback;
         return $this;
     }
+
     /**
      * @param array<string,Feature<mixed>|mixed> $features
      * @return Growthbook
@@ -151,8 +174,10 @@ class Growthbook implements LoggerAwareInterface
                 $this->features[$key] = new Feature($feature);
             }
         }
+        $this->refreshStickyBuckets();
         return $this;
     }
+
     /**
      * @param array<string,int> $forcedVariations
      * @return Growthbook
@@ -172,6 +197,7 @@ class Growthbook implements LoggerAwareInterface
         $this->forcedFeatures = $forcedFeatures;
         return $this;
     }
+
     /**
      * @param string $url
      * @return Growthbook
@@ -181,12 +207,14 @@ class Growthbook implements LoggerAwareInterface
         $this->url = $url;
         return $this;
     }
-    public function withLogger(?\Psr\Log\LoggerInterface $logger = null): Growthbook
+
+    public function withLogger(?LoggerInterface $logger = null): Growthbook
     {
         $this->logger = $logger;
         return $this;
     }
-    public function setLogger(?\Psr\Log\LoggerInterface $logger = null): void
+
+    public function setLogger(?LoggerInterface $logger = null): void
     {
         $this->logger = $logger;
     }
@@ -214,6 +242,7 @@ class Growthbook implements LoggerAwareInterface
     {
         return $this->attributes;
     }
+
     /**
      * @return array<string,Feature<mixed>>
      */
@@ -221,6 +250,7 @@ class Growthbook implements LoggerAwareInterface
     {
         return $this->features;
     }
+
     /**
      * @return array<string,int>
      */
@@ -228,6 +258,7 @@ class Growthbook implements LoggerAwareInterface
     {
         return $this->forcedVariations;
     }
+
     /**
      * @return array<string, FeatureResult<mixed>>
      */
@@ -235,6 +266,7 @@ class Growthbook implements LoggerAwareInterface
     {
         return $this->forcedFeatures;
     }
+
     /**
      * @return string
      */
@@ -242,6 +274,7 @@ class Growthbook implements LoggerAwareInterface
     {
         return $this->url;
     }
+
     /**
      * @return callable|null
      */
@@ -257,10 +290,12 @@ class Growthbook implements LoggerAwareInterface
     {
         return array_values($this->tracks);
     }
+
     public function isOn(string $key): bool
     {
         return $this->getFeature($key)->on;
     }
+
     public function isOff(string $key): bool
     {
         return $this->getFeature($key)->off;
@@ -269,7 +304,7 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @template T
      * @param string $key
-     * @param T $default
+     * @param T      $default
      * @return T
      */
     public function getValue(string $key, $default)
@@ -327,6 +362,7 @@ class Growthbook implements LoggerAwareInterface
                     if (!$this->isIncludedInRollout(
                         $rule->seed ?? $key,
                         $rule->hashAttribute,
+                        $rule->fallbackAttribute,
                         $rule->range,
                         $rule->coverage,
                         $rule->hashVersion
@@ -386,7 +422,7 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @template T
      * @param InlineExperiment<T> $exp
-     * @param string|null $featureId
+     * @param string|null         $featureId
      * @return ExperimentResult<T>
      */
     private function runExperiment(InlineExperiment $exp, ?string $featureId = null): ExperimentResult
@@ -397,7 +433,7 @@ class Growthbook implements LoggerAwareInterface
             $this->log(LogLevel::DEBUG, "Skip experiment because there aren't enough variations", [
                 "experiment" => $exp->key
             ]);
-            return new ExperimentResult($exp, "", -1, false, $featureId);
+            return new ExperimentResult($exp, "id","", -1, false, $featureId);
         }
 
         // 2. Growthbook disabled
@@ -405,12 +441,10 @@ class Growthbook implements LoggerAwareInterface
             $this->log(LogLevel::DEBUG, "Skip experiment because the Growthbook instance is disabled", [
                 "experiment" => $exp->key
             ]);
-            return new ExperimentResult($exp, "", -1, false, $featureId);
+            return new ExperimentResult($exp, "id", "", -1, false, $featureId);
         }
 
-        $hashAttribute = $exp->hashAttribute ?? "id";
-        $hashValue = $this->getHashValue($hashAttribute);
-
+        list($hashAttribute, $hashValue) = $this->getHashValue($exp->hashAttribute, $exp->fallbackAttribute);
         // 3. Forced via querystring
         if ($this->url) {
             $qsOverride = static::getQueryStringOverride($exp->key, $this->url, count($exp->variations));
@@ -419,7 +453,7 @@ class Growthbook implements LoggerAwareInterface
                     "experiment" => $exp->key,
                     "variation" => $qsOverride
                 ]);
-                return new ExperimentResult($exp, $hashValue, $qsOverride, false, $featureId);
+                return new ExperimentResult($exp, $hashAttribute, $hashValue, $qsOverride, false, $featureId);
             }
         }
 
@@ -429,7 +463,7 @@ class Growthbook implements LoggerAwareInterface
                 "experiment" => $exp->key,
                 "variation" => $this->forcedVariations[$exp->key]
             ]);
-            return new ExperimentResult($exp, $hashValue, $this->forcedVariations[$exp->key], false, $featureId);
+            return new ExperimentResult($exp, $hashAttribute, $hashValue, $this->forcedVariations[$exp->key], false, $featureId);
         }
 
         // 5. Experiment is not active
@@ -437,7 +471,7 @@ class Growthbook implements LoggerAwareInterface
             $this->log(LogLevel::DEBUG, "Skip experiment because it is inactive", [
                 "experiment" => $exp->key
             ]);
-            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
+            return new ExperimentResult($exp, $hashAttribute, $hashValue, -1, false, $featureId);
         }
 
         // 6. Hash value is empty
@@ -445,34 +479,61 @@ class Growthbook implements LoggerAwareInterface
             $this->log(LogLevel::DEBUG, "Skip experiment because of empty attribute - $hashAttribute", [
                 "experiment" => $exp->key
             ]);
-            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
+            return new ExperimentResult($exp, $hashAttribute, $hashValue, -1, false, $featureId);
         }
 
-        // 7. Filtered out / not in namespace
-        if ($exp->filters) {
-            if ($this->isFilteredOut($exp->filters)) {
-                $this->log(LogLevel::DEBUG, "Skip experiment because of filters (e.g. namespace)", [
+        $assigned = -1;
+        $foundStickyBucket = false;
+        $stickyBucketVersionIsBlocked = false;
+
+        if ($this->stickyBucketService && !$exp->disableStickyBucketing) {
+            $stickyBucket = $this->getStickyBucketVariation(
+                $exp->key,
+                $exp->bucketVersion,
+                $exp->minBucketVersion,
+                $exp->meta,
+                $exp->hashAttribute,
+                $exp->fallbackAttribute
+            );
+
+            $foundStickyBucket = $stickyBucket['variation'] >= 0;
+            $assigned = $stickyBucket['variation'];
+            $stickyBucketVersionIsBlocked = $stickyBucket['versionIsBlocked'] ?? false;
+
+            if ($foundStickyBucket) {
+                $this->log(LogLevel::DEBUG, "Found sticky bucket for experiment, assigning sticky variation", [
+                    "experiment" => $exp->key,
+                    "variation" => $assigned
+                ]);
+            }
+        }
+
+        if (!$foundStickyBucket) {
+            // 7. Filtered out / not in namespace
+            if ($exp->filters) {
+                if ($this->isFilteredOut($exp->filters)) {
+                    $this->log(LogLevel::DEBUG, "Skip experiment because of filters (e.g. namespace)", [
+                        "experiment" => $exp->key
+                    ]);
+                    return new ExperimentResult($exp, $hashAttribute, $hashValue, -1, false, $featureId);
+                }
+            } elseif ($exp->namespace && !static::inNamespace($hashValue, $exp->namespace)) {
+                $this->log(LogLevel::DEBUG, "Skip experiment because not in namespace", [
                     "experiment" => $exp->key
                 ]);
-                return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
+                return new ExperimentResult($exp, $hashAttribute, $hashValue, -1, false, $featureId);
             }
-        } elseif ($exp->namespace && !static::inNamespace($hashValue, $exp->namespace)) {
-            $this->log(LogLevel::DEBUG, "Skip experiment because not in namespace", [
-                "experiment" => $exp->key
-            ]);
-            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
-        }
 
-        // 8. Condition fails
-        if ($exp->condition && !Condition::evalCondition($this->attributes, $exp->condition)) {
-            $this->log(LogLevel::DEBUG, "Skip experiment because of targeting conditions", [
-                "experiment" => $exp->key
-            ]);
-            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
+            // 8. Condition fails
+            if ($exp->condition && !Condition::evalCondition($this->attributes, $exp->condition)) {
+                $this->log(LogLevel::DEBUG, "Skip experiment because of targeting conditions", [
+                    "experiment" => $exp->key
+                ]);
+                return new ExperimentResult($exp, $hashAttribute, $hashValue, -1, false, $featureId);
+            }
         }
 
         // 9. Calculate bucket ranges
-        $ranges = $exp->ranges ?? static::getBucketRanges(count($exp->variations), $exp->coverage, $exp->weights ?? []);
         $n = static::hash(
             $exp->seed ?? $exp->key,
             $hashValue,
@@ -482,17 +543,28 @@ class Growthbook implements LoggerAwareInterface
             $this->log(LogLevel::DEBUG, "Skip experiment because of invalid hash version", [
                 "experiment" => $exp->key
             ]);
-            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
+            return new ExperimentResult($exp, $hashAttribute, $hashValue, -1, false, $featureId);
         }
-        $assigned = static::chooseVariation($n, $ranges);
+        if (!$foundStickyBucket) {
+            $ranges = $exp->ranges ?? static::getBucketRanges(count($exp->variations), $exp->coverage, $exp->weights ?? []);
+            $assigned = static::chooseVariation($n, $ranges);
+        }
+
+        if ($stickyBucketVersionIsBlocked) {
+            $this->log(LogLevel::DEBUG, "Skip experiment because sticky bucket version is blocked", [
+                "experiment" => $exp->key
+            ]);
+            return new ExperimentResult($exp, $hashAttribute, $hashValue, -1, false, $featureId, null, true);
+        }
 
         // 10. Not assigned
         if ($assigned === -1) {
             $this->log(LogLevel::DEBUG, "Skip experiment because user is not included in a variation", [
                 "experiment" => $exp->key
             ]);
-            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
+            return new ExperimentResult($exp, $hashAttribute, $hashValue, -1, false, $featureId);
         }
+
 
         // 11. Forced variation
         if ($exp->force !== null) {
@@ -500,7 +572,7 @@ class Growthbook implements LoggerAwareInterface
                 "experiment" => $exp->key,
                 "variation" => $exp->force
             ]);
-            return new ExperimentResult($exp, $hashValue, $exp->force, false, $featureId);
+            return new ExperimentResult($exp, $hashAttribute, $hashValue, $exp->force, false, $featureId);
         }
 
         // 12. QA mode
@@ -508,11 +580,27 @@ class Growthbook implements LoggerAwareInterface
             $this->log(LogLevel::DEBUG, "Skip experiment because Growthbook instance in QA Mode", [
                 "experiment" => $exp->key
             ]);
-            return new ExperimentResult($exp, $hashValue, -1, false, $featureId);
+            return new ExperimentResult($exp, $hashAttribute, $hashValue, -1, false, $featureId);
         }
 
         // 13. Build the result object
-        $result = new ExperimentResult($exp, $hashValue, $assigned, true, $featureId, $n);
+        $result = new ExperimentResult($exp, $hashAttribute, $hashValue, $assigned, true, $featureId, $n, $foundStickyBucket);
+
+        //13.5 Persist sticky bucket
+        if ($this->stickyBucketService && !$exp->disableStickyBucketing) {
+            $assignments[$this->getStickyBucketExperimentKey($exp->key, $exp->bucketVersion)] = $result->key;
+
+            $data = $this->generateStickyBucketAssignmentDoc($hashAttribute, $hashValue, $assignments);
+
+            $doc = $data['doc'] ?? null;
+            if ($doc && $data['changed'] ?? false) {
+                if (!$this->stickyBucketAssignmentDocs) {
+                    $this->stickyBucketAssignmentDocs = [];
+                }
+                $this->stickyBucketAssignmentDocs[$data['key']] = $doc;
+                $this->stickyBucketService->saveAssignments($doc);
+            }
+        }
 
         // 14. Fire tracking callback
         $this->tracks[$exp->key] = new ViewedExperiment($exp, $result);
@@ -538,7 +626,7 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @param string $level
      * @param string $message
-     * @param mixed $context
+     * @param mixed  $context
      */
     public function log(string $level, string $message, $context = []): void
     {
@@ -553,8 +641,7 @@ class Growthbook implements LoggerAwareInterface
         if ($version === 2) {
             $n = hexdec(hash("fnv1a32", hexdec(hash("fnv1a32", $seed . $value)) . ""));
             return ($n % 10000) / 10000;
-        }
-        // Original hashing algorithm (with a bias flaw)
+        } // Original hashing algorithm (with a bias flaw)
         elseif ($version === 1) {
             $n = hexdec(hash("fnv1a32", $value . $seed));
             return ($n % 1000) / 1000;
@@ -564,7 +651,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param float $n
+     * @param float                  $n
      * @param array{0:float,1:float} $range
      * @return bool
      */
@@ -574,20 +661,20 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param string $seed
-     * @param string|null $hashAttribute
+     * @param string                      $seed
+     * @param string|null                 $hashAttribute
      * @param array{0:float,1:float}|null $range
-     * @param float|null $coverage
-     * @param int|null $hashVersion
+     * @param float|null                  $coverage
+     * @param int|null                    $hashVersion
      * @return bool
      */
-    private function isIncludedInRollout(string $seed, ?string $hashAttribute = null, ?array $range = null, ?float $coverage = null, ?int $hashVersion = null): bool
+    private function isIncludedInRollout(string $seed, ?string $hashAttribute = null, ?string $fallbackAttribute = null, ?array $range = null, ?float $coverage = null, ?int $hashVersion = null): bool
     {
         if ($coverage === null && $range === null) {
             return true;
         }
 
-        $hashValue = strval($this->attributes[$hashAttribute ?? "id"] ?? "");
+        list(, $hashValue) = $this->getHashValue($hashAttribute, $fallbackAttribute);
         if ($hashValue === "") {
             return false;
         }
@@ -605,9 +692,27 @@ class Growthbook implements LoggerAwareInterface
         return true;
     }
 
-    private function getHashValue(string $hashAttribute): string
+    private function getHashValue(?string $hashAttribute = null, ?string $fallbackAttribute = null): array
     {
-        return strval($this->attributes[$hashAttribute ?? "id"] ?? "");
+        $attribute = $hashAttribute ?? "id";
+        $val = "";
+
+        if (array_key_exists($attribute, $this->attributes)) {
+            $val = $this->attributes[$attribute] ?? "";
+        }
+
+        if (($val === "" || $val === null) && $fallbackAttribute && $this->stickyBucketService) {
+
+            if (array_key_exists($fallbackAttribute, $this->attributes)) {
+                $val = $this->attributes[$fallbackAttribute] ?? "";
+            }
+
+            if (!$val || $val != "") {
+                $attribute = $fallbackAttribute;
+            }
+        }
+
+        return [$attribute, strval($val)];
     }
 
     /**
@@ -617,7 +722,7 @@ class Growthbook implements LoggerAwareInterface
     private function isFilteredOut(array $filters): bool
     {
         foreach ($filters as $filter) {
-            $hashValue = $this->getHashValue($filter["attribute"] ?? "id");
+            list(,$hashValue) = $this->getHashValue($filter["attribute"] ?? "id");
             if ($hashValue === "") {
                 return false;
             }
@@ -643,7 +748,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param string $userId
+     * @param string                          $userId
      * @param array{0:string,1:float,2:float} $namespace
      * @return bool
      */
@@ -674,8 +779,8 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param int $numVariations
-     * @param float $coverage
+     * @param int            $numVariations
+     * @param float          $coverage
      * @param null|(float[]) $weights
      * @return array{0:float,1:float}[]
      */
@@ -702,7 +807,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param float $n
+     * @param float                    $n
      * @param array{0:float,1:float}[] $ranges
      * @return int
      */
@@ -710,7 +815,7 @@ class Growthbook implements LoggerAwareInterface
     {
         foreach ($ranges as $i => $range) {
             if (self::inRange($n, $range)) {
-                return (int) $i;
+                return (int)$i;
             }
         }
         return -1;
@@ -719,7 +824,7 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @param string $id
      * @param string $url
-     * @param int $numVariations
+     * @param int    $numVariations
      * @return int|null
      */
     public static function getQueryStringOverride(string $id, string $url, int $numVariations): ?int
@@ -738,7 +843,7 @@ class Growthbook implements LoggerAwareInterface
         }
 
         // Make sure it's a valid variation integer
-        $variation = (int) $params[$id];
+        $variation = (int)$params[$id];
         if ($variation < 0 || $variation >= $numVariations) {
             return null;
         }
@@ -820,5 +925,157 @@ class Growthbook implements LoggerAwareInterface
             $this->cache->set($cacheKey, json_encode($features), $this->cacheTTL);
             $this->log(LogLevel::INFO, "Cache features", ["url" => $url, "numFeatures" => count($features), "ttl" => $this->cacheTTL]);
         }
+    }
+
+    private function getStickyBucketVariation(string $key, ?int $bucketVersion, ?int $minBucketVersion, ?array $meta, ?string $hashAttribute, ?string $fallbackAttribute): array
+    {
+        $bucketVersion = $bucketVersion ?? 0;
+        $minBucketVersion = $minBucketVersion ?? 0;
+        $meta = $meta ?? [];
+        $id = $this->getStickyBucketExperimentKey($key, $bucketVersion);
+        $assignments = $this->getStickyBucketAssignments($hashAttribute, $fallbackAttribute);
+
+        if ($minBucketVersion > 0) {
+
+            for ($i = 0; $i < $minBucketVersion; $i++) {
+                $blockedKey = $this->getStickyBucketExperimentKey($key, $i);
+
+                if (array_key_exists($blockedKey, $assignments)) {
+                    return [
+                        "variation" => -1,
+                        "versionIsBlocked" => true
+                    ];
+                }
+            }
+        }
+
+        $variationKey = $assignments[$id] ?? null;
+        if (!$variationKey) {
+            return [
+                "variation" => -1,
+            ];
+        }
+        $variation = -1;
+        foreach ($meta as $i => $v) {
+            if (isset($v['key']) && $v['key'] === $variationKey) {
+                $variation = $i;
+                break;
+            }
+        }
+
+        if ($variation < 0) {
+            return ['variation' => -1];
+        }
+
+        return ['variation' => $variation];
+    }
+
+    private function getStickyBucketExperimentKey(string $experimentKey, int $bucketVersion = 0): string
+    {
+        return $experimentKey . "__" . $bucketVersion;
+    }
+
+    private function getStickyBucketAssignments(?string $hashAttribute = null, ?string $fallbackAttribute = null): array
+    {
+        $merged = [];
+        list(, $hashValue) = $this->getHashValue($hashAttribute);
+        $key = $hashAttribute . '||' . $hashValue;
+
+        if (array_key_exists($key, $this->stickyBucketAssignmentDocs)) {
+            $merged = $this->stickyBucketAssignmentDocs[$key]->getAssignments();
+        }
+
+        if ($fallbackAttribute) {
+            list(,$hashValue) = $this->getHashValue($fallbackAttribute);
+            $key = $fallbackAttribute . '||' . $hashValue;
+            if (array_key_exists($key, $this->stickyBucketAssignmentDocs)) {
+                foreach ($this->stickyBucketAssignmentDocs[$key]->getAssignments() as $key => $value) {
+                    if (!array_key_exists($key, $merged)) {
+                        $merged[$key] = $value;
+                    }
+                }
+            }
+        }
+        return $merged;
+    }
+
+
+    private function generateStickyBucketAssignmentDoc(string $hashAttribute, string $hashValue, array $assignments): array
+    {
+        $key = $hashAttribute . '||' . $hashValue;
+        $doc = $this->stickyBucketAssignmentDocs[$key] ?? null;
+        $existingAssignments = [];
+        if (!is_null($doc)) {
+            $existingAssignments = $doc->getAssignments();
+        }
+
+        $newAssignments = array_merge($existingAssignments, $assignments);
+        $existingJson = json_encode($existingAssignments, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_NUMERIC_CHECK);
+        $newJson = json_encode($newAssignments, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_NUMERIC_CHECK);
+        $changed = $existingJson !== $newJson;
+
+        return [
+            'key' => $key,
+            'doc' => new StickyAssignmentDocument($hashAttribute, $hashValue, $newAssignments),
+            'changed' => $changed
+        ];
+    }
+
+    private function refreshStickyBuckets(bool $force = false): void
+    {
+        if (!$this->stickyBucketService) {
+            return;
+        }
+
+        $attributes = $this->getStickyBucketAttributes();
+
+        if (!$force && $attributes ==$this->stickyBucketAttributes){
+            $this->log(LogLevel::DEBUG, "Skipping refresh of sticky bucket assignments, no changes");
+            return;
+        }
+
+        $this->stickyBucketAttributes = $attributes;
+        $this->stickyBucketAssignmentDocs = $this->stickyBucketService->getAllAssignments($attributes);
+    }
+
+    private function getStickyBucketAttributes(): array
+    {
+        $attributes = [];
+
+        if ($this->usingDerivedStickyBucketAttributes) {
+            $this->stickyBucketIdentifierAttributes = $this->deriveStickyBucketIdentifierAttributes();
+        }
+
+        if (!$this->stickyBucketIdentifierAttributes) {
+            return $attributes;
+        }
+
+        foreach ($this->stickyBucketIdentifierAttributes as $attr) {
+            list(, $hashValue) = $this->getHashValue($attr);
+
+            if ($hashValue) {
+                $attributes[$attr] = $hashValue;
+            }
+        }
+
+        return $attributes;
+    }
+
+    private function deriveStickyBucketIdentifierAttributes(): array
+    {
+        $attributes = [];
+
+        foreach ($this->features as $key => $feature) {
+            foreach ($feature->rules as $rule) {
+                if (!empty($rule->variations)) {
+                    $attributes[] = $rule->hashAttribute ?? "id";
+                    if (!empty($rule->fallbackAttribute)) {
+                        $attributes[] = $rule->fallbackAttribute;
+                    }
+                }
+            }
+        }
+
+        return array_unique($attributes);
     }
 }

@@ -25,6 +25,8 @@ class InlineExperiment
     public $namespace;
     /** @var string */
     public $hashAttribute;
+    /** @var null|string */
+    public $fallbackAttribute;
     /** @var null|array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[] */
     public $filters;
     /** @var null|string */
@@ -39,6 +41,14 @@ class InlineExperiment
     public $name;
     /** @var null|string */
     public $phase;
+    /** @var bool */
+    public $disableStickyBucketing;
+
+    /** @var int */
+    public $bucketVersion;
+
+    /** @var int */
+    public $minBucketVersion;
 
     /**
      * @param string $key
@@ -73,6 +83,13 @@ class InlineExperiment
         $this->ranges = $options["ranges"] ?? null;
         $this->name = $options["name"] ?? null;
         $this->phase = $options["phase"] ?? null;
+        $this->disableStickyBucketing = $options["disableStickyBucketing"] ?? false;
+        $this->bucketVersion = $options["bucketVersion"] ?? 0;
+        $this->minBucketVersion = $options["minBucketVersion"] ?? 0;
+        $this->fallbackAttribute = null;
+        if (!$this->disableStickyBucketing) {
+            $this->fallbackAttribute = $options["fallbackAttribute"] ?? null;
+        }
     }
 
     /**

@@ -7,7 +7,6 @@ namespace Growthbook;
  */
 class StickyAssignmentDocument
 {
-
     /**
      * @var string
      */

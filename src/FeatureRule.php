@@ -166,7 +166,7 @@ class FeatureRule
         if (isset($this->hashVersion)) {
             $exp->hashVersion = $this->hashVersion;
         }
-        if (isset($this->disableStickyBucketing)){
+        if (isset($this->disableStickyBucketing)) {
             $exp->disableStickyBucketing = $this->disableStickyBucketing;
         }
         if (isset($this->bucketVersion)) {

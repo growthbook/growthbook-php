@@ -433,7 +433,7 @@ class Growthbook implements LoggerAwareInterface
             $this->log(LogLevel::DEBUG, "Skip experiment because there aren't enough variations", [
                 "experiment" => $exp->key
             ]);
-            return new ExperimentResult($exp, "id","", -1, false, $featureId);
+            return new ExperimentResult($exp, "id", "", -1, false, $featureId);
         }
 
         // 2. Growthbook disabled
@@ -722,7 +722,7 @@ class Growthbook implements LoggerAwareInterface
     private function isFilteredOut(array $filters): bool
     {
         foreach ($filters as $filter) {
-            list(,$hashValue) = $this->getHashValue($filter["attribute"] ?? "id");
+            list(, $hashValue) = $this->getHashValue($filter["attribute"] ?? "id");
             if ($hashValue === "") {
                 return false;
             }
@@ -986,7 +986,7 @@ class Growthbook implements LoggerAwareInterface
         }
 
         if ($fallbackAttribute) {
-            list(,$hashValue) = $this->getHashValue($fallbackAttribute);
+            list(, $hashValue) = $this->getHashValue($fallbackAttribute);
             $key = $fallbackAttribute . '||' . $hashValue;
             if (array_key_exists($key, $this->stickyBucketAssignmentDocs)) {
                 foreach ($this->stickyBucketAssignmentDocs[$key]->getAssignments() as $key => $value) {
@@ -1029,7 +1029,7 @@ class Growthbook implements LoggerAwareInterface
 
         $attributes = $this->getStickyBucketAttributes();
 
-        if (!$force && $attributes ==$this->stickyBucketAttributes){
+        if (!$force && $attributes ==$this->stickyBucketAttributes) {
             $this->log(LogLevel::DEBUG, "Skipping refresh of sticky bucket assignments, no changes");
             return;
         }

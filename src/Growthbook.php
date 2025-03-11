@@ -330,11 +330,36 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
+     * @param array<array<string, mixed>> $parentConditions
+     * @param array<string> $stack
+     * @return string
+     */
+    private function evalPrereqs(array $parentConditions, array $stack): string
+    {
+        foreach ($parentConditions as $parentCondition) {
+            $parentRes = $this->getFeature($parentCondition['id'] ?? null, $stack);
+
+            if ($parentRes->source === "cyclicPrerequisite") {
+                return "cyclic";
+            }
+
+            if (!Condition::evalCondition(['value' => $parentRes->value], $parentCondition['condition'] ?? null)) {
+                if ($parentCondition['gate'] ?? false) {
+                    return "gate";
+                }
+                return "fail";
+            }
+        }
+        return "pass";
+    }
+
+    /**
      * @template T
      * @param string $key
+     * @param array  $stack
      * @return FeatureResult<T>|FeatureResult<null>
      */
-    public function getFeature(string $key): FeatureResult
+    public function getFeature(string $key, array $stack = []): FeatureResult
     {
         if (!array_key_exists($key, $this->features)) {
             $this->log(LogLevel::DEBUG, "Unknown feature - $key");
@@ -342,6 +367,14 @@ class Growthbook implements LoggerAwareInterface
         }
         $this->log(LogLevel::DEBUG, "Evaluating feature - $key");
         $feature = $this->features[$key];
+
+        if(in_array($key, $stack)) {
+            $this->log(LogLevel::WARNING, "Cyclic prerequisite detected, stack", [
+                "stack" => $stack,
+            ]);
+            return new FeatureResult(null, "cyclicPrerequisite");
+        }
+        $stack[] = $key;
 
         // Check if the feature is forced
         if (array_key_exists($key, $this->forcedFeatures)) {
@@ -355,6 +388,25 @@ class Growthbook implements LoggerAwareInterface
 
         if ($feature->rules) {
             foreach ($feature->rules as $rule) {
+                if ($rule->parentConditions) {
+                    $prereqRes = $this->evalPrereqs($rule->parentConditions, $stack);
+                    if ($prereqRes === 'gate') {
+                        $this->log(LogLevel::DEBUG, "Top-level prerequisite failed, return None, feature", [
+                            "feature" => $key,
+                        ]);
+                        return new FeatureResult(null, "prerequisite");
+                    }
+                    if ($prereqRes === 'cyclic') {
+                        return new FeatureResult(null, "cyclicPrerequisite");
+                    }
+                    if ($prereqRes === 'fail') {
+                        $this->log(LogLevel::DEBUG, "Skip rule because of failing prerequisite, feature", [
+                            "feature" => $key,
+                        ]);
+                        continue;
+                    }
+                }
+
                 if ($rule->condition) {
                     if (!Condition::evalCondition($this->attributes, $rule->condition)) {
                         $this->log(LogLevel::DEBUG, "Skip rule because of targeting condition", [
@@ -546,6 +598,23 @@ class Growthbook implements LoggerAwareInterface
                     "experiment" => $exp->key
                 ]);
                 return new ExperimentResult($exp, $hashAttribute, $hashValue, -1, false, $featureId);
+            }
+
+            //8.05 Exclude if parent conditions are not met
+            if ($exp->parentConditions) {
+                $prereqRes = $this->evalPrereqs($exp->parentConditions, []);
+                if (in_array( $prereqRes, ['gate', 'fail'])) {
+                    $this->log(LogLevel::DEBUG, "Skip experiment because of failing prerequisite", [
+                        "experiment" => $exp->key,
+                    ]);
+                    return new ExperimentResult($exp, $hashAttribute, $hashValue, -1, false, $featureId);
+                }
+                if ($prereqRes === 'cyclic') {
+                    $this->log(LogLevel::DEBUG, "Skip experiment because of cyclic prerequisite", [
+                        "experiment" => $exp->key,
+                    ]);
+                    return new ExperimentResult($exp, $hashAttribute, $hashValue, -1, false, $featureId);
+                }
             }
         }
 

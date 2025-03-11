@@ -50,6 +50,9 @@ class FeatureRule
     /** @var null|int */
     public $minBucketVersion;
 
+    /** @var null|array */
+    public $parentConditions;
+
     /**
      * @param array{condition:?array<string,mixed>,coverage:?float,force:?T,variations:?T[],key:?string,weights:?float[],namespace:?array{0:string,1:float,2:float},hashAttribute:?string,fallbackAttribute:?string,filters?:array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[],seed?:string,hashVersion?:int,range?:array{0:float,1:float},meta?:array{key?:string,name?:string,passthrough?:bool}[],ranges?:array{0:float,1:float}[],name?:string,phase?:string,disableStickyBucketing?:bool,bucketVersion?:int,minBucketVersion?:int} $rule
      */
@@ -115,6 +118,9 @@ class FeatureRule
         if (array_key_exists("minBucketVersion", $rule)) {
             $this->minBucketVersion = $rule["minBucketVersion"];
         }
+        if (array_key_exists("parentConditions", $rule)) {
+            $this->parentConditions = $rule["parentConditions"];
+        }
     }
 
     /**
@@ -173,6 +179,12 @@ class FeatureRule
         }
         if (isset($this->minBucketVersion)) {
             $exp->minBucketVersion = $this->minBucketVersion;
+        }
+        if (isset($this->condition)) {
+            $exp->condition = $this->condition;
+        }
+        if (isset($this->parentConditions)) {
+            $exp->parentConditions = $this->parentConditions;
         }
 
         return $exp;

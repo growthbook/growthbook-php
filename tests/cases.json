@@ -1,5 +1,5 @@
 {
-  "specVersion": "0.5.0",
+  "specVersion": "0.5.4",
   "evalCondition": [
     [
       "$not - pass",
@@ -56,6 +56,104 @@
         }
       },
       true
+    ],
+    [
+      "$groups - match",
+      {
+        "$and": [
+          {
+            "$groups": {
+              "$elemMatch": { "$eq": "a" }
+            }
+          },
+          {
+            "$groups": {
+              "$elemMatch": { "$eq": "b" }
+            }
+          },
+          {
+            "$or": [
+              {
+                "$groups": {
+                  "$elemMatch": { "$eq": "c" }
+                }
+              },
+              {
+                "$groups": {
+                  "$elemMatch": { "$eq": "e" }
+                }
+              }
+            ]
+          },
+          {
+            "$not": {
+              "$groups": {
+                "$elemMatch": { "$eq": "f" }
+              }
+            }
+          },
+          {
+            "$not": {
+              "$groups": {
+                "$elemMatch": { "$eq": "g" }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "$groups": ["a", "b", "c", "d"]
+      },
+      true
+    ],
+    [
+      "$groups - no match",
+      {
+        "$and": [
+          {
+            "$groups": {
+              "$elemMatch": { "$eq": "a" }
+            }
+          },
+          {
+            "$groups": {
+              "$elemMatch": { "$eq": "b" }
+            }
+          },
+          {
+            "$or": [
+              {
+                "$groups": {
+                  "$elemMatch": { "$eq": "c" }
+                }
+              },
+              {
+                "$groups": {
+                  "$elemMatch": { "$eq": "e" }
+                }
+              }
+            ]
+          },
+          {
+            "$not": {
+              "$groups": {
+                "$elemMatch": { "$eq": "d" }
+              }
+            }
+          },
+          {
+            "$not": {
+              "$groups": {
+                "$elemMatch": { "$eq": "g" }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "$groups": ["a", "b", "c", "d"]
+      },
+      false
     ],
     [
       "$and/$or - first or true",
@@ -518,6 +616,46 @@
         "hello": "world"
       },
       false
+    ],
+    [
+      "missing attribute with comparison operators",
+      {
+        "age": {
+          "$gt": -10,
+          "$lt": 10,
+          "$gte": -9,
+          "$lte": 9,
+          "$ne": 10
+        }
+      },
+      {},
+      true
+    ],
+    [
+      "comparing numbers and strings",
+      {
+        "n": {
+          "$gt": 5,
+          "$lt": 10
+        }
+      },
+      {
+        "n": "8"
+      },
+      true
+    ],
+    [
+      "comparing numbers and strings - v2",
+      {
+        "n": {
+          "$gt": "5",
+          "$lt": "10"
+        }
+      },
+      {
+        "n": 8
+      },
+      true
     ],
     [
       "empty $or - pass",
@@ -2199,6 +2337,32 @@
       }
     ],
     [
+      "force rule - coverage with integer hash attribute",
+      {
+        "attributes": {
+          "id": 3
+        },
+        "features": {
+          "feature": {
+            "defaultValue": 2,
+            "rules": [
+              {
+                "force": 1,
+                "coverage": 0.5
+              }
+            ]
+          }
+        }
+      },
+      "feature",
+      {
+        "value": 1,
+        "on": true,
+        "off": false,
+        "source": "force"
+      }
+    ],
+    [
       "force rules - coverage excluded",
       {
         "attributes": {
@@ -2375,10 +2539,7 @@
         "off": false,
         "experiment": {
           "key": "feature",
-          "variations": ["a", "b", "c"],
-          "disableStickyBucketing": false,
-          "bucketVersion": 0,
-          "minBucketVersion": 0
+          "variations": ["a", "b", "c"]
         },
         "experimentResult": {
           "featureId": "feature",
@@ -2418,10 +2579,7 @@
         "off": false,
         "experiment": {
           "key": "feature",
-          "variations": ["a", "b", "c"],
-          "disableStickyBucketing": false,
-          "bucketVersion": 0,
-          "minBucketVersion": 0
+          "variations": ["a", "b", "c"]
         },
         "experimentResult": {
           "featureId": "feature",
@@ -2461,10 +2619,7 @@
         "off": false,
         "experiment": {
           "key": "feature",
-          "variations": ["a", "b", "c"],
-          "disableStickyBucketing": false,
-          "bucketVersion": 0,
-          "minBucketVersion": 0
+          "variations": ["a", "b", "c"]
         },
         "experimentResult": {
           "featureId": "feature",
@@ -2567,9 +2722,7 @@
           "key": "hello",
           "variations": [true, false],
           "weights": [0.1, 0.9],
-          "disableStickyBucketing": false,
-          "bucketVersion": 0,
-          "minBucketVersion": 0
+          "condition": { "premium": true }
         },
         "experimentResult": {
           "featureId": "feature",
@@ -2765,10 +2918,7 @@
         "source": "experiment",
         "experiment": {
           "key": "feature",
-          "variations": [0, 1],
-          "disableStickyBucketing": false,
-          "bucketVersion": 0,
-          "minBucketVersion": 0
+          "variations": [0, 1]
         },
         "experimentResult": {
           "featureId": "feature",
@@ -2840,10 +2990,7 @@
         "source": "experiment",
         "experiment": {
           "key": "feature",
-          "variations": [0, 1, 2, 3],
-          "disableStickyBucketing": false,
-          "bucketVersion": 0,
-          "minBucketVersion": 0
+          "variations": [0, 1, 2, 3]
         },
         "experimentResult": {
           "featureId": "feature",
@@ -3048,10 +3195,7 @@
           "ranges": [
             [0, 0.5],
             [0.5, 1.0]
-          ],
-          "disableStickyBucketing": false,
-          "bucketVersion": 0,
-          "minBucketVersion": 0
+          ]
         },
         "experimentResult": {
           "featureId": "feature",
@@ -3124,10 +3268,7 @@
             }
           ],
           "key": "holdout",
-          "variations": [1, 2],
-          "disableStickyBucketing": false,
-          "bucketVersion": 0,
-          "minBucketVersion": 0
+          "variations": [1, 2]
         },
         "experimentResult": {
           "featureId": "feature",
@@ -3141,6 +3282,376 @@
           "bucket": 0.8043,
           "stickyBucketUsed": false
         }
+      }
+    ],
+    [
+      "Prerequisite flag off, block dependent flag",
+      {
+        "attributes": {
+          "id": "123",
+          "memberType": "basic",
+          "country": "Canada"
+        },
+        "features": {
+          "parentFlag": {
+            "defaultValue": "silver",
+            "rules": [
+              {
+                "condition": { "country": "Canada" },
+                "force": "red"
+              },
+              {
+                "condition": { "country": { "$in": ["USA", "Mexico"] } },
+                "force": "green"
+              }
+            ]
+          },
+          "childFlag": {
+            "defaultValue": "default",
+            "rules": [
+              {
+                "parentConditions": [
+                  {
+                    "id": "parentFlag",
+                    "condition": { "value": "green" },
+                    "gate": true
+                  }
+                ]
+              },
+              {
+                "condition": { "memberType": "basic" },
+                "force": "success"
+              }
+            ]
+          }
+        }
+      },
+      "childFlag",
+      {
+        "value": null,
+        "on": false,
+        "off": true,
+        "source": "prerequisite"
+      }
+    ],
+    [
+      "Prerequisite flag missing, block dependent flag",
+      {
+        "attributes": {
+          "id": "123",
+          "memberType": "basic",
+          "country": "Canada"
+        },
+        "features": {
+          "childFlag": {
+            "defaultValue": "default",
+            "rules": [
+              {
+                "parentConditions": [
+                  {
+                    "id": "parentFlag",
+                    "condition": { "value": "green" },
+                    "gate": true
+                  }
+                ]
+              },
+              {
+                "condition": { "memberType": "basic" },
+                "force": "success"
+              }
+            ]
+          }
+        }
+      },
+      "childFlag",
+      {
+        "value": null,
+        "on": false,
+        "off": true,
+        "source": "prerequisite"
+      }
+    ],
+    [
+      "Prerequisite flag on, evaluate dependent flag",
+      {
+        "attributes": {
+          "id": "123",
+          "memberType": "basic",
+          "country": "USA"
+        },
+        "features": {
+          "parentFlag": {
+            "defaultValue": "silver",
+            "rules": [
+              {
+                "condition": { "country": "Canada" },
+                "force": "red"
+              },
+              {
+                "condition": { "country": { "$in": ["USA", "Mexico"] } },
+                "force": "green"
+              }
+            ]
+          },
+          "childFlag": {
+            "defaultValue": "default",
+            "rules": [
+              {
+                "parentConditions": [
+                  {
+                    "id": "parentFlag",
+                    "condition": { "value": "green" },
+                    "gate": true
+                  }
+                ]
+              },
+              {
+                "condition": { "memberType": "basic" },
+                "force": "success"
+              }
+            ]
+          }
+        }
+      },
+      "childFlag",
+      {
+        "value": "success",
+        "on": true,
+        "off": false,
+        "source": "force"
+      }
+    ],
+    [
+      "Multiple parallel prerequisite flags on, evaluate dependent flag",
+      {
+        "attributes": {
+          "id": "123",
+          "memberType": "basic",
+          "country": "USA"
+        },
+        "features": {
+          "parentFlag1": {
+            "defaultValue": "silver",
+            "rules": [
+              {
+                "condition": { "country": "Canada" },
+                "force": "red"
+              },
+              {
+                "condition": { "country": { "$in": ["USA", "Mexico"] } },
+                "force": "green"
+              }
+            ]
+          },
+          "parentFlag2": {
+            "defaultValue": 0,
+            "rules": [
+              {
+                "condition": { "id": "123" },
+                "force": 2
+              }
+            ]
+          },
+          "childFlag": {
+            "defaultValue": "default",
+            "rules": [
+              {
+                "parentConditions": [
+                  {
+                    "id": "parentFlag1",
+                    "condition": { "value": "green" },
+                    "gate": true
+                  }
+                ]
+              },
+              {
+                "parentConditions": [
+                  {
+                    "id": "parentFlag2",
+                    "condition": { "value": { "$gt": 1 } },
+                    "gate": true
+                  }
+                ]
+              },
+              {
+                "condition": { "memberType": "basic" },
+                "force": "success"
+              }
+            ]
+          }
+        }
+      },
+      "childFlag",
+      {
+        "value": "success",
+        "on": true,
+        "off": false,
+        "source": "force"
+      }
+    ],
+    [
+      "Multiple nested prerequisite flags on, evaluate dependent flag",
+      {
+        "attributes": {
+          "id": "123",
+          "memberType": "basic",
+          "country": "USA"
+        },
+        "features": {
+          "parentFlag1": {
+            "defaultValue": "silver",
+            "rules": [
+              {
+                "parentConditions": [
+                  {
+                    "id": "parentFlag2",
+                    "condition": { "value": { "$gt": 1 } },
+                    "gate": true
+                  }
+                ]
+              },
+              {
+                "condition": { "country": "Canada" },
+                "force": "red"
+              },
+              {
+                "condition": { "country": { "$in": ["USA", "Mexico"] } },
+                "force": "green"
+              }
+            ]
+          },
+          "parentFlag2": {
+            "defaultValue": 0,
+            "rules": [
+              {
+                "condition": { "id": "123" },
+                "force": 2
+              }
+            ]
+          },
+          "childFlag": {
+            "defaultValue": "default",
+            "rules": [
+              {
+                "parentConditions": [
+                  {
+                    "id": "parentFlag1",
+                    "condition": { "value": "green" },
+                    "gate": true
+                  }
+                ]
+              },
+              {
+                "condition": { "memberType": "basic" },
+                "force": "success"
+              }
+            ]
+          }
+        }
+      },
+      "childFlag",
+      {
+        "value": "success",
+        "on": true,
+        "off": false,
+        "source": "force"
+      }
+    ],
+    [
+      "Prerequisite experiment flag in target bucket, evaluate dependent flag",
+      {
+        "attributes": {
+          "id": "1234",
+          "memberType": "basic",
+          "country": "USA"
+        },
+        "features": {
+          "parentExperimentFlag": {
+            "defaultValue": 0,
+            "rules": [
+              {
+                "key": "experiment",
+                "variations": [0, 1],
+                "hashAttribute": "id",
+                "hashVersion": 2,
+                "ranges": [
+                  [0, 0.5],
+                  [0.5, 1.0]
+                ]
+              }
+            ]
+          },
+          "childFlag": {
+            "defaultValue": "default",
+            "rules": [
+              {
+                "parentConditions": [
+                  {
+                    "id": "parentExperimentFlag",
+                    "condition": { "value": 1 },
+                    "gate": true
+                  }
+                ]
+              },
+              {
+                "condition": { "memberType": "basic" },
+                "force": "success"
+              }
+            ]
+          }
+        }
+      },
+      "childFlag",
+      {
+        "value": "success",
+        "on": true,
+        "off": false,
+        "source": "force"
+      }
+    ],
+    [
+      "Prerequisite cycle detected, break",
+      {
+        "attributes": {
+          "id": "123"
+        },
+        "features": {
+          "flag1": {
+            "defaultValue": true,
+            "rules": [
+              {
+                "parentConditions": [
+                  {
+                    "id": "flag2",
+                    "condition": { "value": true },
+                    "gate": true
+                  }
+                ]
+              }
+            ]
+          },
+          "flag2": {
+            "defaultValue": true,
+            "rules": [
+              {
+                "parentConditions": [
+                  {
+                    "id": "flag1",
+                    "condition": { "value": true },
+                    "gate": true
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "flag1",
+      {
+        "value": null,
+        "on": false,
+        "off": true,
+        "source": "cyclicPrerequisite"
       }
     ]
   ],
@@ -3972,6 +4483,58 @@
       1,
       true,
       true
+    ],
+    [
+      "Prerequisite condition passes",
+      {
+        "attributes": { "id": "1" },
+        "features": {
+          "parentFlag": {
+            "defaultValue": true
+          }
+        }
+      },
+      {
+        "key": "my-test",
+        "variations": [0, 1],
+        "parentConditions": [
+          {
+            "id": "parentFlag",
+            "condition": {
+              "value": true
+            }
+          }
+        ]
+      },
+      1,
+      true,
+      true
+    ],
+    [
+      "Prerequisite condition fails",
+      {
+        "attributes": { "id": "1" },
+        "features": {
+          "parentFlag": {
+            "defaultValue": false
+          }
+        }
+      },
+      {
+        "key": "my-test",
+        "variations": [0, 1],
+        "parentConditions": [
+          {
+            "id": "parentFlag",
+            "condition": {
+              "value": true
+            }
+          }
+        ]
+      },
+      0,
+      false,
+      false
     ]
   ],
   "chooseVariation": [
@@ -4748,6 +5311,176 @@
           "assignments": { "feature-exp__0": "1" }
         }
       }
+    ]
+  ],
+  "urlRedirect": [
+    [
+      "redirects correctly without query strings",
+      {
+        "attributes": { "id": "1" },
+        "url": "http://www.example.com/home",
+        "experiments": [
+          {
+            "key": "my-experiment",
+            "urlPatterns": [
+              {
+                "type": "simple",
+                "include": true,
+                "pattern": "http://www.example.com/home"
+              }
+            ],
+            "weights": [0.1, 0.9],
+            "variations": [
+              {},
+              {
+                "urlRedirect": "http://www.example.com/home-new"
+              }
+            ]
+          }
+        ]
+      },
+      [
+        {
+          "inExperiment": true,
+          "urlRedirect": "http://www.example.com/home-new",
+          "urlWithParams": "http://www.example.com/home-new"
+        }
+      ]
+    ],
+    [
+      "redirects with query string on original url and persistQueryString enabled",
+      {
+        "attributes": { "id": "1" },
+        "url": "http://www.example.com/home?color=blue&food=sushi",
+        "experiments": [
+          {
+            "key": "my-experiment",
+            "urlPatterns": [
+              {
+                "type": "simple",
+                "include": true,
+                "pattern": "http://www.example.com/home"
+              }
+            ],
+            "weights": [0.1, 0.9],
+            "variations": [
+              {},
+              {
+                "urlRedirect": "http://www.example.com/home-new"
+              }
+            ],
+            "persistQueryString": true
+          }
+        ]
+      },
+      [
+        {
+          "inExperiment": true,
+          "urlRedirect": "http://www.example.com/home-new",
+          "urlWithParams": "http://www.example.com/home-new?color=blue&food=sushi"
+        }
+      ]
+    ],
+    [
+      "merges query strings on original url & redirect url with param conflicts correctly when persistQueryString enabled",
+      {
+        "attributes": { "id": "1" },
+        "url": "http://www.example.com/home?color=blue&food=sushi&title=original",
+        "experiments": [
+          {
+            "key": "my-experiment",
+            "urlPatterns": [
+              {
+                "type": "simple",
+                "include": true,
+                "pattern": "http://www.example.com/home"
+              }
+            ],
+            "weights": [0.1, 0.9],
+            "variations": [
+              {},
+              {
+                "urlRedirect": "http://www.example.com/home-new?name=test&color=red&food=lasagna"
+              }
+            ],
+            "persistQueryString": true
+          }
+        ]
+      },
+      [
+        {
+          "inExperiment": true,
+          "urlRedirect": "http://www.example.com/home-new?name=test&color=red&food=lasagna",
+          "urlWithParams": "http://www.example.com/home-new?name=test&color=red&food=lasagna&title=original"
+        }
+      ]
+    ],
+    [
+      "only performs a redirect for first eligible experiment when there are multiple eligible experiments",
+      {
+        "attributes": { "id": "1" },
+        "url": "http://www.example.com/home",
+        "experiments": [
+          {
+            "key": "my-experiment",
+            "urlPatterns": [
+              {
+                "type": "simple",
+                "include": true,
+                "pattern": "http://www.example.com/"
+              }
+            ],
+            "weights": [0.1, 0.9],
+            "variations": [
+              {},
+              {
+                "urlRedirect": "http://www.example.com/home-new"
+              }
+            ]
+          },
+          {
+            "key": "my-experiment-2",
+            "urlPatterns": [
+              {
+                "type": "simple",
+                "include": true,
+                "pattern": "http://www.example.com/home"
+              }
+            ],
+            "weights": [0.1, 0.9],
+            "variations": [
+              {},
+              {
+                "urlRedirect": "http://www.example.com/home-new-new"
+              }
+            ]
+          },
+          {
+            "key": "my-experiment-3",
+            "urlPatterns": [
+              {
+                "type": "simple",
+                "include": true,
+                "pattern": "http://www.example.com/home"
+              }
+            ],
+            "weights": [0.1, 0.9],
+            "variations": [
+              {},
+              {
+                "urlRedirect": "http://www.example.com/home-es"
+              }
+            ]
+          }
+        ]
+      },
+      [
+        {
+          "inExperiment": true,
+          "urlRedirect": "http://www.example.com/home-new-new",
+          "urlWithParams": "http://www.example.com/home-new-new"
+        }
+      ]
     ]
   ]
 }

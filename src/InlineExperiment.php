@@ -49,6 +49,10 @@ class InlineExperiment
 
     /** @var int|null */
     public $minBucketVersion;
+    /**
+     * @var array|null
+     */
+    public $parentConditions;
 
     /**
      * @param string $key
@@ -83,11 +87,10 @@ class InlineExperiment
         $this->ranges = $options["ranges"] ?? null;
         $this->name = $options["name"] ?? null;
         $this->phase = $options["phase"] ?? null;
-        $this->disableStickyBucketing = $options["disableStickyBucketing"] ?? false;
-        $this->bucketVersion = $options["bucketVersion"] ?? 0;
-        $this->minBucketVersion = $options["minBucketVersion"] ?? 0;
+        $this->disableStickyBucketing = $options["disableStickyBucketing"] ?? null;
         $this->bucketVersion = $options["bucketVersion"] ?? null;
         $this->minBucketVersion = $options["minBucketVersion"] ?? null;
+        $this->parentConditions = $options["parentConditions"] ?? null;
         $this->fallbackAttribute = null;
         if (!is_null($this->disableStickyBucketing)) {
             $this->fallbackAttribute = $options["fallbackAttribute"] ?? null;

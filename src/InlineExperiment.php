@@ -41,13 +41,13 @@ class InlineExperiment
     public $name;
     /** @var null|string */
     public $phase;
-    /** @var bool */
+    /** @var null|bool */
     public $disableStickyBucketing;
 
-    /** @var int */
+    /** @var int|null */
     public $bucketVersion;
 
-    /** @var int */
+    /** @var int|null */
     public $minBucketVersion;
 
     /**
@@ -86,8 +86,10 @@ class InlineExperiment
         $this->disableStickyBucketing = $options["disableStickyBucketing"] ?? false;
         $this->bucketVersion = $options["bucketVersion"] ?? 0;
         $this->minBucketVersion = $options["minBucketVersion"] ?? 0;
+        $this->bucketVersion = $options["bucketVersion"] ?? null;
+        $this->minBucketVersion = $options["minBucketVersion"] ?? null;
         $this->fallbackAttribute = null;
-        if (!$this->disableStickyBucketing) {
+        if (!is_null($this->disableStickyBucketing)) {
             $this->fallbackAttribute = $options["fallbackAttribute"] ?? null;
         }
     }

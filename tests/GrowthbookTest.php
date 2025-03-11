@@ -7,7 +7,6 @@ use Growthbook\FeatureResult;
 use Growthbook\Growthbook;
 use Growthbook\InlineExperiment;
 use Growthbook\InMemoryStickyBucketService;
-use Growthbook\StickyAssignmentDocument;
 use PHPUnit\Framework\TestCase;
 
 final class GrowthbookTest extends TestCase
@@ -463,7 +462,7 @@ final class GrowthbookTest extends TestCase
     /**
      * @dataProvider getStickyBucketProvider
      * @param array<string,mixed>       $ctx
-     * @param array<array>                     $docs
+     * @param array<array>              $docs
      * @param string                    $key
      * @param array<string, mixed>|null $expectedResult
      * @param array<string, array>      $expectedDocs
@@ -474,7 +473,7 @@ final class GrowthbookTest extends TestCase
         $service = new InMemoryStickyBucketService();
 
         foreach ($docs as $doc) {
-            $service->saveAssignments(new StickyAssignmentDocument($doc['attributeName'], $doc['attributeValue'], $doc['assignments']));
+            $service->saveAssignments(['attributeName' => $doc['attributeName'], 'attributeValue' => $doc['attributeValue'], 'assignments' => $doc['assignments']]);
         }
 
         $ctx['stickyBucketService'] = $service;
@@ -495,9 +494,7 @@ final class GrowthbookTest extends TestCase
         }
 
         foreach ($expectedDocs as $key => $value) {
-            $this->assertEquals($service->docs[$key]->getAttributeName(), $value['attributeName']);
-            $this->assertEquals($service->docs[$key]->getAttributeValue(), $value['attributeValue']);
-            $this->assertEquals($service->docs[$key]->getAssignments(), $value['assignments']);
+            $this->assertEquals($service->docs[$key], $value);
         }
 
         $service->destroy();
@@ -544,7 +541,7 @@ final class GrowthbookTest extends TestCase
 
         $this->assertEquals(1, $gb->getFeature('feature')->value);
         $this->assertEquals(
-            new StickyAssignmentDocument('id', 1, ['exp__0' => 'variation1']),
+            ['attributeName' => 'id', 'attributeValue' => 1, 'assignments' => ['exp__0' => 'variation1']],
             $service->getAssignments('id', 1)
         );
 
@@ -573,10 +570,8 @@ final class GrowthbookTest extends TestCase
         $this->assertEquals(0, $gb->getFeature('feature')->value);
 
         $this->assertEquals(
-            new StickyAssignmentDocument('id', 1, [
-                'exp__0' => 'variation1',
-                "exp__1" => "control",
-            ]),
+            ['attributeName' => 'id', 'attributeValue' => 1, 'assignments' => ['exp__0' => 'variation1',
+                "exp__1" => "control"]],
             $service->getAssignments('id', 1)
         );
     }

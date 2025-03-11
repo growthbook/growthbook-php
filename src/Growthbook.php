@@ -63,16 +63,16 @@ class Growthbook implements LoggerAwareInterface
     private $tracks = [];
 
     /** @var StickyBucketService|null */
-    private ?StickyBucketService $stickyBucketService = null;
+    private $stickyBucketService = null;
 
     /** @var array<string>|null */
-    private ?array $stickyBucketIdentifierAttributes = null;
-    /** @var array<string, StickyAssignmentDocument> */
-    private array $stickyBucketAssignmentDocs = [];
+    private $stickyBucketIdentifierAttributes = null;
+    /** @var array<string, array> */
+    private $stickyBucketAssignmentDocs = [];
     /** @var bool */
-    private bool $usingDerivedStickyBucketAttributes;
+    private $usingDerivedStickyBucketAttributes;
     /** @var null|array<string, string> */
-    private ?array $stickyBucketAttributes = null;
+    private $stickyBucketAttributes = null;
 
     public static function create(): Growthbook
     {
@@ -246,6 +246,7 @@ class Growthbook implements LoggerAwareInterface
     {
         $this->stickyBucketService = $stickyBucketService;
         $this->stickyBucketIdentifierAttributes = $stickyBucketIdentifierAttributes;
+        $this->usingDerivedStickyBucketAttributes = !isset($this->stickyBucketIdentifierAttributes);
 
         return $this;
     }
@@ -603,7 +604,7 @@ class Growthbook implements LoggerAwareInterface
 
         //13.5 Persist sticky bucket
         if ($this->stickyBucketService && !$exp->disableStickyBucketing) {
-            $assignments[$this->getStickyBucketExperimentKey($exp->key, $exp->bucketVersion)] = $result->key;
+            $assignments[$this->getStickyBucketExperimentKey($exp->key, $exp->bucketVersion ?? 0)] = $result->key;
 
             $data = $this->generateStickyBucketAssignmentDoc($hashAttribute, $hashValue, $assignments);
 
@@ -1034,14 +1035,15 @@ class Growthbook implements LoggerAwareInterface
         $key = $hashAttribute . '||' . $hashValue;
 
         if (array_key_exists($key, $this->stickyBucketAssignmentDocs)) {
-            $merged = $this->stickyBucketAssignmentDocs[$key]->getAssignments();
+            $merged = $this->stickyBucketAssignmentDocs[$key]['assignments'];
         }
 
         if ($fallbackAttribute) {
             list(, $hashValue) = $this->getHashValue($fallbackAttribute);
+
             $key = $fallbackAttribute . '||' . $hashValue;
             if (array_key_exists($key, $this->stickyBucketAssignmentDocs)) {
-                foreach ($this->stickyBucketAssignmentDocs[$key]->getAssignments() as $key => $value) {
+                foreach ($this->stickyBucketAssignmentDocs[$key]['assignments'] as $key => $value) {
                     if (!array_key_exists($key, $merged)) {
                         $merged[$key] = $value;
                     }
@@ -1055,7 +1057,7 @@ class Growthbook implements LoggerAwareInterface
      * @param string                $hashAttribute
      * @param string                $hashValue
      * @param array<string, string> $assignments
-     * @return array{key:string,doc:StickyAssignmentDocument,changed:bool}
+     * @return array{key:string,doc:array,changed:bool}
      */
     private function generateStickyBucketAssignmentDoc(string $hashAttribute, string $hashValue, array $assignments): array
     {
@@ -1063,7 +1065,7 @@ class Growthbook implements LoggerAwareInterface
         $doc = $this->stickyBucketAssignmentDocs[$key] ?? null;
         $existingAssignments = [];
         if (!is_null($doc)) {
-            $existingAssignments = $doc->getAssignments();
+            $existingAssignments = $doc['assignments'];
         }
 
         $newAssignments = array_merge($existingAssignments, $assignments);
@@ -1073,7 +1075,11 @@ class Growthbook implements LoggerAwareInterface
 
         return [
             'key' => $key,
-            'doc' => new StickyAssignmentDocument($hashAttribute, $hashValue, $newAssignments),
+            'doc' => [
+                'attributeName' => $hashAttribute,
+                'attributeValue' => $hashValue,
+                'assignments' => $newAssignments
+            ],
             'changed' => $changed
         ];
     }

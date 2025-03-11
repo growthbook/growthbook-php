@@ -170,6 +170,39 @@ class Condition
         return false;
     }
 
+
+    /**
+     * @param mixed $val1
+     * @param mixed $val2
+     * @return int
+     */
+    private static function compare($val1, $val2): int
+    {
+        if ((is_int($val1) || is_float($val1)) && !(is_int($val2) || is_float($val2))) {
+            if ($val2 === null) {
+                $val2 = 0;
+            } else {
+                $val2 = (float)$val2;
+            }
+        }
+
+        if ((is_int($val2) || is_float($val2)) && !(is_int($val1) || is_float($val1))) {
+            if ($val1 === null) {
+                $val1 = 0;
+            } else {
+                $val1 = (float)$val1;
+            }
+        }
+
+        if ($val1 > $val2) {
+            return 1;
+        }
+        if ($val1 < $val2) {
+            return -1;
+        }
+        return 0;
+    }
+
     /**
      * @param string $operator
      * @param mixed $attributeValue
@@ -180,17 +213,17 @@ class Condition
     {
         switch ($operator) {
             case '$eq':
-                return $attributeValue == $conditionValue;
+                return static::compare($attributeValue, $conditionValue) === 0;
             case '$ne':
-                return $attributeValue != $conditionValue;
+                return static::compare($attributeValue, $conditionValue) !== 0;
             case '$lt':
-                return $attributeValue < $conditionValue;
+                return static::compare($attributeValue, $conditionValue) < 0;
             case '$lte':
-                return $attributeValue <= $conditionValue;
+                return static::compare($attributeValue, $conditionValue) <= 0;
             case '$gt':
-                return $attributeValue > $conditionValue;
+                return static::compare($attributeValue, $conditionValue) > 0;
             case '$gte':
-                return $attributeValue >= $conditionValue;
+                return static::compare($attributeValue, $conditionValue) >= 0;
             case '$veq':
                 return static::parseVersionString($attributeValue) === static::parseVersionString($conditionValue);
             case '$vne':

@@ -18,6 +18,7 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @return array<int|string,mixed[]>
+     * @throws Exception
      */
     protected function getCases(string $section, bool $extractName = true): array
     {
@@ -53,7 +54,7 @@ final class GrowthbookTest extends TestCase
     /**
      * @dataProvider getBucketRangeProvider
      * @param array{0:int,1:float,2:null|float[]} $args
-     * @param array{0:float,1:float}[]            $expected
+     * @param array{0:float,1:float}[] $expected
      */
     public function testGetBucketRange(array $args, array $expected): void
     {
@@ -97,7 +98,7 @@ final class GrowthbookTest extends TestCase
      * @dataProvider evalConditionProvider
      * @param array<string,mixed> $condition
      * @param array<string,mixed> $attributes
-     * @param bool                $expected
+     * @param bool $expected
      */
     public function testEvalCondition(array $condition, array $attributes, bool $expected): void
     {
@@ -151,9 +152,9 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider chooseVariationProvider
-     * @param float                    $n
+     * @param float $n
      * @param array{0:float,1:float}[] $ranges
-     * @param int                      $expected
+     * @param int $expected
      */
     public function testChooseVariation(float $n, array $ranges, int $expected): void
     {
@@ -171,9 +172,9 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider inNamespaceProvider
-     * @param string                          $id
+     * @param string $id
      * @param array{0:string,1:float,2:float} $namespace
-     * @param bool                            $expected
+     * @param bool $expected
      */
     public function testInNamespace(string $id, array $namespace, bool $expected): void
     {
@@ -191,7 +192,7 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider getEqualWeightsProvider
-     * @param int     $numVariations
+     * @param int $numVariations
      * @param float[] $expected
      */
     public function testGetEqualWeights(int $numVariations, array $expected): void
@@ -216,8 +217,8 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider decryptProvider
-     * @param string      $encryptedString
-     * @param string      $key
+     * @param string $encryptedString
+     * @param string $key
      * @param string|null $expected
      */
     public function testDecrypt(string $encryptedString, string $key, ?string $expected = null): void
@@ -250,7 +251,7 @@ final class GrowthbookTest extends TestCase
     /**
      * @dataProvider featureProvider
      * @param array<string,mixed> $ctx
-     * @param string              $key
+     * @param string $key
      * @param array<string,mixed> $expected
      */
     public function testFeature(array $ctx, string $key, array $expected): void
@@ -276,7 +277,7 @@ final class GrowthbookTest extends TestCase
     }
 
     /**
-     * @param mixed               $obj
+     * @param mixed $obj
      * @param array<string,mixed> $ref
      * @return array<string,mixed>
      * @throws Exception
@@ -310,9 +311,9 @@ final class GrowthbookTest extends TestCase
      * @dataProvider getRunProvider
      * @param array<string,mixed> $ctx
      * @param array<string,mixed> $exp
-     * @param mixed               $expectedValue
-     * @param bool                $inExperiment
-     * @param bool                $hashUsed
+     * @param mixed $expectedValue
+     * @param bool $inExperiment
+     * @param bool $hashUsed
      */
     public function testRun(array $ctx, array $exp, $expectedValue, bool $inExperiment, bool $hashUsed): void
     {
@@ -461,11 +462,11 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider getStickyBucketProvider
-     * @param array<string,mixed>       $ctx
-     * @param array<array>              $docs
-     * @param string                    $key
+     * @param array<string,mixed> $ctx
+     * @param array<array> $docs
+     * @param string $key
      * @param array<string, mixed>|null $expectedResult
-     * @param array<string, array>      $expectedDocs
+     * @param array<string, array> $expectedDocs
      * @throws Exception
      */
     public function testStickyBucket(array $ctx, array $docs, string $key, ?array $expectedResult, array $expectedDocs): void

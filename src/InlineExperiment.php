@@ -50,7 +50,7 @@ class InlineExperiment
     /** @var int|null */
     public $minBucketVersion;
     /**
-     * @var array|null
+     * @var array<string,mixed>|null
      */
     public $parentConditions;
 

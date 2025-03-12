@@ -10,7 +10,7 @@ class InMemoryStickyBucketService extends StickyBucketService
     /**
      * @param string $attributeName
      * @param mixed $attributeValue
-     * @return array|null
+     * @return array<string,mixed>|null
      */
     public function getAssignments(string $attributeName, $attributeValue): ?array
     {
@@ -18,7 +18,7 @@ class InMemoryStickyBucketService extends StickyBucketService
     }
 
     /**
-     * @param array $doc
+     * @param array<string, mixed> $doc
      * @return void
      */
     public function saveAssignments(array $doc): void

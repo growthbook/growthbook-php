@@ -7,12 +7,12 @@ abstract class StickyBucketService
     /**
      * @param string $attributeName
      * @param string $attributeValue
-     * @return array|null
+     * @return array<string,mixed>|null
      */
     abstract public function getAssignments(string $attributeName, string $attributeValue): ?array;
 
     /**
-     * @param array $doc
+     * @param array<string,mixed> $doc
      * @return void
      */
     abstract public function saveAssignments(array $doc): void;
@@ -29,7 +29,7 @@ abstract class StickyBucketService
 
     /**
      * @param array<string, string> $attributes
-     * @return array<string, array>
+     * @return array<string, mixed>
      */
     public function getAllAssignments(array $attributes): array
     {

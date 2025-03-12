@@ -356,7 +356,7 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @template T
      * @param string $key
-     * @param array  $stack
+     * @param array<string>  $stack
      * @return FeatureResult<T>|FeatureResult<null>
      */
     public function getFeature(string $key, array $stack = []): FeatureResult
@@ -603,7 +603,7 @@ class Growthbook implements LoggerAwareInterface
             //8.05 Exclude if parent conditions are not met
             if ($exp->parentConditions) {
                 $prereqRes = $this->evalPrereqs($exp->parentConditions, []);
-                if (in_array( $prereqRes, ['gate', 'fail'])) {
+                if (in_array($prereqRes, ['gate', 'fail'])) {
                     $this->log(LogLevel::DEBUG, "Skip experiment because of failing prerequisite", [
                         "experiment" => $exp->key,
                     ]);

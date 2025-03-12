@@ -59,13 +59,13 @@ class ExperimentResult
 
     /**
      * @param InlineExperiment<T> $experiment
-     * @param string              $hashAttribute
-     * @param string              $hashValue
-     * @param int                 $variationIndex
-     * @param bool                $hashUsed
-     * @param string|null         $featureId
-     * @param float|null          $bucket
-     * @param bool                $stickyBucketUsed
+     * @param string $hashAttribute
+     * @param string $hashValue
+     * @param int $variationIndex
+     * @param bool $hashUsed
+     * @param string|null $featureId
+     * @param float|null $bucket
+     * @param bool $stickyBucketUsed
      */
     public function __construct(InlineExperiment $experiment, string $hashAttribute = 'id', string $hashValue = "", int $variationIndex = -1, bool $hashUsed = false, ?string $featureId = null, ?float $bucket = null, bool $stickyBucketUsed = false)
     {

@@ -6,6 +6,7 @@ use Growthbook\Condition;
 use Growthbook\FeatureResult;
 use Growthbook\Growthbook;
 use Growthbook\InlineExperiment;
+use Growthbook\InMemoryStickyBucketService;
 use PHPUnit\Framework\TestCase;
 
 final class GrowthbookTest extends TestCase
@@ -17,6 +18,7 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @return array<int|string,mixed[]>
+     * @throws Exception
      */
     protected function getCases(string $section, bool $extractName = true): array
     {
@@ -66,6 +68,7 @@ final class GrowthbookTest extends TestCase
             }
         }
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -82,6 +85,7 @@ final class GrowthbookTest extends TestCase
         $actual = Growthbook::hash($seed, $value, $version);
         $this->assertSame($actual, $expected);
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -100,6 +104,7 @@ final class GrowthbookTest extends TestCase
     {
         $this->assertSame(Condition::evalCondition($attributes, $condition), $expected);
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -135,6 +140,7 @@ final class GrowthbookTest extends TestCase
     {
         $this->assertSame(Growthbook::getQueryStringOverride($key, $url, $numVariations), $expected);
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -154,6 +160,7 @@ final class GrowthbookTest extends TestCase
     {
         $this->assertSame(Growthbook::chooseVariation($n, $ranges), $expected);
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -173,6 +180,7 @@ final class GrowthbookTest extends TestCase
     {
         $this->assertSame(Growthbook::inNamespace($id, $namespace), $expected);
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -197,6 +205,7 @@ final class GrowthbookTest extends TestCase
             return round($w, 8);
         }, $expected));
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -266,12 +275,14 @@ final class GrowthbookTest extends TestCase
 
         $this->assertEquals($expected, $actual);
     }
+
     /**
      * @param mixed $obj
      * @param array<string,mixed> $ref
      * @return array<string,mixed>
+     * @throws Exception
      */
-    public function removeNulls($obj, array $ref): array
+    public function removeNulls($obj, ?array $ref): array
     {
         $encoded = json_encode($obj);
         if (!$encoded) {
@@ -286,6 +297,7 @@ final class GrowthbookTest extends TestCase
 
         return $arr;
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -313,6 +325,7 @@ final class GrowthbookTest extends TestCase
         $this->assertSame($res->inExperiment, $inExperiment);
         $this->assertSame($res->hashUsed, $hashUsed);
     }
+
     /**
      * @return array<int|string,mixed[]>
      */
@@ -444,5 +457,123 @@ final class GrowthbookTest extends TestCase
             return true;
         }
         return array_keys($arr) === range(0, count($arr) - 1);
+    }
+
+
+    /**
+     * @dataProvider getStickyBucketProvider
+     * @param array<string,mixed> $ctx
+     * @param array<array> $docs
+     * @param string $key
+     * @param array<string, mixed>|null $expectedResult
+     * @param array<string, array> $expectedDocs
+     * @throws Exception
+     */
+    public function testStickyBucket(array $ctx, array $docs, string $key, ?array $expectedResult, array $expectedDocs): void
+    {
+        $service = new InMemoryStickyBucketService();
+
+        foreach ($docs as $doc) {
+            $service->saveAssignments(['attributeName' => $doc['attributeName'], 'attributeValue' => $doc['attributeValue'], 'assignments' => $doc['assignments']]);
+        }
+
+        $ctx['stickyBucketService'] = $service;
+
+        if (array_key_exists('stickyBucketAssignmentDocs', $ctx)) {
+            $service->docs = $ctx['stickyBucketAssignmentDocs'];
+            unset($ctx['stickyBucketAssignmentDocs']);
+        }
+
+        $gb = new Growthbook($ctx);
+
+        $res = $gb->getFeature($key);
+
+        if (!$res->experimentResult) {
+            $this->assertNull($expectedResult);
+        } else {
+            $this->assertEquals($expectedResult, $this->removeNulls($res->experimentResult, $expectedResult));
+        }
+
+        foreach ($expectedDocs as $key => $value) {
+            $this->assertEquals($service->docs[$key], $value);
+        }
+
+        $service->destroy();
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     * @throws Exception
+     */
+    public function getStickyBucketProvider(): array
+    {
+        return $this->getCases("stickyBucket");
+    }
+
+    /**
+     * @return void
+     */
+    public function testStickyBucketService(): void
+    {
+        $features = [
+            "feature" => [
+                "defaultValue" => 5,
+                "rules" => [[
+                    "key" => "exp",
+                    "variations" => [0, 1],
+                    "weights" => [0, 1],
+                    "meta" => [
+                        ["key" => "control"],
+                        ["key" => "variation1"]
+                    ]
+                ]]
+            ],
+        ];
+
+        $service = new InMemoryStickyBucketService();
+
+        $gb = new Growthbook(
+            [
+                'stickyBucketService' => $service,
+                'attributes' => ['id' => 1],
+                'features' => $features
+            ]
+        );
+
+        $this->assertEquals(1, $gb->getFeature('feature')->value);
+        $this->assertEquals(
+            ['attributeName' => 'id', 'attributeValue' => 1, 'assignments' => ['exp__0' => 'variation1']],
+            $service->getAssignments('id', 1)
+        );
+
+        $features['feature']['rules'][0]['weights'] = [1, 0];
+        $gb->withFeatures($features);
+        $this->assertEquals(1, $gb->getFeature('feature')->value);
+
+        //New GrowthBook instance should also get variation
+        $gb2 = new Growthbook(
+            [
+                'stickyBucketService' => $service,
+                'attributes' => ['id' => 1],
+                'features' => $features
+            ]
+        );
+        $this->assertEquals(1, $gb2->getFeature('feature')->value);
+
+        //New users should get control
+        $gb->withAttributes(['id' => 2]);
+        $this->assertEquals(0, $gb->getFeature('feature')->value);
+
+        //Bumping bucketVersion, should reset sticky buckets
+        $gb->withAttributes(['id' => 1]);
+        $features["feature"]["rules"][0]["bucketVersion"] = 1;
+        $gb->withFeatures($features);
+        $this->assertEquals(0, $gb->getFeature('feature')->value);
+
+        $this->assertEquals(
+            ['attributeName' => 'id', 'attributeValue' => 1, 'assignments' => ['exp__0' => 'variation1',
+                "exp__1" => "control"]],
+            $service->getAssignments('id', 1)
+        );
     }
 }

@@ -25,6 +25,8 @@ class InlineExperiment
     public $namespace;
     /** @var string */
     public $hashAttribute;
+    /** @var null|string */
+    public $fallbackAttribute;
     /** @var null|array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[] */
     public $filters;
     /** @var null|string */
@@ -39,6 +41,18 @@ class InlineExperiment
     public $name;
     /** @var null|string */
     public $phase;
+    /** @var null|bool */
+    public $disableStickyBucketing;
+
+    /** @var int|null */
+    public $bucketVersion;
+
+    /** @var int|null */
+    public $minBucketVersion;
+    /**
+     * @var array<string,mixed>|null
+     */
+    public $parentConditions;
 
     /**
      * @param string $key
@@ -53,7 +67,7 @@ class InlineExperiment
     /**
      * @param string $key
      * @param T[] $variations
-     * @param array{weights?:float[],coverage?:float,force?:int|null,active?:boolean,condition?:array<string,mixed>,namespace?:array{0:string,1:float,2:float},hashAttribute?:string,filters?:array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[],seed?:string,hashVersion?:int,meta?:array{key?:string,name?:string,passthrough?:bool}[],ranges?:array{0:float,1:float}[],name?:string,phase?:string} $options
+     * @param array{weights?: float[], coverage?: float, force?: int|null, active?: bool, condition?: array<string, mixed>, namespace?: array{0: string, 1: float, 2: float}, hashAttribute?: string, fallbackAttribute?: string, filters?: array{seed: string, ranges: array{0: float, 1: float}[], hashVersion?: int, attribute?: string}[], seed?: string, hashVersion?: int, meta?: array{key?: string, name?: string, passthrough?: bool}[], ranges?: array{0: float, 1: float}[], name?: string, phase?: string, disableStickyBucketing?: bool, bucketVersion?: int, minBucketVersion?: int} $options
      */
     public function __construct(string $key, $variations, array $options = [])
     {
@@ -73,6 +87,14 @@ class InlineExperiment
         $this->ranges = $options["ranges"] ?? null;
         $this->name = $options["name"] ?? null;
         $this->phase = $options["phase"] ?? null;
+        $this->disableStickyBucketing = $options["disableStickyBucketing"] ?? null;
+        $this->bucketVersion = $options["bucketVersion"] ?? null;
+        $this->minBucketVersion = $options["minBucketVersion"] ?? null;
+        $this->parentConditions = $options["parentConditions"] ?? null;
+        $this->fallbackAttribute = null;
+        if (!is_null($this->disableStickyBucketing)) {
+            $this->fallbackAttribute = $options["fallbackAttribute"] ?? null;
+        }
     }
 
     /**

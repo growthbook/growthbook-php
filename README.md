@@ -164,7 +164,7 @@ $attributes = [
 
 If you want to update attributes later, please note that the `withAttributes` method completely overwrites the attributes object.  You can use `array_merge` if you only want to update a subset of fields:
 
-```ts
+```php
 // Only update the url attribute
 $growthbook->withAttributes(array_merge(
   $growthbook->getAttributes(),
@@ -301,11 +301,74 @@ In addition, you can use `$growthbook->getFeature("feature-key")` to get back a 
 - **experiment** - Information about the experiment (if any) which was used to assign the value to the user
 - **experimentResult** - The result of the experiment (if any) which was used to assign the value to the user
 
+
+## Sticky Bucketing
+
+By default GrowthBook does not persist assigned experiment variations for a user. We rely on deterministic hashing to ensure that the same user attributes always map to the same experiment variation. However, there are cases where this isn't good enough. For example, if you change targeting conditions in the middle of an experiment, users may stop being shown a variation even if they were previously bucketed into it.
+
+Sticky Bucketing is a solution to these issues. You can provide a Sticky Bucket Service to the GrowthBook instance to persist previously seen variations and ensure that the user experience remains consistent for your users.
+
+A sample `InMemoryStickyBucketService` implementation is provided for reference, but in production you will definitely want to implement your own version using a database, cookies, or similar for persistence.
+
+Sticky Bucket documents contain three fields
+
+- `attributeName` - The name of the attribute used to identify the user (e.g. `id`, `cookie_id`, etc.)
+- `attributeValue` - The value of the attribute (e.g. `123`)
+- `assignments` - A dictionary of persisted experiment assignments. For example: `{"exp1__0":"control"}`
+
+The attributeName/attributeValue combo is the primary key.
+
+Here's an example implementation using a theoretical `db` object:
+
+```php
+class InMemoryStickyBucketService extends StickyBucketService
+{
+    /** @var array<string, StickyAssignmentDocument>  */
+    public array $docs = [];
+
+    /**
+     * @param string $attributeName
+     * @param mixed $attributeValue
+     * @return StickyAssignmentDocument|null
+     */
+    public function getAssignments(string $attributeName, $attributeValue): ?StickyAssignmentDocument
+    {
+        return $this->docs[$this->getKey($attributeName, $attributeValue)] ?? null;
+    }
+
+    /**
+     * @param StickyAssignmentDocument $doc
+     * @return void
+     */
+    public function saveAssignments(StickyAssignmentDocument $doc): void
+    {
+        $this->docs[$this->getKey($doc->getAttributeName(), $doc->getAttributeValue())] = $doc;
+    }
+
+    /**
+     * @return void
+     */
+    public function destroy(): void
+    {
+        $this->docs = [];
+    }
+}
+
+// Fluent interface
+$growthbook = Growthbook\Growthbook::create()
+  ->withStickyBucketing(new InMemoryStickyBucketService());
+
+// Using the constructor
+$growthbook = new Growthbook([
+  'stickyBucketService' => new InMemoryStickyBucketService()
+]);
+```
+
 ## Inline Experiments
 
 Instead of declaring all features up-front and referencing them by ids in your code, you can also just run an experiment directly. This is done with the `$growthbook->runInlineExperiment` method:
 
-```js
+```php
 $exp = Growthbook\InlineExperiment::create(
   "my-experiment", 
   ["red", "blue", "green"]

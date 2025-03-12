@@ -23,6 +23,8 @@ class FeatureRule
     public $namespace;
     /** @var null|string */
     public $hashAttribute;
+    /** @var null|string */
+    public $fallbackAttribute;
     /** @var null|array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[] */
     public $filters;
     /** @var null|string */
@@ -39,9 +41,20 @@ class FeatureRule
     public $name;
     /** @var null|string */
     public $phase;
+    /** @var null|bool */
+    public $disableStickyBucketing;
+
+    /** @var null|int */
+    public $bucketVersion;
+
+    /** @var null|int */
+    public $minBucketVersion;
+
+    /** @var null|array<string, mixed> */
+    public $parentConditions;
 
     /**
-     * @param array{condition:?array<string,mixed>,coverage:?float,force:?T,variations:?T[],key:?string,weights:?float[],namespace:?array{0:string,1:float,2:float},hashAttribute:?string,filters?:array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[],seed?:string,hashVersion?:int,range?:array{0:float,1:float},meta?:array{key?:string,name?:string,passthrough?:bool}[],ranges?:array{0:float,1:float}[],name?:string,phase?:string} $rule
+     * @param array{condition:?array<string,mixed>,coverage:?float,force:?T,variations:?T[],key:?string,weights:?float[],namespace:?array{0:string,1:float,2:float},hashAttribute:?string,fallbackAttribute:?string,filters?:array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[],seed?:string,hashVersion?:int,range?:array{0:float,1:float},meta?:array{key?:string,name?:string,passthrough?:bool}[],ranges?:array{0:float,1:float}[],name?:string,phase?:string,disableStickyBucketing:?bool,bucketVersion:?int,minBucketVersion:?int,parentConditions:?array<string,mixed>} $rule
      */
     public function __construct(array $rule)
     {
@@ -69,6 +82,9 @@ class FeatureRule
         if (array_key_exists("hashAttribute", $rule)) {
             $this->hashAttribute = $rule["hashAttribute"];
         }
+        if (array_key_exists('fallbackAttribute', $rule)) {
+            $this->fallbackAttribute = $rule['fallbackAttribute'];
+        }
         if (array_key_exists("filters", $rule)) {
             $this->filters = $rule["filters"];
         }
@@ -93,6 +109,18 @@ class FeatureRule
         if (array_key_exists("phase", $rule)) {
             $this->phase = $rule["phase"];
         }
+        if (array_key_exists("disableStickyBucketing", $rule)) {
+            $this->disableStickyBucketing = $rule["disableStickyBucketing"];
+        }
+        if (array_key_exists("bucketVersion", $rule)) {
+            $this->bucketVersion = $rule["bucketVersion"];
+        }
+        if (array_key_exists("minBucketVersion", $rule)) {
+            $this->minBucketVersion = $rule["minBucketVersion"];
+        }
+        if (array_key_exists("parentConditions", $rule)) {
+            $this->parentConditions = $rule["parentConditions"];
+        }
     }
 
     /**
@@ -115,6 +143,9 @@ class FeatureRule
         }
         if (isset($this->hashAttribute)) {
             $exp->hashAttribute = $this->hashAttribute;
+        }
+        if (isset($this->fallbackAttribute)) {
+            $exp->fallbackAttribute = $this->fallbackAttribute;
         }
         if (isset($this->namespace)) {
             $exp->namespace = $this->namespace;
@@ -139,6 +170,21 @@ class FeatureRule
         }
         if (isset($this->hashVersion)) {
             $exp->hashVersion = $this->hashVersion;
+        }
+        if (isset($this->disableStickyBucketing)) {
+            $exp->disableStickyBucketing = $this->disableStickyBucketing;
+        }
+        if (isset($this->bucketVersion)) {
+            $exp->bucketVersion = $this->bucketVersion;
+        }
+        if (isset($this->minBucketVersion)) {
+            $exp->minBucketVersion = $this->minBucketVersion;
+        }
+        if (isset($this->condition)) {
+            $exp->condition = $this->condition;
+        }
+        if (isset($this->parentConditions)) {
+            $exp->parentConditions = $this->parentConditions;
         }
 
         return $exp;

@@ -22,6 +22,8 @@ class Growthbook implements LoggerAwareInterface
     private $url = "";
     /** @var array<string,mixed> */
     private $attributes = [];
+    /** @var array<string,array<string,mixed>> */
+    private $savedGroups = [];
     /** @var Feature<mixed>[] */
     private $features = [];
     /** @var array<string, FeatureResult<mixed>> */
@@ -80,7 +82,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>} $options
      */
     public function __construct(array $options = [])
     {
@@ -100,7 +102,9 @@ class Growthbook implements LoggerAwareInterface
             "requestFactory",
             "decryptionKey",
             "stickyBucketService",
-            "stickyBucketIdentifierAttributes"
+            "stickyBucketIdentifierAttributes",
+            "savedGroups",
+            "encryptedSavedGroups"
         ];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
@@ -132,12 +136,14 @@ class Growthbook implements LoggerAwareInterface
         if (array_key_exists("forcedFeatures", $options)) {
             $this->withForcedFeatures($options['forcedFeatures']);
         }
-
         if (array_key_exists("features", $options)) {
             $this->withFeatures(($options["features"]));
         }
         if (array_key_exists("attributes", $options)) {
             $this->withAttributes(($options["attributes"]));
+        }
+        if (array_key_exists("savedGroups", $options)) {
+            $this->withSavedGroups(($options["savedGroups"]));
         }
     }
 
@@ -149,6 +155,16 @@ class Growthbook implements LoggerAwareInterface
     {
         $this->attributes = $attributes;
         $this->refreshStickyBuckets();
+        return $this;
+    }
+
+    /**
+     * @param array<string,mixed> $savedGroups
+     * @return Growthbook
+     */
+    public function withSavedGroups(array $savedGroups): Growthbook
+    {
+        $this->savedGroups = $savedGroups;
         return $this;
     }
 
@@ -343,7 +359,7 @@ class Growthbook implements LoggerAwareInterface
                 return "cyclic";
             }
 
-            if (!Condition::evalCondition(['value' => $parentRes->value], $parentCondition['condition'] ?? null)) {
+            if (!Condition::evalCondition(['value' => $parentRes->value], $parentCondition['condition'] ?? null, $this->savedGroups)) {
                 if ($parentCondition['gate'] ?? false) {
                     return "gate";
                 }
@@ -408,7 +424,7 @@ class Growthbook implements LoggerAwareInterface
                 }
 
                 if ($rule->condition) {
-                    if (!Condition::evalCondition($this->attributes, $rule->condition)) {
+                    if (!Condition::evalCondition($this->attributes, $rule->condition, $this->savedGroups)) {
                         $this->log(LogLevel::DEBUG, "Skip rule because of targeting condition", [
                             "feature" => $key,
                             "condition" => $rule->condition
@@ -593,7 +609,7 @@ class Growthbook implements LoggerAwareInterface
             }
 
             // 8. Condition fails
-            if ($exp->condition && !Condition::evalCondition($this->attributes, $exp->condition)) {
+            if ($exp->condition && !Condition::evalCondition($this->attributes, $exp->condition, $this->savedGroups)) {
                 $this->log(LogLevel::DEBUG, "Skip experiment because of targeting conditions", [
                     "experiment" => $exp->key
                 ]);
@@ -1026,8 +1042,14 @@ class Growthbook implements LoggerAwareInterface
             ? json_decode($this->decrypt($parsed["encryptedFeatures"]), true)
             : $parsed["features"];
 
+        $savedGroups = array_key_exists("encryptedSavedGroups", $parsed)
+            ? json_decode($this->decrypt($parsed["encryptedSavedGroups"]), true)
+            : $parsed["savedGroups"];
+
         $this->log(LogLevel::INFO, "Load features from URL", ["url" => $url, "numFeatures" => count($features)]);
         $this->withFeatures($features);
+        $this->withSavedGroups($savedGroups);
+        // TODO: Should I cache savedGroups too?
         if ($this->cache) {
             $this->cache->set($cacheKey, json_encode($features), $this->cacheTTL);
             $this->log(LogLevel::INFO, "Cache features", ["url" => $url, "numFeatures" => count($features), "ttl" => $this->cacheTTL]);

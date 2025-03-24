@@ -99,10 +99,11 @@ final class GrowthbookTest extends TestCase
      * @param array<string,mixed> $condition
      * @param array<string,mixed> $attributes
      * @param bool $expected
+     * @param array<string,mixed> $savedGroups
      */
-    public function testEvalCondition(array $condition, array $attributes, bool $expected): void
+    public function testEvalCondition(array $condition, array $attributes, bool $expected, array $savedGroups = []): void
     {
-        $this->assertSame(Condition::evalCondition($attributes, $condition), $expected);
+        $this->assertSame(Condition::evalCondition($attributes, $condition, $savedGroups), $expected);
     }
 
     /**

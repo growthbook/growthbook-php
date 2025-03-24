@@ -368,7 +368,7 @@ class Growthbook implements LoggerAwareInterface
         $this->log(LogLevel::DEBUG, "Evaluating feature - $key");
         $feature = $this->features[$key];
 
-        if(in_array($key, $stack)) {
+        if (in_array($key, $stack)) {
             $this->log(LogLevel::WARNING, "Cyclic prerequisite detected, stack", [
                 "stack" => $stack,
             ]);
@@ -758,6 +758,10 @@ class Growthbook implements LoggerAwareInterface
     {
         if ($coverage === null && $range === null) {
             return true;
+        }
+
+        if ($coverage === 0.0 && $range === null) {
+            return false;
         }
 
         list(, $hashValue) = $this->getHashValue($hashAttribute, $fallbackAttribute);

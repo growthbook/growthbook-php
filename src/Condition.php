@@ -11,22 +11,36 @@ class Condition
      */
     public static function evalCondition(array $attributes, array $condition): bool
     {
-        if (isset($condition['$or'])) {
-            return static::evalOr($attributes, $condition['$or']);
-        }
-        if (isset($condition['$nor'])) {
-            return !static::evalOr($attributes, $condition['$nor']);
-        }
-        if (isset($condition['$and'])) {
-            return static::evalAnd($attributes, $condition['$and']);
-        }
-        if (isset($condition['$not'])) {
-            return !static::evalCondition($attributes, $condition['$not']);
-        }
-
         foreach ($condition as $key => $value) {
-            if (!static::evalConditionValue($value, static::getPath($attributes, $key))) {
-                return false;
+            switch ($key) {
+                case '$or':
+                    if (!static::evalOr($attributes, $condition['$or'])) {
+                        return false;
+                    }
+                    break;
+
+                case '$nor':
+                    if (static::evalOr($attributes, $condition['$nor'])) {
+                        return false;
+                    }
+                    break;
+
+                case '$and':
+                    if (!static::evalAnd($attributes, $condition['$and'])) {
+                        return false;
+                    }
+                    break;
+
+                case '$not':
+                    if (static::evalCondition($attributes, $condition['$not'])) {
+                        return false;
+                    }
+                    break;
+
+                default:
+                    if (!static::evalConditionValue($value, static::getPath($attributes, $key))) {
+                        return false;
+                    }
             }
         }
         return true;

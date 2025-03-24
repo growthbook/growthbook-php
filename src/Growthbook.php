@@ -1016,12 +1016,18 @@ class Growthbook implements LoggerAwareInterface
 
         // First try fetching from cache
         if ($this->cache) {
-            $featuresJSON = $this->cache->get($cacheKey);
-            if ($featuresJSON) {
-                $features = json_decode($featuresJSON, true);
-                if ($features && is_array($features)) {
-                    $this->log(LogLevel::INFO, "Load features from cache", ["url" => $url, "numFeatures" => count($features)]);
-                    $this->withFeatures($features);
+            $cacheJSON = $this->cache->get($cacheKey);
+            if ($cacheJSON) {
+                $cachedData = json_decode($cacheJSON, true);
+                if (is_array($cachedData)) {
+                    if (array_key_exists("features", $cachedData) && is_array($cachedData['features'])) {
+                        $this->log(LogLevel::INFO, "Load features from cache", ["url" => $url, "numFeatures" => count($cachedData['features'])]);
+                        $this->withFeatures($cachedData['features']);
+                    }
+                    if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
+                        $this->log(LogLevel::INFO, "Load saved groups from cache", ["url" => $url, "numGroups" => count($cachedData['savedGroups'])]);
+                        $this->withSavedGroups($cachedData['savedGroups']);
+                    }
                     return;
                 }
             }
@@ -1049,10 +1055,19 @@ class Growthbook implements LoggerAwareInterface
         $this->log(LogLevel::INFO, "Load features from URL", ["url" => $url, "numFeatures" => count($features)]);
         $this->withFeatures($features);
         $this->withSavedGroups($savedGroups);
-        // TODO: Should I cache savedGroups too?
+
         if ($this->cache) {
-            $this->cache->set($cacheKey, json_encode($features), $this->cacheTTL);
-            $this->log(LogLevel::INFO, "Cache features", ["url" => $url, "numFeatures" => count($features), "ttl" => $this->cacheTTL]);
+            $cacheData = [
+                'features' => $features,
+                'savedGroups' => $savedGroups
+            ];
+            $this->cache->set($cacheKey, json_encode($cacheData), $this->cacheTTL);
+            $this->log(LogLevel::INFO, "Cache features and saved groups", [
+                "url" => $url,
+                "numFeatures" => count($features),
+                "numGroups" => count($savedGroups),
+                "ttl" => $this->cacheTTL
+            ]);
         }
     }
 

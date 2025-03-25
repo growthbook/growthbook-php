@@ -6,12 +6,12 @@ Powerful Feature flagging and A/B testing for PHP.
 
 ![Build Status](https://github.com/growthbook/growthbook-php/workflows/Build/badge.svg)
 
--  **No external dependencies** (besides PSR interfaces)
--  **Extremely fast**, all evaluation happens locally
--  **PHP 7.1+** with 100% test coverage and phpstan on the highest level
--  **Advanced user and page targeting**
--  **Use your existing event tracking** (GA, Segment, Mixpanel, custom)
--  **Adjust variation weights and targeting** without deploying new code
+- **No external dependencies** (besides PSR interfaces)
+- **Extremely fast**, all evaluation happens locally
+- **PHP 7.1+** with 100% test coverage and phpstan on the highest level
+- **Advanced user and page targeting**
+- **Use your existing event tracking** (GA, Segment, Mixpanel, custom)
+- **Adjust variation weights and targeting** without deploying new code
 
 ## Installation
 
@@ -32,7 +32,7 @@ $growthbook = Growthbook\Growthbook::create()
 
 // Load feature flags from the GrowthBook API
 // Make sure to use caching in production! (see 'Loading Features' below)
-$growthbook->loadFeatures("sdk-abc123", "https://cdn.growthbook.io");
+$growthbook->initialize("sdk-abc123", "https://cdn.growthbook.io");
 
 // Feature gating
 if ($growthbook->isOn("my-feature")) {
@@ -67,11 +67,11 @@ foreach($impressions as $impression) {
 
 ### Loading Features
 
-There are 2 ways to load features into the SDK.  You can use `loadFeatures` with a Client Key and API Host.  Or, you can manually fetch and cache feature flags and pass them in with the `withFeatures` method.
+There are 2 ways to load features into the SDK. You can use `initialize` with a Client Key and API Host. Or, you can manually fetch and cache feature flags and pass them in with the `withFeatures` method.
 
-#### loadFeatures method
+#### initialize method
 
-The `loadFeatures` method can fetch features from the GrowthBook API for you.
+The `initialize` method can fetch features from the GrowthBook API for you.
 
 By default, there is no caching enabled. You can enable it by passing any PSR16-compatible instance into the `withCache` method.
 
@@ -93,9 +93,9 @@ $growthbook = Growthbook\Growthbook::create()
 
 To load features, we require a PSR-17 (HttpClient) and PSR-18 (RequestFactoryInterface) compatible library like Guzzle to be installed.
 
-We will auto-discover most HTTP libraries without any configuration required, but if you prefer to specify it explicitly, you can use the `withHttpClient` method.  Note - you'll need to specify both an `HttpClient` and a `RequestFactoryInterface` implementation.
+We will auto-discover most HTTP libraries without any configuration required, but if you prefer to specify it explicitly, you can use the `withHttpClient` method. Note - you'll need to specify both an `HttpClient` and a `RequestFactoryInterface` implementation.
 
-The `loadFeatures` method takes 3 arguments:
+The `initialize` method takes 3 arguments:
 
 - `$clientKey` (required) - Get this from your SDK Connection in GrowthBook.
 - `$apiHost` (optional) - Defaults to `https://cdn.growthbook.io`. If self-hosting GrowthBook, set this to your API host.
@@ -119,7 +119,7 @@ $growthbook = Growthbook\Growthbook::create()
 
 ## The Growthbook Class
 
-The `Growthbook` class has a number of properties.  These can be set using a Fluent interface or can be passed into a constructor using an associative array. Every property also has a getter method if needed. Here's an example:
+The `Growthbook` class has a number of properties. These can be set using a Fluent interface or can be passed into a constructor using an associative array. Every property also has a getter method if needed. Here's an example:
 
 ```php
 // Using the fluent interface
@@ -162,7 +162,7 @@ $attributes = [
 ];
 ```
 
-If you want to update attributes later, please note that the `withAttributes` method completely overwrites the attributes object.  You can use `array_merge` if you only want to update a subset of fields:
+If you want to update attributes later, please note that the `withAttributes` method completely overwrites the attributes object. You can use `array_merge` if you only want to update a subset of fields:
 
 ```php
 // Only update the url attribute
@@ -182,9 +182,9 @@ You can either do this via a callback function:
 
 ```php
 $trackingCallback = function (
-  Growthbook\InlineExperiment $experiment, 
+  Growthbook\InlineExperiment $experiment,
   Growthbook\ExperimentResult $result
-) {  
+) {
   // Segment.io example
   Segment::track([
     "userId" => $userId,
@@ -239,32 +239,35 @@ Or, you can pass the impressions onto your front-end and fire analytics events f
 Below are examples for a few popular front-end tracking libraries:
 
 #### Google Analytics
+
 ```php
-ga('send', 'event', 'experiment', 
-  "<?= $impression->experiment->key ?>", 
-  "<?= $impression->result->variationId ?>", 
+ga('send', 'event', 'experiment',
+  "<?= $impression->experiment->key ?>",
+  "<?= $impression->result->variationId ?>",
   {
     // Custom dimension for easier analysis
-    'dimension1': "<?= 
-      $impression->experiment->key.':'.$impression->result->key 
+    'dimension1': "<?=
+      $impression->experiment->key.':'.$impression->result->key
     ?>"
   }
 );
 ```
 
 #### Segment
+
 ```php
 analytics.track("Experiment Viewed", <?=json_encode([
   "experimentId" => $impression->experiment->key,
-  "variationId" => $impression->result->key 
+  "variationId" => $impression->result->key
 ])?>);
 ```
 
 #### Mixpanel
+
 ```php
 mixpanel.track("Experiment Viewed", <?=json_encode([
   'Experiment name' => $impression->experiment->key,
-  'Variant name' => $impression->result->key 
+  'Variant name' => $impression->result->key
 ])?>);
 ```
 
@@ -292,7 +295,6 @@ There are 3 main methods for interacting with features.
 - `$growthbook->isOff("feature-key")` returns false if the feature is on
 - `$growthbook->getValue("feature-key", "default")` returns the value of the feature with a fallback
 
-
 In addition, you can use `$growthbook->getFeature("feature-key")` to get back a `FeatureResult` object with the following properties:
 
 - **value** - The JSON-decoded value of the feature (or `null` if not defined)
@@ -300,7 +302,6 @@ In addition, you can use `$growthbook->getFeature("feature-key")` to get back a 
 - **source** - Why the value was assigned to the user. One of `unknownFeature`, `defaultValue`, `force`, or `experiment`
 - **experiment** - Information about the experiment (if any) which was used to assign the value to the user
 - **experimentResult** - The result of the experiment (if any) which was used to assign the value to the user
-
 
 ## Sticky Bucketing
 
@@ -370,15 +371,15 @@ Instead of declaring all features up-front and referencing them by ids in your c
 
 ```php
 $exp = Growthbook\InlineExperiment::create(
-  "my-experiment", 
+  "my-experiment",
   ["red", "blue", "green"]
 );
 
 // Either "red", "blue", or "green"
-echo $growthbook->runInlineExperiment($exp)->value; 
+echo $growthbook->runInlineExperiment($exp)->value;
 ```
 
-As you can see, there are 2 required parameters for experiments, a string key, and an array of variations.  Variations can be any data type, not just strings.
+As you can see, there are 2 required parameters for experiments, a string key, and an array of variations. Variations can be any data type, not just strings.
 
 There are a number of additional settings to control the experiment behavior. The methods are all chainable. Here's an example that shows all of the possible settings:
 

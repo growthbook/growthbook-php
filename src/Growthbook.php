@@ -1011,31 +1011,31 @@ class Growthbook implements LoggerAwareInterface
      * @throws ClientExceptionInterface
      * @throws Exception
      */
-    public function loadFeatures(string $clientKey, string $apiHost = "", string $decryptionKey = ""): void
+    public function initialize(string $clientKey, string $apiHost = "", string $decryptionKey = ""): void
     {
         $this->clientKey = $clientKey;
         $this->apiHost = $apiHost;
         $this->decryptionKey = $decryptionKey;
 
         if (!$this->clientKey) {
-            throw new Exception("Must specify a clientKey before loading features.");
+            throw new Exception("Must specify a clientKey before initializing.");
         }
         if (!$this->httpClient) {
-            throw new Exception("Must set an HTTP Client before loading features.");
+            throw new Exception("Must set an HTTP Client before initializing.");
         }
         if (!$this->requestFactory) {
-            throw new Exception("Must set an HTTP Request Factory before loading features");
+            throw new Exception("Must set an HTTP Request Factory before initializing");
         }
 
-        // The features URL is also the cache key
         $url = rtrim(empty($this->apiHost) ? self::DEFAULT_API_HOST : $this->apiHost, "/") . "/api/features/" . $this->clientKey;
-        $cacheKey = md5($url);
+        // Update when the cache format changes to prevent issues when updating the library version
+        $cacheKey = md5($url . 'v2');
 
         // First try fetching from cache
         if ($this->cache) {
-            $cacheJSON = $this->cache->get($cacheKey);
-            if ($cacheJSON) {
-                $cachedData = json_decode($cacheJSON, true);
+            $cachedResponse = $this->cache->get($cacheKey);
+            if ($cachedResponse) {
+                $cachedData = json_decode($cachedResponse, true);
                 if (is_array($cachedData)) {
                     if (array_key_exists("features", $cachedData) && is_array($cachedData['features'])) {
                         $this->log(LogLevel::INFO, "Load features from cache", ["url" => $url, "numFeatures" => count($cachedData['features'])]);
@@ -1060,7 +1060,7 @@ class Growthbook implements LoggerAwareInterface
             return;
         }
 
-        // Set features and cache for next time
+        // Set features and savedGroupd and cache for next time
         $features = array_key_exists("encryptedFeatures", $parsed)
             ? json_decode($this->decrypt($parsed["encryptedFeatures"]), true)
             : $parsed["features"];
@@ -1069,7 +1069,7 @@ class Growthbook implements LoggerAwareInterface
             ? json_decode($this->decrypt($parsed["encryptedSavedGroups"]), true)
             : $parsed["savedGroups"];
 
-        $this->log(LogLevel::INFO, "Load features from URL", ["url" => $url, "numFeatures" => count($features)]);
+        $this->log(LogLevel::INFO, "Load features and saved groups from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
         $this->withFeatures($features);
         $this->withSavedGroups($savedGroups);
 
@@ -1086,6 +1086,20 @@ class Growthbook implements LoggerAwareInterface
                 "ttl" => $this->cacheTTL
             ]);
         }
+    }
+
+    /**
+     * @deprecated Use initialize instead
+     * @param string $clientKey
+     * @param string $apiHost
+     * @param string $decryptionKey
+     * @return void
+     * @throws ClientExceptionInterface
+     * @throws Exception
+     */
+    public function loadFeatures(string $clientKey, string $apiHost = "", string $decryptionKey = ""): void
+    {
+        $this->initialize($clientKey, $apiHost, $decryptionKey);
     }
 
     /**

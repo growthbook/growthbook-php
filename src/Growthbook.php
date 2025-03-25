@@ -352,19 +352,36 @@ class Growthbook implements LoggerAwareInterface
      */
     private function evalPrereqs(array $parentConditions, array $stack): string
     {
+        // Track results by condition ID - a condition passes if any instance with same ID passes
+        $resultByConditionId = [];
+
         foreach ($parentConditions as $parentCondition) {
-            $parentRes = $this->getFeature($parentCondition['id'] ?? null, $stack);
+            $conditionId = $parentCondition['id'] ?? null;
+            $parentRes = $this->getFeature($conditionId, $stack);
 
             if ($parentRes->source === "cyclicPrerequisite") {
                 return "cyclic";
             }
 
-            if (!Condition::evalCondition(['value' => $parentRes->value], $parentCondition['condition'] ?? null, $this->savedGroups)) {
-                if ($parentCondition['gate'] ?? false) {
-                    return "gate";
-                }
-                return "fail";
+            $conditionPassed = Condition::evalCondition(
+                ['value' => $parentRes->value],
+                $parentCondition['condition'] ?? null,
+                $this->savedGroups
+            );
+
+            if ($conditionPassed) {
+                $resultByConditionId[$conditionId] = "pass";
+            } elseif (!isset($resultByConditionId[$conditionId]) || $resultByConditionId[$conditionId] !== "pass") {
+                // Only mark as gate/fail if pass is not already set
+                $resultByConditionId[$conditionId] = $parentCondition['gate'] ?? false ? "gate" : "fail";
             }
+        }
+
+        if (in_array("gate", $resultByConditionId)) {
+            return "gate";
+        }
+        if (in_array("fail", $resultByConditionId)) {
+            return "fail";
         }
         return "pass";
     }

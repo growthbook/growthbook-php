@@ -105,6 +105,10 @@ The `initialize` method takes 3 arguments:
 
 If you prefer to have full control over the fetching/caching behavior, you can use the `withFeatures` method instead to pass an associative array of features into the SDK.
 
+#### withSavedGroups method
+
+If you're using saved groups and not using the `initialize` method, you'll need to call `withSavedGroups` to provide the saved groups data to the SDK.
+
 ```php
 // From the GrowthBook API, a custom cache layer, or somewhere else
 $featuresJSON = '{"my-feature":{"defaultValue":true}}';
@@ -115,6 +119,11 @@ $features = json_decode($featuresJSON, true);
 // Pass into the Growthbook instance
 $growthbook = Growthbook\Growthbook::create()
   ->withFeatures($features);
+
+// Optionally, if using saved groups
+$savedGroupsJSON = '{"myGroup": [1, 2, 3]}';
+$savedGroups = json_decode($savedGroupsJSON, true);
+$growthbook = $growthbook->withSavedGroups($savedGroups);
 ```
 
 ## The Growthbook Class

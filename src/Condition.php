@@ -197,6 +197,10 @@ class Condition
      */
     private static function compare($val1, $val2): int
     {
+        if (is_bool($val1) || is_bool($val2)) {
+            return $val1 !== null && $val2 !== null && !!$val1 === !!$val2 ? 0 : 1;
+        }
+
         if ((is_int($val1) || is_float($val1)) && !(is_int($val2) || is_float($val2))) {
             if ($val2 === null) {
                 $val2 = 0;

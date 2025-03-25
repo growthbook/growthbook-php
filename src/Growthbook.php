@@ -477,7 +477,7 @@ class Growthbook implements LoggerAwareInterface
                         "feature" => $key,
                         "value" => $rule->force
                     ]);
-                    return new FeatureResult($rule->force, "force");
+                    return new FeatureResult($rule->force, "force", null, null, $rule->id);
                 }
                 $exp = $rule->toExperiment($key);
                 if (!$exp) {
@@ -504,7 +504,7 @@ class Growthbook implements LoggerAwareInterface
                     "feature" => $key,
                     "value" => $result->value
                 ]);
-                return new FeatureResult($result->value, "experiment", $exp, $result);
+                return new FeatureResult($result->value, "experiment", $exp, $result, $rule->id);
             }
         }
         return new FeatureResult($feature->defaultValue ?? null, "defaultValue");

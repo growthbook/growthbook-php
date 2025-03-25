@@ -7,6 +7,8 @@ namespace Growthbook;
  */
 class FeatureRule
 {
+    /** @var null|string */
+    public $id;
     /** @var null|array<string,mixed> */
     public $condition;
     /** @var null|float */
@@ -54,10 +56,13 @@ class FeatureRule
     public $parentConditions;
 
     /**
-     * @param array{condition:?array<string,mixed>,coverage:?float,force:?T,variations:?T[],key:?string,weights:?float[],namespace:?array{0:string,1:float,2:float},hashAttribute:?string,fallbackAttribute:?string,filters?:array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[],seed?:string,hashVersion?:int,range?:array{0:float,1:float},meta?:array{key?:string,name?:string,passthrough?:bool}[],ranges?:array{0:float,1:float}[],name?:string,phase?:string,disableStickyBucketing:?bool,bucketVersion:?int,minBucketVersion:?int,parentConditions:?array<string,mixed>} $rule
+     * @param array{id?:string,condition:?array<string,mixed>,coverage:?float,force:?T,variations:?T[],key:?string,weights:?float[],namespace:?array{0:string,1:float,2:float},hashAttribute:?string,fallbackAttribute:?string,filters?:array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[],seed?:string,hashVersion?:int,range?:array{0:float,1:float},meta?:array{key?:string,name?:string,passthrough?:bool}[],ranges?:array{0:float,1:float}[],name?:string,phase?:string,disableStickyBucketing:?bool,bucketVersion:?int,minBucketVersion:?int,parentConditions:?array<string,mixed>} $rule
      */
     public function __construct(array $rule)
     {
+        if (array_key_exists("id", $rule)) {
+            $this->id = $rule["id"];
+        }
         if (array_key_exists("condition", $rule)) {
             $this->condition = $rule["condition"];
         }

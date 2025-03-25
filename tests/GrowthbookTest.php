@@ -246,7 +246,8 @@ final class GrowthbookTest extends TestCase
             'value' => $res->value,
             'on' => $res->on,
             'off' => $res->off,
-            'source' => $res->source
+            'source' => $res->source,
+            'ruleId' => $res->ruleId,
         ];
 
         if ($res->experiment) {

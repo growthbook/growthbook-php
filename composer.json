@@ -19,7 +19,7 @@
     "license": "MIT",
     "scripts": {
         "test": "XDEBUG_MODE=coverage phpunit tests --coverage-html coverage --coverage-filter src/",
-        "lint": "phpstan analyse",
+        "lint": "phpstan analyse --memory-limit=300M",
         "fix": "php-cs-fixer fix src && php-cs-fixer fix tests"
     },
     "autoload": {

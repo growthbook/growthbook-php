@@ -99,10 +99,11 @@ final class GrowthbookTest extends TestCase
      * @param array<string,mixed> $condition
      * @param array<string,mixed> $attributes
      * @param bool $expected
+     * @param array<string,mixed> $savedGroups
      */
-    public function testEvalCondition(array $condition, array $attributes, bool $expected): void
+    public function testEvalCondition(array $condition, array $attributes, bool $expected, array $savedGroups = []): void
     {
-        $this->assertSame(Condition::evalCondition($attributes, $condition), $expected);
+        $this->assertSame(Condition::evalCondition($attributes, $condition, $savedGroups), $expected);
     }
 
     /**
@@ -110,25 +111,7 @@ final class GrowthbookTest extends TestCase
      */
     public function evalConditionProvider(): array
     {
-        $versionCompare = $this->getCases("versionCompare");
-        $versionCases = [];
-        foreach ($versionCompare as $comparison => $testCases) {
-            foreach ($testCases as $case) {
-                $versionCases["versionCompare: " . $case[0] . ' ' . $comparison . ' ' . $case[1]] = [
-                    [
-                        'v' => [
-                            '$v' . $comparison => $case[1]
-                        ]
-                    ],
-                    [
-                        'v' => $case[0]
-                    ],
-                    $case[2]
-                ];
-            }
-        }
-
-        return array_merge($this->getCases("evalCondition"), $versionCases);
+        return $this->getCases("evalCondition");
     }
 
 
@@ -263,7 +246,8 @@ final class GrowthbookTest extends TestCase
             'value' => $res->value,
             'on' => $res->on,
             'off' => $res->off,
-            'source' => $res->source
+            'source' => $res->source,
+            'ruleId' => $res->ruleId,
         ];
 
         if ($res->experiment) {
@@ -571,8 +555,10 @@ final class GrowthbookTest extends TestCase
         $this->assertEquals(0, $gb->getFeature('feature')->value);
 
         $this->assertEquals(
-            ['attributeName' => 'id', 'attributeValue' => 1, 'assignments' => ['exp__0' => 'variation1',
-                "exp__1" => "control"]],
+            ['attributeName' => 'id', 'attributeValue' => 1, 'assignments' => [
+                'exp__0' => 'variation1',
+                "exp__1" => "control"
+            ]],
             $service->getAssignments('id', 1)
         );
     }

@@ -7,26 +7,41 @@ class Condition
     /**
      * @param array<string,mixed> $attributes
      * @param array<string,mixed> $condition
+     * @param array<string,mixed> $savedGroups
      * @return bool
      */
-    public static function evalCondition(array $attributes, array $condition): bool
+    public static function evalCondition(array $attributes, array $condition, array $savedGroups): bool
     {
-        if (isset($condition['$or'])) {
-            return static::evalOr($attributes, $condition['$or']);
-        }
-        if (isset($condition['$nor'])) {
-            return !static::evalOr($attributes, $condition['$nor']);
-        }
-        if (isset($condition['$and'])) {
-            return static::evalAnd($attributes, $condition['$and']);
-        }
-        if (isset($condition['$not'])) {
-            return !static::evalCondition($attributes, $condition['$not']);
-        }
-
         foreach ($condition as $key => $value) {
-            if (!static::evalConditionValue($value, static::getPath($attributes, $key))) {
-                return false;
+            switch ($key) {
+                case '$or':
+                    if (!static::evalOr($attributes, $condition['$or'], $savedGroups)) {
+                        return false;
+                    }
+                    break;
+
+                case '$nor':
+                    if (static::evalOr($attributes, $condition['$nor'], $savedGroups)) {
+                        return false;
+                    }
+                    break;
+
+                case '$and':
+                    if (!static::evalAnd($attributes, $condition['$and'], $savedGroups)) {
+                        return false;
+                    }
+                    break;
+
+                case '$not':
+                    if (static::evalCondition($attributes, $condition['$not'], $savedGroups)) {
+                        return false;
+                    }
+                    break;
+
+                default:
+                    if (!static::evalConditionValue($value, static::getPath($attributes, $key), $savedGroups)) {
+                        return false;
+                    }
             }
         }
         return true;
@@ -35,16 +50,17 @@ class Condition
     /**
      * @param array<string,mixed> $attributes
      * @param array<string,mixed>[] $conditions
+     * @param array<string,mixed> $savedGroups
      * @return bool
      */
-    private static function evalOr(array $attributes, array $conditions): bool
+    private static function evalOr(array $attributes, array $conditions, array $savedGroups): bool
     {
         if (!count($conditions)) {
             return true;
         }
 
         foreach ($conditions as $condition) {
-            if (static::evalCondition($attributes, $condition)) {
+            if (static::evalCondition($attributes, $condition, $savedGroups)) {
                 return true;
             }
         }
@@ -54,12 +70,13 @@ class Condition
     /**
      * @param array<string,mixed> $attributes
      * @param array<string,mixed>[] $conditions
+     * @param array<string,mixed> $savedGroups
      * @return bool
      */
-    private static function evalAnd(array $attributes, array $conditions): bool
+    private static function evalAnd(array $attributes, array $conditions, array $savedGroups): bool
     {
         foreach ($conditions as $condition) {
-            if (!static::evalCondition($attributes, $condition)) {
+            if (!static::evalCondition($attributes, $condition, $savedGroups)) {
                 return false;
             }
         }
@@ -131,13 +148,14 @@ class Condition
     /**
      * @param mixed $conditionValue
      * @param mixed $attributeValue
+     * @param array<string,mixed> $savedGroups
      * @return bool
      */
-    private static function evalConditionValue($conditionValue, $attributeValue): bool
+    private static function evalConditionValue($conditionValue, $attributeValue, array $savedGroups): bool
     {
         if (is_array($conditionValue) && static::isOperatorObject($conditionValue)) {
             foreach ($conditionValue as $key => $value) {
-                if (!static::evalOperatorCondition($key, $attributeValue, $value)) {
+                if (!static::evalOperatorCondition($key, $attributeValue, $value, $savedGroups)) {
                     return false;
                 }
             }
@@ -150,9 +168,10 @@ class Condition
     /**
      * @param array<string,mixed> $condition
      * @param mixed $attributeValue
+     * @param array<string,mixed> $savedGroups
      * @return bool
      */
-    private static function elemMatch(array $condition, $attributeValue): bool
+    private static function elemMatch(array $condition, $attributeValue, array $savedGroups): bool
     {
         if (!is_array($attributeValue)) {
             return false;
@@ -160,10 +179,10 @@ class Condition
 
         foreach ($attributeValue as $item) {
             if (static::isOperatorObject($condition)) {
-                if (static::evalConditionValue($condition, $item)) {
+                if (static::evalConditionValue($condition, $item, $savedGroups)) {
                     return true;
                 }
-            } elseif (static::evalCondition($item, $condition)) {
+            } elseif (static::evalCondition($item, $condition, $savedGroups)) {
                 return true;
             }
         }
@@ -178,6 +197,10 @@ class Condition
      */
     private static function compare($val1, $val2): int
     {
+        if (is_bool($val1) || is_bool($val2)) {
+            return $val1 !== null && $val2 !== null && !!$val1 === !!$val2 ? 0 : 1;
+        }
+
         if ((is_int($val1) || is_float($val1)) && !(is_int($val2) || is_float($val2))) {
             if ($val2 === null) {
                 $val2 = 0;
@@ -207,9 +230,10 @@ class Condition
      * @param string $operator
      * @param mixed $attributeValue
      * @param mixed $conditionValue
+     * @param mixed $savedGroups
      * @return bool
      */
-    private static function evalOperatorCondition(string $operator, $attributeValue, $conditionValue): bool
+    private static function evalOperatorCondition(string $operator, $attributeValue, $conditionValue, $savedGroups): bool
     {
         switch ($operator) {
             case '$eq':
@@ -254,13 +278,33 @@ class Condition
                     $attributeValue = [$attributeValue];
                 }
                 return array_intersect($attributeValue, $conditionValue) === [];
+            case '$inGroup':
+                if (!array_key_exists($conditionValue, $savedGroups)) {
+                    return false;
+                }
+                if (!is_array($attributeValue)) {
+                    $attributeValue = [$attributeValue];
+                }
+                return array_uintersect($attributeValue, $savedGroups[$conditionValue], function ($a, $b) {
+                    return $a === $b ? 0 : 1;
+                }) !== [];
+            case '$notInGroup':
+                if (!array_key_exists($conditionValue, $savedGroups)) {
+                    return true;
+                }
+                if (!is_array($attributeValue)) {
+                    $attributeValue = [$attributeValue];
+                }
+                return array_uintersect($attributeValue, $savedGroups[$conditionValue], function ($a, $b) {
+                    return $a === $b ? 0 : 1;
+                }) === [];
             case '$elemMatch':
-                return static::elemMatch($conditionValue, $attributeValue);
+                return static::elemMatch($conditionValue, $attributeValue, $savedGroups);
             case '$size':
                 if (!is_array($attributeValue)) {
                     return false;
                 }
-                return static::evalConditionValue($conditionValue, count($attributeValue));
+                return static::evalConditionValue($conditionValue, count($attributeValue), $savedGroups);
             case '$all':
                 if (!is_array($attributeValue) || !is_array($conditionValue)) {
                     return false;
@@ -268,7 +312,7 @@ class Condition
                 foreach ($conditionValue as $a) {
                     $pass = false;
                     foreach ($attributeValue as $b) {
-                        if (static::evalConditionValue($a, $b)) {
+                        if (static::evalConditionValue($a, $b, $savedGroups)) {
                             $pass = true;
                             break;
                         }
@@ -286,7 +330,7 @@ class Condition
             case '$type':
                 return static::getType($attributeValue) === $conditionValue;
             case '$not':
-                return !static::evalConditionValue($conditionValue, $attributeValue);
+                return !static::evalConditionValue($conditionValue, $attributeValue, $savedGroups);
             default:
                 return false;
         }

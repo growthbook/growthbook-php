@@ -22,6 +22,8 @@ class Growthbook implements LoggerAwareInterface
     private $url = "";
     /** @var array<string,mixed> */
     private $attributes = [];
+    /** @var array<string,array<string,mixed>> */
+    private $savedGroups = [];
     /** @var Feature<mixed>[] */
     private $features = [];
     /** @var array<string, FeatureResult<mixed>> */
@@ -80,7 +82,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>} $options
      */
     public function __construct(array $options = [])
     {
@@ -100,7 +102,9 @@ class Growthbook implements LoggerAwareInterface
             "requestFactory",
             "decryptionKey",
             "stickyBucketService",
-            "stickyBucketIdentifierAttributes"
+            "stickyBucketIdentifierAttributes",
+            "savedGroups",
+            "encryptedSavedGroups"
         ];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
@@ -132,12 +136,14 @@ class Growthbook implements LoggerAwareInterface
         if (array_key_exists("forcedFeatures", $options)) {
             $this->withForcedFeatures($options['forcedFeatures']);
         }
-
         if (array_key_exists("features", $options)) {
             $this->withFeatures(($options["features"]));
         }
         if (array_key_exists("attributes", $options)) {
             $this->withAttributes(($options["attributes"]));
+        }
+        if (array_key_exists("savedGroups", $options)) {
+            $this->withSavedGroups(($options["savedGroups"]));
         }
     }
 
@@ -149,6 +155,16 @@ class Growthbook implements LoggerAwareInterface
     {
         $this->attributes = $attributes;
         $this->refreshStickyBuckets();
+        return $this;
+    }
+
+    /**
+     * @param array<string,mixed> $savedGroups
+     * @return Growthbook
+     */
+    public function withSavedGroups(array $savedGroups): Growthbook
+    {
+        $this->savedGroups = $savedGroups;
         return $this;
     }
 
@@ -336,19 +352,36 @@ class Growthbook implements LoggerAwareInterface
      */
     private function evalPrereqs(array $parentConditions, array $stack): string
     {
+        // Track results by condition ID - a condition passes if any instance with same ID passes
+        $resultByConditionId = [];
+
         foreach ($parentConditions as $parentCondition) {
-            $parentRes = $this->getFeature($parentCondition['id'] ?? null, $stack);
+            $conditionId = $parentCondition['id'] ?? null;
+            $parentRes = $this->getFeature($conditionId, $stack);
 
             if ($parentRes->source === "cyclicPrerequisite") {
                 return "cyclic";
             }
 
-            if (!Condition::evalCondition(['value' => $parentRes->value], $parentCondition['condition'] ?? null)) {
-                if ($parentCondition['gate'] ?? false) {
-                    return "gate";
-                }
-                return "fail";
+            $conditionPassed = Condition::evalCondition(
+                ['value' => $parentRes->value],
+                $parentCondition['condition'] ?? null,
+                $this->savedGroups
+            );
+
+            if ($conditionPassed) {
+                $resultByConditionId[$conditionId] = "pass";
+            } elseif (!isset($resultByConditionId[$conditionId]) || $resultByConditionId[$conditionId] !== "pass") {
+                // Only mark as gate/fail if pass is not already set
+                $resultByConditionId[$conditionId] = $parentCondition['gate'] ?? false ? "gate" : "fail";
             }
+        }
+
+        if (in_array("gate", $resultByConditionId)) {
+            return "gate";
+        }
+        if (in_array("fail", $resultByConditionId)) {
+            return "fail";
         }
         return "pass";
     }
@@ -368,7 +401,7 @@ class Growthbook implements LoggerAwareInterface
         $this->log(LogLevel::DEBUG, "Evaluating feature - $key");
         $feature = $this->features[$key];
 
-        if(in_array($key, $stack)) {
+        if (in_array($key, $stack)) {
             $this->log(LogLevel::WARNING, "Cyclic prerequisite detected, stack", [
                 "stack" => $stack,
             ]);
@@ -408,7 +441,7 @@ class Growthbook implements LoggerAwareInterface
                 }
 
                 if ($rule->condition) {
-                    if (!Condition::evalCondition($this->attributes, $rule->condition)) {
+                    if (!Condition::evalCondition($this->attributes, $rule->condition, $this->savedGroups)) {
                         $this->log(LogLevel::DEBUG, "Skip rule because of targeting condition", [
                             "feature" => $key,
                             "condition" => $rule->condition
@@ -444,7 +477,7 @@ class Growthbook implements LoggerAwareInterface
                         "feature" => $key,
                         "value" => $rule->force
                     ]);
-                    return new FeatureResult($rule->force, "force");
+                    return new FeatureResult($rule->force, "force", null, null, $rule->id);
                 }
                 $exp = $rule->toExperiment($key);
                 if (!$exp) {
@@ -471,7 +504,7 @@ class Growthbook implements LoggerAwareInterface
                     "feature" => $key,
                     "value" => $result->value
                 ]);
-                return new FeatureResult($result->value, "experiment", $exp, $result);
+                return new FeatureResult($result->value, "experiment", $exp, $result, $rule->id);
             }
         }
         return new FeatureResult($feature->defaultValue ?? null, "defaultValue");
@@ -593,7 +626,7 @@ class Growthbook implements LoggerAwareInterface
             }
 
             // 8. Condition fails
-            if ($exp->condition && !Condition::evalCondition($this->attributes, $exp->condition)) {
+            if ($exp->condition && !Condition::evalCondition($this->attributes, $exp->condition, $this->savedGroups)) {
                 $this->log(LogLevel::DEBUG, "Skip experiment because of targeting conditions", [
                     "experiment" => $exp->key
                 ]);
@@ -758,6 +791,10 @@ class Growthbook implements LoggerAwareInterface
     {
         if ($coverage === null && $range === null) {
             return true;
+        }
+
+        if ($coverage === 0.0 && $range === null) {
+            return false;
         }
 
         list(, $hashValue) = $this->getHashValue($hashAttribute, $fallbackAttribute);
@@ -974,34 +1011,40 @@ class Growthbook implements LoggerAwareInterface
      * @throws ClientExceptionInterface
      * @throws Exception
      */
-    public function loadFeatures(string $clientKey, string $apiHost = "", string $decryptionKey = ""): void
+    public function initialize(string $clientKey, string $apiHost = "", string $decryptionKey = ""): void
     {
         $this->clientKey = $clientKey;
         $this->apiHost = $apiHost;
         $this->decryptionKey = $decryptionKey;
 
         if (!$this->clientKey) {
-            throw new Exception("Must specify a clientKey before loading features.");
+            throw new Exception("Must specify a clientKey before initializing.");
         }
         if (!$this->httpClient) {
-            throw new Exception("Must set an HTTP Client before loading features.");
+            throw new Exception("Must set an HTTP Client before initializing.");
         }
         if (!$this->requestFactory) {
-            throw new Exception("Must set an HTTP Request Factory before loading features");
+            throw new Exception("Must set an HTTP Request Factory before initializing");
         }
 
-        // The features URL is also the cache key
         $url = rtrim(empty($this->apiHost) ? self::DEFAULT_API_HOST : $this->apiHost, "/") . "/api/features/" . $this->clientKey;
-        $cacheKey = md5($url);
+        // Update when the cache format changes to prevent issues when updating the library version
+        $cacheKey = md5($url . 'v2');
 
         // First try fetching from cache
         if ($this->cache) {
-            $featuresJSON = $this->cache->get($cacheKey);
-            if ($featuresJSON) {
-                $features = json_decode($featuresJSON, true);
-                if ($features && is_array($features)) {
-                    $this->log(LogLevel::INFO, "Load features from cache", ["url" => $url, "numFeatures" => count($features)]);
-                    $this->withFeatures($features);
+            $cachedResponse = $this->cache->get($cacheKey);
+            if ($cachedResponse) {
+                $cachedData = json_decode($cachedResponse, true);
+                if (is_array($cachedData)) {
+                    if (array_key_exists("features", $cachedData) && is_array($cachedData['features'])) {
+                        $this->log(LogLevel::INFO, "Load features from cache", ["url" => $url, "numFeatures" => count($cachedData['features'])]);
+                        $this->withFeatures($cachedData['features']);
+                    }
+                    if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
+                        $this->log(LogLevel::INFO, "Load saved groups from cache", ["url" => $url, "numGroups" => count($cachedData['savedGroups'])]);
+                        $this->withSavedGroups($cachedData['savedGroups']);
+                    }
                     return;
                 }
             }
@@ -1017,17 +1060,46 @@ class Growthbook implements LoggerAwareInterface
             return;
         }
 
-        // Set features and cache for next time
+        // Set features and savedGroupd and cache for next time
         $features = array_key_exists("encryptedFeatures", $parsed)
             ? json_decode($this->decrypt($parsed["encryptedFeatures"]), true)
             : $parsed["features"];
 
-        $this->log(LogLevel::INFO, "Load features from URL", ["url" => $url, "numFeatures" => count($features)]);
+        $savedGroups = array_key_exists("encryptedSavedGroups", $parsed)
+            ? json_decode($this->decrypt($parsed["encryptedSavedGroups"]), true)
+            : $parsed["savedGroups"];
+
+        $this->log(LogLevel::INFO, "Load features and saved groups from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
         $this->withFeatures($features);
+        $this->withSavedGroups($savedGroups);
+
         if ($this->cache) {
-            $this->cache->set($cacheKey, json_encode($features), $this->cacheTTL);
-            $this->log(LogLevel::INFO, "Cache features", ["url" => $url, "numFeatures" => count($features), "ttl" => $this->cacheTTL]);
+            $cacheData = [
+                'features' => $features,
+                'savedGroups' => $savedGroups
+            ];
+            $this->cache->set($cacheKey, json_encode($cacheData), $this->cacheTTL);
+            $this->log(LogLevel::INFO, "Cache features and saved groups", [
+                "url" => $url,
+                "numFeatures" => count($features),
+                "numGroups" => count($savedGroups),
+                "ttl" => $this->cacheTTL
+            ]);
         }
+    }
+
+    /**
+     * @deprecated Use initialize instead
+     * @param string $clientKey
+     * @param string $apiHost
+     * @param string $decryptionKey
+     * @return void
+     * @throws ClientExceptionInterface
+     * @throws Exception
+     */
+    public function loadFeatures(string $clientKey, string $apiHost = "", string $decryptionKey = ""): void
+    {
+        $this->initialize($clientKey, $apiHost, $decryptionKey);
     }
 
     /**

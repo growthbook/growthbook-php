@@ -39,7 +39,7 @@ class Condition
      */
     private static function evalOr(array $attributes, array $conditions): bool
     {
-        if (!count($conditions)) {
+        if (empty($conditions)) {
             return true;
         }
 
@@ -144,8 +144,34 @@ class Condition
             return true;
         }
 
+        if (is_string($conditionValue)) {
+            $pattern = $conditionValue;
+            if (!static::isValidRegex($pattern)) {
+                $pattern = static::wrapRegexPattern($pattern);
+            }
+            if (!static::isValidRegex($pattern)) {
+                error_log("Invalid regex pattern: $conditionValue");
+                return false;
+            }
+            return preg_match($pattern, $attributeValue ?? '') === 1;
+        }
+
         return json_encode($attributeValue) === json_encode($conditionValue);
     }
+    private static function isValidRegex(string $pattern): bool
+    {
+        return @preg_match($pattern, '') !== false;
+    }
+
+    private static function wrapRegexPattern(string $pattern): string
+    {
+        if (preg_match('/^\/.*\/[imsxuADSUXJ]*$/', $pattern)) {
+            return $pattern;
+        }
+        $escapedPattern = str_replace('/', '\\/', $pattern);
+        return '/' . $escapedPattern . '/';
+    }
+
 
     /**
      * @param array<string,mixed> $condition
@@ -237,7 +263,16 @@ class Condition
             case '$vlte':
                 return static::parseVersionString($attributeValue) <= static::parseVersionString($conditionValue);
             case '$regex':
-                return @preg_match('/' . $conditionValue . '/', $attributeValue ?? '') === 1;
+                $pattern = $conditionValue;
+                if (!static::isValidRegex($pattern)) {
+                    $pattern = static::wrapRegexPattern($pattern);
+                }
+                if (!static::isValidRegex($pattern)) {
+                    error_log("Invalid regex pattern: $conditionValue");
+                    return false;
+                }
+                return preg_match($pattern, $attributeValue ?? '') === 1;
+
             case '$in':
                 if (!is_array($conditionValue)) {
                     return false;
@@ -286,7 +321,17 @@ class Condition
             case '$type':
                 return static::getType($attributeValue) === $conditionValue;
             case '$not':
-                return !static::evalConditionValue($conditionValue, $attributeValue);
+                if (is_array($conditionValue) && static::isOperatorObject($conditionValue)) {
+                    foreach ($conditionValue as $op => $val) {
+                        if (static::evalOperatorCondition($op, $attributeValue, $val)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                } else {
+                    return !static::evalConditionValue($conditionValue, $attributeValue);
+                }
+
             default:
                 return false;
         }

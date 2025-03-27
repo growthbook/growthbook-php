@@ -1067,7 +1067,10 @@ class Growthbook implements LoggerAwareInterface
 
         $savedGroups = array_key_exists("encryptedSavedGroups", $parsed)
             ? json_decode($this->decrypt($parsed["encryptedSavedGroups"]), true)
-            : $parsed["savedGroups"];
+            : (array_key_exists("savedGroups", $parsed) ? $parsed["savedGroups"] : []);
+        if (!is_array($savedGroups)) {
+            $savedGroups = [];
+        }
 
         $this->log(LogLevel::INFO, "Load features and saved groups from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
         $this->withFeatures($features);

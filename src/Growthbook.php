@@ -1062,6 +1062,10 @@ class Growthbook implements LoggerAwareInterface
         $this->sseListeners[] = $listener;
     }
 
+    /**
+    * Notify all registered listeners about feature updates
+    * @param array<string, mixed> $features Updated features array
+    */
     private function notifyFeatureUpdate(array $features): void {
         foreach ($this->sseListeners as $listener) {
             try {

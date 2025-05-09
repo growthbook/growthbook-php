@@ -1020,7 +1020,7 @@ class Growthbook implements LoggerAwareInterface
 
         return $decrypted;
     }
-    public function initialize2(string $clientKey = "", string $apiHost = "", string $decryptionKey = ""): void {
+    public function initialize(string $clientKey = "", string $apiHost = "", string $decryptionKey = ""): void {
         $this->validateInitialization($clientKey);
         $this->clientKey = $clientKey;
         $this->apiHost = $apiHost;
@@ -1434,95 +1434,6 @@ private function handleSSEData(string $data): void
             if (!$this->requestFactory) {
                 throw new Exception("Must set an HTTP Request Factory before initializing");
             }
-        }
-    }
-
-
-    /**
-     * @param string $clientKey
-     * @param string $apiHost
-     * @param string $decryptionKey
-     * @return void
-     * @throws ClientExceptionInterface
-     * @throws Exception
-     */
-    public function initialize(string $clientKey, string $apiHost = "", string $decryptionKey = ""): void
-    {
-        $this->clientKey = $clientKey;
-        $this->apiHost = $apiHost;
-        $this->decryptionKey = $decryptionKey;
-
-        if (!$this->clientKey) {
-            throw new Exception("Must specify a clientKey before initializing.");
-        }
-        if (!$this->httpClient) {
-            throw new Exception("Must set an HTTP Client before initializing.");
-        }
-        if (!$this->requestFactory) {
-            throw new Exception("Must set an HTTP Request Factory before initializing");
-        }
-
-        $url = rtrim(empty($this->apiHost) ? self::DEFAULT_API_HOST : $this->apiHost, "/") . "/api/features/" . $this->clientKey;
-        // Update when the cache format changes to prevent issues when updating the library version
-        $cacheKey = md5($url . 'v2');
-
-        // First try fetching from cache
-        if ($this->cache) {
-            $cachedResponse = $this->cache->get($cacheKey);
-            if ($cachedResponse) {
-                $cachedData = json_decode($cachedResponse, true);
-                if (is_array($cachedData)) {
-                    if (array_key_exists("features", $cachedData) && is_array($cachedData['features'])) {
-                        $this->log(LogLevel::INFO, "Load features from cache", ["url" => $url, "numFeatures" => count($cachedData['features'])]);
-                        $this->withFeatures($cachedData['features']);
-                    }
-                    if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
-                        $this->log(LogLevel::INFO, "Load saved groups from cache", ["url" => $url, "numGroups" => count($cachedData['savedGroups'])]);
-                        $this->withSavedGroups($cachedData['savedGroups']);
-                    }
-                    return;
-                }
-            }
-        }
-
-        // Otherwise, fetch from API
-        $req = $this->requestFactory->createRequest('GET', $url);
-        $res = $this->httpClient->sendRequest($req);
-        $body = $res->getBody();
-        $parsed = json_decode($body, true);
-        if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
-            $this->log(LogLevel::WARNING, "Could not load features", ["url" => $url, "responseBody" => $body]);
-            return;
-        }
-
-        // Set features and savedGroupd and cache for next time
-        $features = array_key_exists("encryptedFeatures", $parsed)
-            ? json_decode($this->decrypt($parsed["encryptedFeatures"]), true)
-            : $parsed["features"];
-
-        $savedGroups = array_key_exists("encryptedSavedGroups", $parsed)
-            ? json_decode($this->decrypt($parsed["encryptedSavedGroups"]), true)
-            : (array_key_exists("savedGroups", $parsed) ? $parsed["savedGroups"] : []);
-        if (!is_array($savedGroups)) {
-            $savedGroups = [];
-        }
-
-        $this->log(LogLevel::INFO, "Load features and saved groups from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
-        $this->withFeatures($features);
-        $this->withSavedGroups($savedGroups);
-
-        if ($this->cache) {
-            $cacheData = [
-                'features' => $features,
-                'savedGroups' => $savedGroups
-            ];
-            $this->cache->set($cacheKey, json_encode($cacheData), $this->cacheTTL);
-            $this->log(LogLevel::INFO, "Cache features and saved groups", [
-                "url" => $url,
-                "numFeatures" => count($features),
-                "numGroups" => count($savedGroups),
-                "ttl" => $this->cacheTTL
-            ]);
         }
     }
 

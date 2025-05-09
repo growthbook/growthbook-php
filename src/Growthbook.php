@@ -76,10 +76,14 @@ class Growthbook implements LoggerAwareInterface
     private $usingDerivedStickyBucketAttributes;
     /** @var null|array<string, string> */
     private $stickyBucketAttributes = null;
+    /** @var bool */
     public $backgroundSync = false;
 
+    /** @var bool */
     public $isInitialized = false;
+    /** @var bool */
     private bool $isReady = false;
+    /** @var array<callable> */
     private array $sseListeners = [];
 
     public static function create(): Growthbook

@@ -153,16 +153,35 @@ class Condition
      */
     private static function evalConditionValue($conditionValue, $attributeValue, array $savedGroups): bool
     {
-        if (is_array($conditionValue) && static::isOperatorObject($conditionValue)) {
-            foreach ($conditionValue as $key => $value) {
-                if (!static::evalOperatorCondition($key, $attributeValue, $value, $savedGroups)) {
-                    return false;
-                }
-            }
-            return true;
+        if ($conditionValue === null) {
+            return $attributeValue === null;
         }
 
-        return json_encode($attributeValue) === json_encode($conditionValue);
+        $type = static::getType($conditionValue);
+
+        switch($type) {
+            case 'string':
+            case 'number':
+            case 'boolean':
+                return static::isMatrchingPrimitive($conditionValue, $attributeValue);
+            case 'array':
+                return is_array($attributeValue) && static::toJson($conditionValue) === static::toJson($attributeValue);
+            case 'object':
+                if (static::isOperatorObject($conditionValue)) {
+                    foreach ($conditionValue as $key => $value) {
+                        if (!static::evalOperatorCondition($key, $attributeValue, $value, $savedGroups)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+                return is_array($attributeValue) && static::toJson($conditionValue) === static::toJson($attributeValue);
+
+            case 'null':
+                return $attributeValue === null;
+            default:
+                return strval($conditionValue) === strval($attributeValue);
+            }
     }
 
     /**
@@ -361,5 +380,22 @@ class Condition
         }, $parts);
 
         return implode('-', $parts);
+    }
+
+    private static function isMatrchingPrimitive($conditionValue, $attributeValue): bool
+    {
+        if ($attributeValue === null) {
+            return false;
+        }
+    
+        if (gettype($conditionValue) !== gettype($attributeValue)) {
+            return false;
+        }
+    
+        return $conditionValue === $attributeValue;
+    }
+
+    private static function toJson($value): string {
+        return json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 }

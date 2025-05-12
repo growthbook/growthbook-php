@@ -132,7 +132,7 @@ class Condition
      * @param string $path
      * @return mixed
      */
-    private static function getPath(array $attributes, string $path)
+    private static function getPath(array $attributes, string $path): mixed
     {
         $current = $attributes;
         $parts = explode(".", $path);

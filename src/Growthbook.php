@@ -210,7 +210,7 @@ class Growthbook implements LoggerAwareInterface
      * @param array<string, FeatureResult<mixed>> $forcedFeatures
      * @return Growthbook
      */
-    public function withForcedFeatures(array $forcedFeatures)
+    public function withForcedFeatures(array $forcedFeatures): Growthbook
     {
         $this->forcedFeatures = $forcedFeatures;
         return $this;
@@ -294,7 +294,7 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @return array<string, FeatureResult<mixed>>
      */
-    public function getForcedFeatures()
+    public function getForcedFeatures(): array
     {
         return $this->forcedFeatures;
     }
@@ -310,7 +310,7 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @return callable|null
      */
-    public function getTrackingCallback()
+    public function getTrackingCallback(): ?callable
     {
         return $this->trackingCallback;
     }

@@ -3,7 +3,7 @@
 namespace Growthbook;
 
 use Exception;
-use Growthbook\Plugins\PluginInterface;
+use Growthbook\Plugins\GrowthbookPlugin;
 use Http\Discovery\Psr17FactoryDiscovery;
 use Http\Discovery\Psr18ClientDiscovery;
 use Psr\Http\Client\ClientExceptionInterface;
@@ -92,7 +92,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,eventLogger?:EventLoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,streamFactory?:\Psr\Http\Message\StreamFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:array<PluginInterface>} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,eventLogger?:EventLoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,streamFactory?:\Psr\Http\Message\StreamFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:array<GrowthbookPlugin>} $options
      */
     public function __construct(array $options = [])
     {
@@ -288,12 +288,13 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param PluginInterface $plugin
+     * @param GrowthbookPlugin $plugin
      * @return $this
      */
-    public function withPlugin(PluginInterface $plugin): Growthbook
+    public function withPlugin(GrowthbookPlugin $plugin): Growthbook
     {
         $plugin->initialize($this);
+        $plugin->setup();
         return $this;
     }
 

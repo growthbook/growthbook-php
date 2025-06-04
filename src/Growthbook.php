@@ -294,7 +294,6 @@ class Growthbook implements LoggerAwareInterface
     public function withPlugin(GrowthbookPlugin $plugin): Growthbook
     {
         $plugin->initialize($this);
-        $plugin->setup();
         return $this;
     }
 

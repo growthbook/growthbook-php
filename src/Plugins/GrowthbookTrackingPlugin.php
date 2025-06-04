@@ -28,7 +28,7 @@ use Psr\Log\LogLevel;
  * }
  */
 
-class GrowthbookTrackingPlugin implements PluginInterface, EventLoggerInterface
+class GrowthbookTrackingPlugin extends GrowthbookPlugin implements EventLoggerInterface
 {
     // Configurable options
     /** @var string */
@@ -47,8 +47,6 @@ class GrowthbookTrackingPlugin implements PluginInterface, EventLoggerInterface
     private $dedupeCache = [];
     /** @var array<GrowthbookEventPayload> */
     private $eventQueue = [];
-    /** @var Growthbook */
-    private $growthbook;
 
     /**
      * @param array<string,mixed> $options
@@ -65,17 +63,17 @@ class GrowthbookTrackingPlugin implements PluginInterface, EventLoggerInterface
         }
     }
 
-    public function initialize(Growthbook $growthbook): void
+    public function setup(): void
     {
-        if (empty($growthbook->getClientKey())) {
-            throw new \Exception('Client key is required to use GrowthbookTrackingPlugin');
-        }
-        if (!$growthbook->httpClient || !$growthbook->requestFactory || !$growthbook->streamFactory) {
-            throw new \Exception('HTTP client, request and stream factories are required to use GrowthbookTrackingPlugin');
+        if (empty($this->growthbook->getClientKey())) {
+            throw new \Exception('Client key is required to use gbTrackingPlugin');
         }
 
-        $this->growthbook = $growthbook;
-        $growthbook->withEventLogger($this);
+        if (!$this->growthbook->httpClient || !$this->growthbook->requestFactory || !$this->growthbook->streamFactory) {
+            throw new \Exception('HTTP client, request and stream factories are required to use gbTrackingPlugin');
+        }
+
+        $this->growthbook->withEventLogger($this);
     }
 
     private function flush(): void

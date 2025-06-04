@@ -39,17 +39,4 @@ abstract class GrowthbookPlugin
 
     // Plugin-specific setup method
     abstract public function setup(): void;
-
-    /**
-     * Get the GrowthBook instance - guaranteed to be non-null after initialization
-     * @return Growthbook
-     * @throws \RuntimeException if called before initialization
-     */
-    protected function getGrowthbook(): Growthbook
-    {
-        if (!$this->initialized) {
-            throw new \RuntimeException('Plugin not yet initialized. GrowthBook instance not available.');
-        }
-        return $this->growthbook;
-    }
 }

@@ -81,7 +81,7 @@ class MockPlugin extends GrowthbookPlugin
         $this->isInitialized = true;
     }
 
-    // Test helper methods
+    /** @return array<string,mixed> */
     public function getOptions(): array
     {
         return $this->options;
@@ -99,6 +99,6 @@ class MockPlugin extends GrowthbookPlugin
 
     public function getGrowthbookForTesting(): Growthbook
     {
-        return $this->getGrowthbook();
+        return $this->growthbook;
     }
 }

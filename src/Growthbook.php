@@ -311,7 +311,7 @@ class Growthbook implements LoggerAwareInterface
      * @param string $eventName
      * @param array<string,mixed>|null $properties
      */
-    public function logEvent(string $eventName, ?array $properties): void
+    public function logEvent(string $eventName, ?array $properties = null): void
     {
         if ($this->eventLogger) {
             $this->eventLogger->logEvent($eventName, $properties ?? [], $this->getContext());

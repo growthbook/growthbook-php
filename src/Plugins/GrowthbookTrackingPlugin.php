@@ -74,6 +74,11 @@ class GrowthbookTrackingPlugin extends GrowthbookPlugin implements EventLoggerIn
         }
 
         $this->growthbook->withEventLogger($this);
+
+        // Send all events in a single request on shutdown
+        register_shutdown_function(function () {
+            $this->flush();
+        });
     }
 
     private function flush(): void
@@ -120,9 +125,6 @@ class GrowthbookTrackingPlugin extends GrowthbookPlugin implements EventLoggerIn
             return;
         }
 
-        $params = ['clientKey' => $this->growthbook->getClientKey()];
-        $ingestorEndpoint = $this->ingestorHost . '/track?' . http_build_query($params);
-
         // Convert EventPayload objects to arrays for JSON encoding
         $eventsArray = array_map(function (GrowthbookEventPayload $event) {
             return $event->toArray();
@@ -140,7 +142,7 @@ class GrowthbookTrackingPlugin extends GrowthbookPlugin implements EventLoggerIn
 
         $body = $streamFactory->createStream($jsonData);
 
-        $req = $requestFactory->createRequest('POST', $ingestorEndpoint)
+        $req = $requestFactory->createRequest('POST', $this->getIngestorFullUrl())
             ->withBody($body)
             ->withHeader('Accept', 'application/json')
             ->withHeader('Content-Type', 'text/plain')
@@ -271,39 +273,42 @@ class GrowthbookTrackingPlugin extends GrowthbookPlugin implements EventLoggerIn
             return;
         }
 
-        // Build the key for de-duping
-        $dedupeKeyData = [];
-        foreach ($this->dedupeKeyAttributes as $key) {
-            $dedupeKeyData['attr:' . $key] = $data['attributes'][$key];
-        }
+        // Skip deduplication entirely when no dedupe attributes are configured
+        if (!empty($this->dedupeKeyAttributes)) {
+            // Build the key for de-duping
+            $dedupeKeyData = [];
+            foreach ($this->dedupeKeyAttributes as $key) {
+                $dedupeKeyData['attr:' . $key] = $data['attributes'][$key];
+            }
 
-        $dedupeKey = json_encode($dedupeKeyData);
-        if ($dedupeKey === false) {
-            $this->growthbook->log(
-                LogLevel::ERROR,
-                '[GrowthbookTrackingPlugin] Failed to encode dedupe key. Not processing event',
-                [
-                    'dedupeKeyData' => $dedupeKeyData,
-                    'eventData' => $data,
-                ]
-            );
-            return;
-        }
+            $dedupeKey = json_encode($dedupeKeyData);
+            if ($dedupeKey === false) {
+                $this->growthbook->log(
+                    LogLevel::ERROR,
+                    '[GrowthbookTrackingPlugin] Failed to encode dedupe key. Not processing event',
+                    [
+                        'dedupeKeyData' => $dedupeKeyData,
+                        'eventData' => $data,
+                    ]
+                );
+                return;
+            }
 
-        // Duplicate event fired recently, move to end of LRU cache and skip
-        if (in_array($dedupeKey, $this->dedupeCache)) {
-            // Remove and re-add to move to end
-            $this->dedupeCache = array_values(array_diff($this->dedupeCache, [$dedupeKey]));
+            // Duplicate event fired recently, move to end of LRU cache and skip
+            if (in_array($dedupeKey, $this->dedupeCache)) {
+                // Remove and re-add to move to end
+                $this->dedupeCache = array_values(array_diff($this->dedupeCache, [$dedupeKey]));
+                $this->dedupeCache[] = $dedupeKey;
+                return;
+            }
+
+            // Register the event as recently fired
             $this->dedupeCache[] = $dedupeKey;
-            return;
-        }
 
-        // Register the event as recently fired
-        $this->dedupeCache[] = $dedupeKey;
-
-        // If the cache is too big, remove the oldest item
-        if (count($this->dedupeCache) > $this->dedupeCacheSize) {
-            array_shift($this->dedupeCache);
+            // If the cache is too big, remove the oldest item
+            if (count($this->dedupeCache) > $this->dedupeCacheSize) {
+                array_shift($this->dedupeCache);
+            }
         }
 
         $payload = $this->getEventPayload($data);
@@ -319,6 +324,15 @@ class GrowthbookTrackingPlugin extends GrowthbookPlugin implements EventLoggerIn
         }
 
         $this->eventQueue[] = $payload;
+    }
+
+    /**
+     * @return string
+     */
+    private function getIngestorFullUrl(): string
+    {
+        $params = ['clientKey' => $this->growthbook->getClientKey()];
+        return $this->ingestorHost . '/track?' . http_build_query($params);
     }
 }
 

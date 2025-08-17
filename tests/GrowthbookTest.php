@@ -3,6 +3,7 @@
 require_once __DIR__ . '/../vendor/autoload.php';
 
 use Growthbook\Condition;
+use Growthbook\ExperimentResult;
 use Growthbook\FeatureResult;
 use Growthbook\Growthbook;
 use Growthbook\InlineExperiment;
@@ -597,9 +598,12 @@ final class GrowthbookTest extends TestCase
         );
 
         $result = $gb->getFeature('feature');
-        $this->assertNotNull($result->experimentResult);
-        $this->assertTrue($result->experimentResult->inExperiment);
-        
+        /** @var ExperimentResult<string> $experimentResult */
+        $experimentResult = $result->experimentResult;
+
+        $this->assertNotNull($experimentResult);
+        $this->assertTrue($experimentResult->inExperiment);
+
         // Now manually set the sticky bucket assignment to variation "0"
         $service->saveAssignments([
             'attributeName' => 'id',
@@ -616,13 +620,15 @@ final class GrowthbookTest extends TestCase
             ]
         );
 
-        $result2 = $gb2->getFeature('feature');
-        
+        $result = $gb2->getFeature('feature');
+        /** @var ExperimentResult<string> $experimentResult */
+        $experimentResult = $result->experimentResult;
+
         // Verify that variation 0 is correctly returned
-        $this->assertNotNull($result2->experimentResult);
-        $this->assertTrue($result2->experimentResult->stickyBucketUsed);
-        $this->assertEquals(0, $result2->experimentResult->variationId);
-        $this->assertEquals("control", $result2->experimentResult->value);
-        $this->assertEquals("0", $result2->experimentResult->key);
+        $this->assertNotNull($experimentResult);
+        $this->assertTrue($experimentResult->stickyBucketUsed);
+        $this->assertEquals(0, $experimentResult->variationId);
+        $this->assertEquals("control", $experimentResult->value);
+        $this->assertEquals("0", $experimentResult->key);
     }
 }

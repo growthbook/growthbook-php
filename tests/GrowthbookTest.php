@@ -562,4 +562,67 @@ final class GrowthbookTest extends TestCase
             $service->getAssignments('id', 1)
         );
     }
+
+    /**
+     * Test that sticky bucket correctly handles variation key "0"
+     * This test verifies the fix for the bug where variation 0 was incorrectly
+     * treated as a falsy value and returned -1 instead of the correct variation.
+     */
+    public function testStickyBucketVariationZero(): void
+    {
+        $features = [
+            "feature" => [
+                "defaultValue" => "default",
+                "rules" => [[
+                    "key" => "exp",
+                    "variations" => ["control", "treatment"],
+                    "weights" => [0.5, 0.5],
+                    "meta" => [
+                        ["key" => "0"],
+                        ["key" => "1"]
+                    ]
+                ]]
+            ],
+        ];
+
+        $service = new InMemoryStickyBucketService();
+
+        // First, create a Growthbook instance and get a variation
+        $gb = new Growthbook(
+            [
+                'stickyBucketService' => $service,
+                'attributes' => ['id' => 'user123'],
+                'features' => $features
+            ]
+        );
+
+        $result = $gb->getFeature('feature');
+        $this->assertNotNull($result->experimentResult);
+        $this->assertTrue($result->experimentResult->inExperiment);
+        
+        // Now manually set the sticky bucket assignment to variation "0"
+        $service->saveAssignments([
+            'attributeName' => 'id',
+            'attributeValue' => 'user123',
+            'assignments' => ['exp__0' => '0']
+        ]);
+
+        // Create a new Growthbook instance with the same user
+        $gb2 = new Growthbook(
+            [
+                'stickyBucketService' => $service,
+                'attributes' => ['id' => 'user123'],
+                'features' => $features
+            ]
+        );
+
+        $result2 = $gb2->getFeature('feature');
+        
+        // Verify that variation 0 is correctly returned
+        $this->assertNotNull($result2->experimentResult);
+        $this->assertTrue($result2->experimentResult->stickyBucketUsed);
+        $this->assertEquals(0, $result2->experimentResult->variationId);
+        $this->assertEquals("control", $result2->experimentResult->value);
+        $this->assertEquals("0", $result2->experimentResult->key);
+    }
 }

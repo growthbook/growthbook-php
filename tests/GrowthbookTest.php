@@ -562,4 +562,44 @@ final class GrowthbookTest extends TestCase
             $service->getAssignments('id', 1)
         );
     }
+
+    /**
+     * @return void
+     */
+    public function testStickyBucketZeroVariationKey(): void
+    {
+        $features = [
+            "feature" => [
+                "defaultValue" => 5,
+                "rules" => [[
+                    "key" => "exp",
+                    "variations" => [0, 1],
+                    "weights" => [0, 1],
+                    "meta" => [
+                        ["key" => "0"],
+                        ["key" => "1"]
+                    ]
+                ]]
+            ],
+        ];
+
+        $service = new InMemoryStickyBucketService();
+        $service->saveAssignments([
+            'attributeName' => 'id',
+            'attributeValue' => 1,
+            'assignments' => ['exp__0' => '0']
+        ]);
+
+        $gb = new Growthbook(
+            [
+                'stickyBucketService' => $service,
+                'attributes' => ['id' => 1],
+                'features' => $features
+            ]
+        );
+
+        $this->assertEquals(0, $gb->getFeature('feature')->value);
+
+        $service->destroy();
+    }
 }

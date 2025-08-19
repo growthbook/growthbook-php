@@ -1137,7 +1137,7 @@ class Growthbook implements LoggerAwareInterface
         }
 
         $variationKey = $assignments[$id] ?? null;
-        if (!$variationKey) {
+        if ($variationKey === null) {
             return [
                 "variation" => -1,
             ];

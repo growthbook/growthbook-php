@@ -527,6 +527,7 @@ final class GrowthbookTest extends TestCase
         $this->assertEquals(1, $gb->getFeature('feature')->value);
         $this->assertEquals(
             ['attributeName' => 'id', 'attributeValue' => 1, 'assignments' => ['exp__0' => 'variation1']],
+            /** @phpstan-ignore-next-line */
             $service->getAssignments('id', 1)
         );
 
@@ -559,6 +560,7 @@ final class GrowthbookTest extends TestCase
                 'exp__0' => 'variation1',
                 "exp__1" => "control"
             ]],
+            /** @phpstan-ignore-next-line */
             $service->getAssignments('id', 1)
         );
     }

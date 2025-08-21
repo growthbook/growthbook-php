@@ -1246,6 +1246,7 @@ class Growthbook implements LoggerAwareInterface
         }
 
         $this->stickyBucketAttributes = $attributes;
+        /** @phpstan-ignore-next-line */
         $this->stickyBucketAssignmentDocs = $this->stickyBucketService->getAllAssignments($attributes);
     }
 

@@ -374,6 +374,173 @@ $growthbook = new Growthbook([
 ]);
 ```
 
+## Async Sticky Bucketing
+
+The Sticky Bucket Service also supports **truly asynchronous operations** using ReactPHP promises. This allows for non-blocking I/O operations, which is particularly useful when working with external databases or APIs for persistence.
+
+
+### Async Methods
+
+All Sticky Bucket Service methods have asynchronous counterparts:
+
+- `getAssignmentsAsync()` - Returns a Promise that resolves to assignments
+- `saveAssignmentsAsync()` - Returns a Promise that resolves when save is complete
+- `getAllAssignmentsAsync()` - Returns a Promise that resolves to all assignments
+
+### Usage Examples
+
+#### Basic Async Usage
+
+```php
+use Growthbook\InMemoryStickyBucketService;
+
+$service = new InMemoryStickyBucketService();
+
+// Set up async operations
+$service->getAssignmentsAsync('user_id', '123')
+    ->then(function($doc) {
+        echo "Retrieved assignments: " . json_encode($doc);
+    }, function($error) {
+        echo "Error: " . $error->getMessage();
+    });
+
+// Execute all pending async operations
+$service->run();
+```
+
+#### Concurrent Operations
+
+```php
+// Save multiple documents concurrently
+$docs = [
+    ['attributeName' => 'user_id', 'attributeValue' => '1', 'assignments' => ['exp1' => 'var1']],
+    ['attributeName' => 'user_id', 'attributeValue' => '2', 'assignments' => ['exp1' => 'var2']],
+    ['attributeName' => 'user_id', 'attributeValue' => '3', 'assignments' => ['exp1' => 'var3']],
+];
+
+// Set up concurrent save operations
+$promises = [];
+foreach ($docs as $doc) {
+    $promises[] = $service->saveAssignmentsAsync($doc);
+}
+
+// Use the convenient resolveAll() method to resolve all promises
+$service->resolveAll($promises)->then(function() {
+    echo "All saves completed!";
+});
+
+// Execute the event loop
+$service->run();
+```
+
+#### Concurrent Retrieval Operations
+
+```php
+// Get multiple assignments concurrently
+$promises = [
+    $service->getAssignmentsAsync('user_id', '1'),
+    $service->getAssignmentsAsync('user_id', '2'), 
+    $service->getAssignmentsAsync('user_id', '3'),
+];
+
+// Resolve all concurrently
+$service->resolveAll($promises)->then(function($results) {
+    // $results is array: [doc1, doc2, doc3]
+    foreach ($results as $i => $doc) {
+        echo "User " . ($i + 1) . ": " . json_encode($doc) . "\n";
+    }
+});
+
+$service->run();
+```
+
+#### Promise Chaining
+
+```php
+$service->saveAssignmentsAsync($doc)
+    ->then(function() use ($service) {
+        // After save completes, get the data
+        return $service->getAssignmentsAsync('user_id', '123');
+    })
+    ->then(function($doc) {
+        echo "Data retrieved: " . json_encode($doc);
+    });
+
+$service->run();
+```
+
+### Sync vs Async Execution
+
+The beauty of this implementation is that **existing sync code continues to work unchanged**:
+
+```php
+// Synchronous (existing code - no changes needed)
+$result = $service->getAssignments('user_id', '123');
+echo json_encode($result);
+
+// Asynchronous (new functionality)
+$service->getAssignmentsAsync('user_id', '123')
+    ->then(function($result) {
+        echo json_encode($result);
+    });
+$service->run();
+```
+
+### Custom Async Implementation
+
+When implementing your own async sticky bucket service, extend the base class and implement both sync and async methods:
+
+```php
+class DatabaseStickyBucketService extends StickyBucketService
+{
+    // Sync methods (required)
+    protected function getAssignmentsSync(string $attributeName, $attributeValue): ?array
+    {
+        // Direct database query
+        return $this->db->query("SELECT * FROM assignments WHERE attr_name = ? AND attr_value = ?", 
+                               [$attributeName, $attributeValue]);
+    }
+
+    protected function saveAssignmentsSync(array $doc): void
+    {
+        // Direct database insert/update
+        $this->db->execute("INSERT INTO assignments ... VALUES ...", $doc);
+    }
+
+    // Async methods (non-required)
+    public function getAssignmentsAsync(string $attributeName, $attributeValue): PromiseInterface
+    {
+        $deferred = new React\Promise\Deferred();
+        
+        // Non-blocking database query using your async driver
+        $this->asyncDb->query("SELECT * FROM assignments WHERE attr_name = ? AND attr_value = ?", 
+                             [$attributeName, $attributeValue])
+            ->then(function($result) use ($deferred) {
+                $deferred->resolve($result);
+            }, function($error) use ($deferred) {
+                $deferred->reject($error);
+            });
+        
+        return $deferred->promise();
+    }
+
+    public function saveAssignmentsAsync(array $doc): PromiseInterface
+    {
+        $deferred = new React\Promise\Deferred();
+        
+        // Non-blocking database insert using your async driver
+        $this->asyncDb->execute("INSERT INTO assignments ... VALUES ...", $doc)
+            ->then(function() use ($deferred) {
+                $deferred->resolve(null);
+            }, function($error) use ($deferred) {
+                $deferred->reject($error);
+            });
+        
+        return $deferred->promise();
+    }
+}
+```
+
 ## Inline Experiments
 
 Instead of declaring all features up-front and referencing them by ids in your code, you can also just run an experiment directly. This is done with the `$growthbook->runInlineExperiment` method:

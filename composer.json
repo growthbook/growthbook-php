@@ -9,6 +9,7 @@
         "psr/http-factory": "^1.0",
         "psr/http-message": "^1.0|^2.0",
         "php-http/discovery": "^1.15",
+        "react/promise": "^2.8|^3.0",
         "ext-json": "*"
     },
     "require-dev": {

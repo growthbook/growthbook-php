@@ -60,6 +60,10 @@ class Growthbook implements LoggerAwareInterface
     private $clientKey = "";
     /** @var string */
     private $decryptionKey = "";
+    /** @var string|null */
+    private $remoteEvalEndPoint = null;
+    /** @var bool */
+    private $isCacheDisabled = true;
 
     /** @var array<string,ViewedExperiment> */
     private $tracks = [];
@@ -121,6 +125,9 @@ class Growthbook implements LoggerAwareInterface
         $this->decryptionKey = $options["decryptionKey"] ?? "";
 
         $this->cache = $options["cache"] ?? null;
+        if(!is_null($this->cache)) {
+            $this->isCacheDisabled = false;
+        }
         try {
             $this->httpClient = $options["httpClient"] ?? Psr18ClientDiscovery::find();
             $this->requestFactory = $options["requestFactory"] ?? Psr17FactoryDiscovery::findRequestFactory();
@@ -247,6 +254,7 @@ class Growthbook implements LoggerAwareInterface
     public function withCache(\Psr\SimpleCache\CacheInterface $cache, ?int $ttl = null): Growthbook
     {
         $this->cache = $cache;
+        $this->isCacheDisabled = false; // Enable cache when withCache is called
         if ($ttl !== null) {
             $this->cacheTTL = $ttl;
         }
@@ -1294,5 +1302,188 @@ class Growthbook implements LoggerAwareInterface
         }
 
         return array_unique($attributes);
+    }
+
+    /**
+     * Fetch features for remote evaluation
+     * @param RequestBodyForRemoteEval $requestBody
+     * @return void
+     * @throws FeatureFetchException
+     * @throws ClientExceptionInterface
+     */
+    public function fetchForRemoteEval(RequestBodyForRemoteEval $requestBody): void
+    {
+        if ($this->remoteEvalEndPoint === null) {
+            throw new \InvalidArgumentException("remote eval features endpoint cannot be null");
+        }
+
+        if (!$this->httpClient) {
+            throw new FeatureFetchException(FeatureFetchException::NO_RESPONSE_ERROR, "HTTP client is not configured");
+        }
+
+        if (!$this->requestFactory) {
+            throw new FeatureFetchException(FeatureFetchException::NO_RESPONSE_ERROR, "Request factory is not configured");
+        }
+
+        $jsonBody = json_encode($requestBody);
+        if ($jsonBody === false) {
+            throw new FeatureFetchException(FeatureFetchException::INVALID_RESPONSE, "Failed to encode request body to JSON");
+        }
+
+        try {
+            $request = $this->requestFactory
+                ->createRequest('POST', $this->remoteEvalEndPoint)
+                ->withHeader('Content-Type', 'application/json');
+            
+            // Write the JSON body to the request
+            try {
+                $streamFactory = Psr17FactoryDiscovery::findStreamFactory();
+                $stream = $streamFactory->createStream($jsonBody);
+                $request = $request->withBody($stream);
+            } catch (\Throwable $streamFactoryError) {
+                // Fallback for when stream factory is not available
+                throw new FeatureFetchException(FeatureFetchException::NO_RESPONSE_ERROR, 
+                    "Stream factory not available: " . $streamFactoryError->getMessage(), $streamFactoryError);
+            }
+
+            $response = $this->httpClient->sendRequest($request);
+
+
+            $this->onRemoteEvalSuccess($response);
+        } catch (FeatureFetchException $e) {
+            // Re-throw FeatureFetchExceptions as-is
+            throw $e;
+        } catch (\Throwable $e) {
+            $this->log(LogLevel::ERROR, "FeatureFetchException: UNKNOWN feature fetch error code {$e->getMessage()}", ["exception" => $e]);
+            throw new FeatureFetchException(FeatureFetchException::UNKNOWN, $e->getMessage(), $e);
+        }
+    }
+
+    /**
+     * Set the remote evaluation endpoint
+     * @param string $clientKey
+     * @param string $apiHost
+     * @return void
+     */
+    public function setRemoteEvalEndpoint(string $clientKey, string $apiHost = ""): void
+    {
+        $host = rtrim(empty($apiHost) ? self::DEFAULT_API_HOST : $apiHost, "/");
+        $this->remoteEvalEndPoint = $host . "/api/eval/" . $clientKey;
+    }
+
+    /**
+     * Handle remote evaluation response like Java onSuccess method
+     * @param \Psr\Http\Message\ResponseInterface $response
+     * @return void
+     * @throws FeatureFetchException
+     */
+    private function onRemoteEvalSuccess(\Psr\Http\Message\ResponseInterface $response): void
+    {
+        try {
+            // If response code is not 200 - try cache
+            if ($response->getStatusCode() !== 200) {
+                $responseBody = '';
+                try {
+                    $responseBody = $response->getBody()->getContents();
+                } catch (\Exception $e) {
+                    // Ignore body reading errors for error responses
+                }
+                
+                $this->log(LogLevel::ERROR, "FeatureFetchException: {} with status {}, response: {}", [
+                    "errorCode" => FeatureFetchException::HTTP_RESPONSE_ERROR,
+                    "status" => $response->getStatusCode(),
+                    "response" => $responseBody
+                ]);
+
+                if ($this->isCacheDisabled) {
+                    throw new FeatureFetchException(
+                        FeatureFetchException::HTTP_RESPONSE_ERROR,
+                        "Failed to fetch data from server and cache is disabled"
+                    );
+                }
+                
+                $this->log(LogLevel::INFO, "Fetching data from cache...");
+                
+                $featuresFromCache = $this->getCachedFeatures();
+                if (empty($featuresFromCache)) {
+                    throw new FeatureFetchException(
+                        FeatureFetchException::NO_RESPONSE_ERROR,
+                        "Failed to fetch data from cache"
+                    );
+                }
+                $this->onResponseJson($featuresFromCache, true);
+                return;
+            }
+            
+            $body = $response->getBody()->getContents();
+            $this->onResponseJson($body, false);
+            
+        } catch (\Throwable $e) {
+            if ($e instanceof FeatureFetchException) {
+                throw $e;
+            }
+            $this->log(LogLevel::ERROR, "FeatureFetchException: UNKNOWN feature fetch error code {$e->getMessage()}", ["exception" => $e]);
+            throw new FeatureFetchException(
+                FeatureFetchException::UNKNOWN,
+                $e->getMessage(),
+                $e
+            );
+        }
+    }
+
+    /**
+     * Get cached features data for remote evaluation
+     * @return string
+     */
+    private function getCachedFeatures(): string
+    {
+        if (!$this->cache || !$this->remoteEvalEndPoint) {
+            return "";
+        }
+        
+        $cacheKey = md5($this->remoteEvalEndPoint . 'remote_eval_v1');
+        $cachedResponse = $this->cache->get($cacheKey);
+        return $cachedResponse ?: "";
+    }
+
+    /**
+     * Process response JSON data like Java implementation
+     * @param string $jsonString
+     * @param bool $fromCache
+     * @return void
+     */
+    private function onResponseJson(string $jsonString, bool $fromCache): void
+    {
+        $parsed = json_decode($jsonString, true);
+        
+        if (!$parsed || !is_array($parsed)) {
+            throw new FeatureFetchException(FeatureFetchException::INVALID_RESPONSE, "Invalid JSON response from remote evaluation");
+        }
+
+        $source = $fromCache ? "cache" : "remote evaluation";
+
+        // Handle features 
+        if (array_key_exists("features", $parsed) && is_array($parsed["features"])) {
+            $this->log(LogLevel::INFO, "Load features from $source", [
+                "endpoint" => $this->remoteEvalEndPoint,
+                "numFeatures" => count($parsed["features"])
+            ]);
+            $this->withFeatures($parsed["features"]);
+        }
+
+        // Handle saved groups
+        if (array_key_exists("savedGroups", $parsed) && is_array($parsed["savedGroups"])) {
+            $this->log(LogLevel::INFO, "Load saved groups from $source", [
+                "endpoint" => $this->remoteEvalEndPoint,
+                "numGroups" => count($parsed["savedGroups"])
+            ]);
+            $this->withSavedGroups($parsed["savedGroups"]);
+        }
+        
+        // Cache successful response if not from cache
+        if (!$fromCache && $this->cache && $this->remoteEvalEndPoint) {
+            $cacheKey = md5($this->remoteEvalEndPoint . 'remote_eval_v1');
+            $this->cache->set($cacheKey, $jsonString, $this->cacheTTL);
+        }
     }
 }

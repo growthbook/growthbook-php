@@ -126,6 +126,57 @@ $savedGroups = json_decode($savedGroupsJSON, true);
 $growthbook = $growthbook->withSavedGroups($savedGroups);
 ```
 
+#### Remote Evaluation
+
+For advanced use cases, you can use remote evaluation to fetch features dynamically based on current user context and attributes. This is useful when you need server-side evaluation with real-time feature flag resolution.
+
+```php
+use Growthbook\RequestBodyForRemoteEval;
+
+// Configure the remote evaluation endpoint
+$growthbook->setRemoteEvalEndpoint('your-client-key');
+
+// Optionally specify a custom API host (defaults to https://cdn.growthbook.io)
+$growthbook->setRemoteEvalEndpoint('your-client-key', 'https://your-growthbook-instance.com');
+
+// Create a request with current user attributes and context
+$requestBody = new RequestBodyForRemoteEval(
+    // User attributes for targeting
+    ['user_id' => '123', 'premium' => true, 'country' => 'US'],
+    
+    // Optional: Force specific feature values
+    [['feature1', 'variation_a']],
+    
+    // Optional: Force specific experiment variations  
+    ['experiment1' => 1],
+    
+    // Optional: Current page URL for targeting
+    'https://example.com/checkout'
+);
+
+// Fetch features remotely based on the request context
+$growthbook->fetchForRemoteEval($requestBody);
+
+// Now use features as normal - they've been dynamically loaded
+if ($growthbook->isOn('premium-checkout')) {
+    // Show premium checkout experience
+}
+```
+
+**Benefits of Remote Evaluation:**
+- **Real-time updates**: Get the latest feature flags without redeploying
+- **Dynamic targeting**: Evaluate based on real-time user context
+- **Server-side evaluation**: All evaluation logic happens on GrowthBook servers
+- **Personalization**: Different users can get different feature sets based on attributes
+
+**Caching**: Remote evaluation supports the same caching mechanisms as the `initialize` method. Enable caching for production usage:
+
+```php
+$growthbook
+    ->withCache($cache)
+    ->setRemoteEvalEndpoint('your-client-key');
+```
+
 ## The Growthbook Class
 
 The `Growthbook` class has a number of properties. These can be set using a Fluent interface or can be passed into a constructor using an associative array. Every property also has a getter method if needed. Here's an example:

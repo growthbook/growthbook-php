@@ -76,7 +76,7 @@ class Growthbook implements LoggerAwareInterface
     /** @var null|array<string, string> */
     private $stickyBucketAttributes = null;
 
-    public static function create(): Growthbook
+    public static function create(): static
     {
         return new Growthbook();
     }
@@ -134,16 +134,16 @@ class Growthbook implements LoggerAwareInterface
 
 
         if (array_key_exists("forcedFeatures", $options)) {
-            $this->withForcedFeatures($options['forcedFeatures']);
+            $this->setForcedFeatures($options['forcedFeatures']);
         }
         if (array_key_exists("features", $options)) {
-            $this->withFeatures(($options["features"]));
+            $this->setFeatures(($options["features"]));
         }
         if (array_key_exists("attributes", $options)) {
-            $this->withAttributes(($options["attributes"]));
+            $this->setAttributes(($options["attributes"]));
         }
         if (array_key_exists("savedGroups", $options)) {
-            $this->withSavedGroups(($options["savedGroups"]));
+            $this->setSavedGroups(($options["savedGroups"]));
         }
     }
 
@@ -151,10 +151,34 @@ class Growthbook implements LoggerAwareInterface
      * @param array<string,mixed> $attributes
      * @return Growthbook
      */
-    public function withAttributes(array $attributes): Growthbook
+    public function setAttributes(array $attributes): static
     {
         $this->attributes = $attributes;
         $this->refreshStickyBuckets();
+
+        return $this;
+    }
+
+    /**
+     * @param array<string,mixed> $attributes
+     * @return Growthbook
+     */
+    public function withAttributes(array $attributes): static
+    {
+        $self = clone $this;
+        $self->setAttributes($attributes);
+
+        return $self;
+    }
+
+    /**
+     * @param array<string,mixed> $savedGroups
+     * @return Growthbook
+     */
+    public function setSavedGroups(array $savedGroups): static
+    {
+        $this->savedGroups = $savedGroups;
+
         return $this;
     }
 
@@ -162,9 +186,22 @@ class Growthbook implements LoggerAwareInterface
      * @param array<string,mixed> $savedGroups
      * @return Growthbook
      */
-    public function withSavedGroups(array $savedGroups): Growthbook
+    public function withSavedGroups(array $savedGroups): static
     {
-        $this->savedGroups = $savedGroups;
+        $self = clone $this;
+        $self->setSavedGroups($savedGroups);
+
+        return $self;
+    }
+
+    /**
+     * @param callable|null $trackingCallback
+     * @return Growthbook
+     */
+    public function setTrackingCallback($trackingCallback): static
+    {
+        $this->trackingCallback = $trackingCallback;
+
         return $this;
     }
 
@@ -172,17 +209,19 @@ class Growthbook implements LoggerAwareInterface
      * @param callable|null $trackingCallback
      * @return Growthbook
      */
-    public function withTrackingCallback($trackingCallback): Growthbook
+    public function withTrackingCallback($trackingCallback): static
     {
-        $this->trackingCallback = $trackingCallback;
-        return $this;
+        $self = clone $this;
+        $self->setTrackingCallback($trackingCallback);
+
+        return $self;
     }
 
     /**
      * @param array<string,Feature<mixed>|mixed> $features
      * @return Growthbook
      */
-    public function withFeatures(array $features): Growthbook
+    public function setFeatures(array $features): static
     {
         $this->features = [];
         foreach ($features as $key => $feature) {
@@ -193,6 +232,29 @@ class Growthbook implements LoggerAwareInterface
             }
         }
         $this->refreshStickyBuckets();
+
+        return $this;
+    }
+
+    /**
+     * @param array<string,Feature<mixed>|mixed> $features
+     * @return Growthbook
+     */
+    public function withFeatures(array $features): static
+    {
+        $self = clone $this;
+        $self->setFeatures($features);
+
+        return $self;
+    }
+
+    /**
+     * @param array<string,int> $forcedVariations
+     * @return Growthbook
+     */
+    public function setForcedVariations(array $forcedVariations): static
+    {
+        $this->forcedVariations = $forcedVariations;
         return $this;
     }
 
@@ -200,9 +262,21 @@ class Growthbook implements LoggerAwareInterface
      * @param array<string,int> $forcedVariations
      * @return Growthbook
      */
-    public function withForcedVariations(array $forcedVariations): Growthbook
+    public function withForcedVariations(array $forcedVariations): static
     {
-        $this->forcedVariations = $forcedVariations;
+        $self = clone $this;
+        $self->setForcedVariations($forcedVariations);
+
+        return $self;
+    }
+
+     /**
+     * @param array<string, FeatureResult<mixed>> $forcedFeatures
+     * @return Growthbook
+     */
+    public function setForcedFeatures(array $forcedFeatures): static
+    {
+        $this->forcedFeatures = $forcedFeatures;
         return $this;
     }
 
@@ -210,9 +284,11 @@ class Growthbook implements LoggerAwareInterface
      * @param array<string, FeatureResult<mixed>> $forcedFeatures
      * @return Growthbook
      */
-    public function withForcedFeatures(array $forcedFeatures): Growthbook
+    public function withForcedFeatures(array $forcedFeatures): static
     {
-        $this->forcedFeatures = $forcedFeatures;
+        $self = clone $this;
+        $self->setForcedFeatures($forcedFeatures);
+
         return $this;
     }
 
@@ -220,36 +296,84 @@ class Growthbook implements LoggerAwareInterface
      * @param string $url
      * @return Growthbook
      */
-    public function withUrl(string $url): Growthbook
+    public function setUrl(string $url): static
     {
         $this->url = $url;
         return $this;
     }
 
-    public function withLogger(?LoggerInterface $logger = null): Growthbook
+    /**
+     * @param string $url
+     * @return Growthbook
+     */
+    public function withUrl(string $url): static
+    {
+        $self = clone $this;
+        $self->setUrl($url);
+
+        return $self;
+    }
+
+    public function setLogger(?LoggerInterface $logger = null): static
     {
         $this->logger = $logger;
+
         return $this;
     }
 
-    public function setLogger(?LoggerInterface $logger = null): void
+    public function withLogger(?LoggerInterface $logger = null): static
     {
-        $this->logger = $logger;
+        $self = clone $this;
+        $self->setLogger($logger);
+
+        return $self;
     }
 
-    public function withHttpClient(\Psr\Http\Client\ClientInterface $client, \Psr\Http\Message\RequestFactoryInterface $requestFactory): Growthbook
+    public function setHttpClient(\Psr\Http\Client\ClientInterface $client, \Psr\Http\Message\RequestFactoryInterface $requestFactory): static
     {
         $this->httpClient = $client;
         $this->requestFactory = $requestFactory;
         return $this;
     }
 
-    public function withCache(\Psr\SimpleCache\CacheInterface $cache, ?int $ttl = null): Growthbook
+    public function withHttpClient(\Psr\Http\Client\ClientInterface $client, \Psr\Http\Message\RequestFactoryInterface $requestFactory): static
+    {
+        $self = clone $this;
+        $self->setHttpClient($client, $requestFactory);
+
+        return $self;
+    }
+
+    /**
+     * @param \Psr\SimpleCache\CacheInterface $cache
+     * @param int|null                       $ttl
+     * @return Growthbook
+     */
+    public function setCache(\Psr\SimpleCache\CacheInterface $cache, ?int $ttl = null): static
     {
         $this->cache = $cache;
         if ($ttl !== null) {
             $this->cacheTTL = $ttl;
         }
+
+        return $this;
+    }
+
+    public function withCache(\Psr\SimpleCache\CacheInterface $cache, ?int $ttl = null): static
+    {
+        $self = clone $this;
+        $self->setCache($cache, $ttl);
+
+        return $self;
+    }
+
+    public function setStickyBucketing(StickyBucketService $stickyBucketService, ?array $stickyBucketIdentifierAttributes): static
+    {
+        $this->stickyBucketService = $stickyBucketService;
+        $this->stickyBucketIdentifierAttributes = $stickyBucketIdentifierAttributes;
+        $this->usingDerivedStickyBucketAttributes = !isset($this->stickyBucketIdentifierAttributes);
+        $this->refreshStickyBuckets();
+
         return $this;
     }
 
@@ -258,13 +382,12 @@ class Growthbook implements LoggerAwareInterface
      * @param array<string>|null  $stickyBucketIdentifierAttributes
      * @return $this
      */
-    public function withStickyBucketing(StickyBucketService $stickyBucketService, ?array $stickyBucketIdentifierAttributes): Growthbook
+    public function withStickyBucketing(StickyBucketService $stickyBucketService, ?array $stickyBucketIdentifierAttributes): static
     {
-        $this->stickyBucketService = $stickyBucketService;
-        $this->stickyBucketIdentifierAttributes = $stickyBucketIdentifierAttributes;
-        $this->usingDerivedStickyBucketAttributes = !isset($this->stickyBucketIdentifierAttributes);
+        $self = clone $this;
+        $self->setStickyBucketing($stickyBucketService, $stickyBucketIdentifierAttributes);
 
-        return $this;
+        return $self;
     }
 
     /**
@@ -1039,11 +1162,11 @@ class Growthbook implements LoggerAwareInterface
                 if (is_array($cachedData)) {
                     if (array_key_exists("features", $cachedData) && is_array($cachedData['features'])) {
                         $this->log(LogLevel::INFO, "Load features from cache", ["url" => $url, "numFeatures" => count($cachedData['features'])]);
-                        $this->withFeatures($cachedData['features']);
+                        $this->setFeatures($cachedData['features']);
                     }
                     if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
                         $this->log(LogLevel::INFO, "Load saved groups from cache", ["url" => $url, "numGroups" => count($cachedData['savedGroups'])]);
-                        $this->withSavedGroups($cachedData['savedGroups']);
+                        $this->setSavedGroups($cachedData['savedGroups']);
                     }
                     return;
                 }
@@ -1073,8 +1196,8 @@ class Growthbook implements LoggerAwareInterface
         }
 
         $this->log(LogLevel::INFO, "Load features and saved groups from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
-        $this->withFeatures($features);
-        $this->withSavedGroups($savedGroups);
+        $this->setFeatures($features);
+        $this->setSavedGroups($savedGroups);
 
         if ($this->cache) {
             $cacheData = [

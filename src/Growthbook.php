@@ -76,9 +76,9 @@ class Growthbook implements LoggerAwareInterface
     /** @var null|array<string, string> */
     private $stickyBucketAttributes = null;
 
-    public static function create(): static
+    public static function create(array $options = []): static
     {
-        return new Growthbook();
+        return new Growthbook($options);
     }
 
     /**

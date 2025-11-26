@@ -308,7 +308,7 @@ class Growthbook implements LoggerAwareInterface
         $self = clone $this;
         $self->setForcedFeatures($forcedFeatures);
 
-        return $this;
+        return $self;
     }
 
     /**

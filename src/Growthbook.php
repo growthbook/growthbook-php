@@ -78,7 +78,7 @@ class Growthbook implements LoggerAwareInterface
 
     public static function create(array $options = []): static
     {
-        return new Growthbook($options);
+        return new static($options);
     }
 
     /**
@@ -147,9 +147,28 @@ class Growthbook implements LoggerAwareInterface
         }
     }
 
+    public function __clone()
+    {
+        if ($this->logger !== null) {
+            $this->logger = clone $this->logger;
+        }
+        if ($this->httpClient !== null) {
+            $this->httpClient = clone $this->httpClient;
+        }
+        if ($this->requestFactory !== null) {
+            $this->requestFactory = clone $this->requestFactory;
+        }
+        if ($this->cache !== null) {
+            $this->cache = clone $this->cache;
+        }
+        if ($this->stickyBucketService !== null) {
+            $this->stickyBucketService = clone $this->stickyBucketService;
+        }
+    }
+
     /**
      * @param array<string,mixed> $attributes
-     * @return Growthbook
+     * @return static
      */
     public function setAttributes(array $attributes): static
     {
@@ -161,7 +180,7 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param array<string,mixed> $attributes
-     * @return Growthbook
+     * @return static
      */
     public function withAttributes(array $attributes): static
     {
@@ -173,7 +192,7 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param array<string,mixed> $savedGroups
-     * @return Growthbook
+     * @return static
      */
     public function setSavedGroups(array $savedGroups): static
     {
@@ -184,7 +203,7 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param array<string,mixed> $savedGroups
-     * @return Growthbook
+     * @return static
      */
     public function withSavedGroups(array $savedGroups): static
     {
@@ -196,7 +215,7 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param callable|null $trackingCallback
-     * @return Growthbook
+     * @return static
      */
     public function setTrackingCallback($trackingCallback): static
     {
@@ -207,7 +226,7 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param callable|null $trackingCallback
-     * @return Growthbook
+     * @return static
      */
     public function withTrackingCallback($trackingCallback): static
     {
@@ -219,7 +238,7 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param array<string,Feature<mixed>|mixed> $features
-     * @return Growthbook
+     * @return static
      */
     public function setFeatures(array $features): static
     {
@@ -238,7 +257,7 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param array<string,Feature<mixed>|mixed> $features
-     * @return Growthbook
+     * @return static
      */
     public function withFeatures(array $features): static
     {
@@ -250,7 +269,7 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param array<string,int> $forcedVariations
-     * @return Growthbook
+     * @return static
      */
     public function setForcedVariations(array $forcedVariations): static
     {
@@ -260,7 +279,7 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param array<string,int> $forcedVariations
-     * @return Growthbook
+     * @return static
      */
     public function withForcedVariations(array $forcedVariations): static
     {
@@ -272,7 +291,7 @@ class Growthbook implements LoggerAwareInterface
 
      /**
      * @param array<string, FeatureResult<mixed>> $forcedFeatures
-     * @return Growthbook
+     * @return static
      */
     public function setForcedFeatures(array $forcedFeatures): static
     {
@@ -282,7 +301,7 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param array<string, FeatureResult<mixed>> $forcedFeatures
-     * @return Growthbook
+     * @return static
      */
     public function withForcedFeatures(array $forcedFeatures): static
     {
@@ -294,7 +313,7 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param string $url
-     * @return Growthbook
+     * @return static
      */
     public function setUrl(string $url): static
     {
@@ -304,7 +323,7 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param string $url
-     * @return Growthbook
+     * @return static
      */
     public function withUrl(string $url): static
     {
@@ -347,7 +366,7 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @param \Psr\SimpleCache\CacheInterface $cache
      * @param int|null                       $ttl
-     * @return Growthbook
+     * @return static
      */
     public function setCache(\Psr\SimpleCache\CacheInterface $cache, ?int $ttl = null): static
     {

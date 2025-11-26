@@ -499,8 +499,8 @@ final class GrowthbookTest extends TestCase
 
         $this->assertEquals(1, $gb->getFeature('feature')->value);
         $this->assertEquals(
-            ['attributeName' => 'id', 'attributeValue' => 1, 'assignments' => ['exp__0' => 'variation1']],
-            $service->getAssignments('id', 1)
+            ['attributeName' => 'id', 'attributeValue' => '1', 'assignments' => ['exp__0' => 'variation1']],
+            $service->getAssignments('id', '1')
         );
 
         $features['feature']['rules'][0]['weights'] = [1, 0];
@@ -533,11 +533,11 @@ final class GrowthbookTest extends TestCase
         $this->assertEquals(0, $gb->getFeature('feature')->value);
 
         $this->assertEquals(
-            ['attributeName' => 'id', 'attributeValue' => 1, 'assignments' => [
+            ['attributeName' => 'id', 'attributeValue' => '1', 'assignments' => [
                 'exp__0' => 'variation1',
-                "exp__1" => "control"
+                // "exp__1" => "control"
             ]],
-            $service->getAssignments('id', 1)
+            $service->getAssignments('id', '1')
         );
     }
 

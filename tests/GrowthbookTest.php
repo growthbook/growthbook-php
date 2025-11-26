@@ -504,7 +504,7 @@ final class GrowthbookTest extends TestCase
         );
 
         $features['feature']['rules'][0]['weights'] = [1, 0];
-        $gb->withFeatures($features);
+        $gb = $gb->withFeatures($features);
         $this->assertEquals(1, $gb->getFeature('feature')->value);
 
         //New GrowthBook instance should also get variation

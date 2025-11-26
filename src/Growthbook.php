@@ -458,6 +458,14 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
+     * @return array<string,array<string,mixed>>
+     */
+    public function getSavedGroups(): array
+    {
+        return $this->savedGroups;
+    }
+
+    /**
      * @return ViewedExperiment[]
      */
     public function getViewedExperiments(): array

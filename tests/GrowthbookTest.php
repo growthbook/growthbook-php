@@ -319,36 +319,7 @@ final class GrowthbookTest extends TestCase
     }
 
 
-    public function testFluentInterface(): void
-    {
-        $attributes = ['id' => 1];
-        $callback = function ($exp, $res) {
-            // do nothing
-        };
-        $features = [
-            'feature-1' => ['defaultValue' => 1, 'rules' => []]
-        ];
-        $url = "/home";
-        $forcedVariations = ['exp1' => 0];
-
-        $gb = Growthbook::create()
-            ->withFeatures($features)
-            ->withAttributes($attributes)
-            ->withTrackingCallback($callback)
-            ->withUrl($url)
-            ->withForcedVariations($forcedVariations);
-
-        $this->assertSame($attributes, $gb->getAttributes());
-        $this->assertSame($callback, $gb->getTrackingCallback());
-        $this->assertSame($url, $gb->getUrl());
-        $this->assertSame($forcedVariations, $gb->getForcedVariations());
-
-        $this->assertSame(
-            json_encode($features),
-            json_encode($gb->getFeatures())
-        );
-    }
-
+    
     public function testForcedFeatures(): void
     {
         $gb = Growthbook::create()
@@ -601,5 +572,379 @@ final class GrowthbookTest extends TestCase
         $this->assertEquals(0, $gb->getFeature('feature')->value);
 
         $service->destroy();
+    }
+
+    // ========== SET* METHODS TEST CASES ==========
+
+    /**
+     * @return void
+     */
+    public function testSetAttributes(): void
+    {
+        $gb = new Growthbook();
+        $attributes = ['id' => 123, 'country' => 'US'];
+
+        $result = $gb->setAttributes($attributes);
+
+        $this->assertSame($gb, $result);
+        $this->assertSame($attributes, $gb->getAttributes());
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetAttributesRefreshesStickyBuckets(): void
+    {
+        $service = $this->createMock(InMemoryStickyBucketService::class);
+        $service->expects($this->once())
+            ->method('getAllAssignments')
+            ->willReturn([]);
+
+        $gb = new Growthbook(['stickyBucketService' => $service]);
+        $gb->setAttributes(['id' => 'test']);
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetSavedGroups(): void
+    {
+        $gb = new Growthbook();
+        $savedGroups = ['group1' => ['param' => 'value']];
+
+        $result = $gb->setSavedGroups($savedGroups);
+
+        $this->assertSame($gb, $result);
+        $this->assertSame($savedGroups, $gb->getSavedGroups());
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetTrackingCallback(): void
+    {
+        $gb = new Growthbook();
+        $callback = function($exp, $res) {
+            // Test callback
+        };
+
+        $result = $gb->setTrackingCallback($callback);
+
+        $this->assertSame($gb, $result);
+        $this->assertSame($callback, $gb->getTrackingCallback());
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetTrackingCallbackToNull(): void
+    {
+        $gb = new Growthbook();
+        $gb->setTrackingCallback(function() {});
+
+        $result = $gb->setTrackingCallback(null);
+
+        $this->assertSame($gb, $result);
+        $this->assertNull($gb->getTrackingCallback());
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetFeatures(): void
+    {
+        $gb = new Growthbook();
+        $features = [
+            'feature1' => ['defaultValue' => true],
+            'feature2' => new \Growthbook\Feature(['defaultValue' => false])
+        ];
+
+        $result = $gb->setFeatures($features);
+
+        $this->assertSame($gb, $result);
+        $actualFeatures = $gb->getFeatures();
+
+        $this->assertCount(2, $actualFeatures);
+        $this->assertTrue($actualFeatures['feature1']->defaultValue);
+        $this->assertFalse($actualFeatures['feature2']->defaultValue);
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetFeaturesRefreshesStickyBuckets(): void
+    {
+        $service = $this->createMock(InMemoryStickyBucketService::class);
+        $service->expects($this->once())
+            ->method('getAllAssignments')
+            ->willReturn([]);
+
+        $gb = new Growthbook(['stickyBucketService' => $service]);
+        $gb->setFeatures(['test' => ['defaultValue' => true]]);
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetForcedVariations(): void
+    {
+        $gb = new Growthbook();
+        $forcedVariations = ['exp1' => 1, 'exp2' => 0];
+
+        $result = $gb->setForcedVariations($forcedVariations);
+
+        $this->assertSame($gb, $result);
+        $this->assertSame($forcedVariations, $gb->getForcedVariations());
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetForcedFeatures(): void
+    {
+        $gb = new Growthbook();
+        $forcedFeatures = [
+            'feature1' => new FeatureResult(true, 'forcedFeature'),
+            'feature2' => new FeatureResult('custom', 'forcedFeature')
+        ];
+
+        $result = $gb->setForcedFeatures($forcedFeatures);
+
+        $this->assertSame($gb, $result);
+        $this->assertSame($forcedFeatures, $gb->getForcedFeatures());
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetUrl(): void
+    {
+        $gb = new Growthbook();
+        $url = '/test/page?param=value';
+
+        $result = $gb->setUrl($url);
+
+        $this->assertSame($gb, $result);
+        $this->assertSame($url, $gb->getUrl());
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetLogger(): void
+    {
+        $gb = new Growthbook();
+        $logger = $this->createMock('Psr\Log\LoggerInterface');
+
+        $result = $gb->setLogger($logger);
+
+        $this->assertSame($gb, $result);
+        $this->assertSame($logger, $gb->logger);
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetLoggerToNull(): void
+    {
+        $gb = new Growthbook();
+        $logger = $this->createMock('Psr\Log\LoggerInterface');
+        $gb->setLogger($logger);
+
+        $result = $gb->setLogger(null);
+
+        $this->assertSame($gb, $result);
+        $this->assertNull($gb->logger);
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetHttpClient(): void
+    {
+        $gb = new Growthbook();
+        $client = $this->createMock('Psr\Http\Client\ClientInterface');
+        $requestFactory = $this->createMock('Psr\Http\Message\RequestFactoryInterface');
+
+        $result = $gb->setHttpClient($client, $requestFactory);
+
+        $this->assertSame($gb, $result);
+        $this->assertSame($client, $gb->httpClient);
+        $this->assertSame($requestFactory, $gb->requestFactory);
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetCache(): void
+    {
+        $gb = new Growthbook();
+        $cache = $this->createMock('Psr\SimpleCache\CacheInterface');
+
+        $result = $gb->setCache($cache);
+
+        $this->assertSame($gb, $result);
+        $this->assertSame($cache, $gb->cache);
+        $this->assertSame(60, $gb->cacheTTL); // Default TTL
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetCacheWithCustomTTL(): void
+    {
+        $gb = new Growthbook();
+        $cache = $this->createMock('Psr\SimpleCache\CacheInterface');
+        $customTTL = 120;
+
+        $result = $gb->setCache($cache, $customTTL);
+
+        $this->assertSame($gb, $result);
+        $this->assertSame($cache, $gb->cache);
+        $this->assertSame($customTTL, $gb->cacheTTL);
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetStickyBucketing(): void
+    {
+        $gb = new Growthbook();
+        $service = $this->createMock(InMemoryStickyBucketService::class);
+        $attributes = ['id', 'email'];
+
+        $result = $gb->setStickyBucketing($service, $attributes);
+
+        $this->assertSame($gb, $result);
+        $this->assertSame($service, $gb->stickyBucketService);
+        $this->assertSame($attributes, $gb->stickyBucketIdentifierAttributes);
+        $this->assertFalse($gb->usingDerivedStickyBucketAttributes);
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetStickyBucketingWithNullAttributes(): void
+    {
+        $gb = new Growthbook();
+        $service = $this->createMock(InMemoryStickyBucketService::class);
+
+        $result = $gb->setStickyBucketing($service, null);
+
+        $this->assertSame($gb, $result);
+        $this->assertSame($service, $gb->stickyBucketService);
+        $this->assertNull($gb->stickyBucketIdentifierAttributes);
+        $this->assertTrue($gb->usingDerivedStickyBucketAttributes);
+    }
+
+    /**
+     * @return void
+     */
+    public function testSetStickyBucketingRefreshesStickyBuckets(): void
+    {
+        $service = $this->createMock(InMemoryStickyBucketService::class);
+        $service->expects($this->once())
+            ->method('getAllAssignments')
+            ->willReturn([]);
+
+        $gb = new Growthbook(['stickyBucketService' => $service]);
+        $gb->setStickyBucketing($service, ['id']);
+    }
+
+    // ========== UPDATED WITH* METHODS TEST CASES ==========
+
+    /**
+     * @return void
+     */
+    public function testFluentInterface(): void
+    {
+        $attributes = ['id' => 1, 'country' => 'US'];
+        $savedGroups = ['group1' => ['param' => 'value']];
+        $callback = function ($exp, $res) {
+            // do nothing
+        };
+        $features = [
+            'feature-1' => ['defaultValue' => 1, 'rules' => []],
+            'feature-2' => new \Growthbook\Feature(['defaultValue' => 2])
+        ];
+        $url = "/home";
+        $forcedVariations = ['exp1' => 0];
+        $forcedFeatures = ['feature-3' => new FeatureResult(true, 'forcedFeature')];
+        $logger = $this->createMock('Psr\Log\LoggerInterface');
+        $cache = $this->createMock('Psr\SimpleCache\CacheInterface');
+        $client = $this->createMock('Psr\Http\Client\ClientInterface');
+        $requestFactory = $this->createMock('Psr\Http\Message\RequestFactoryInterface');
+        $stickyBucketService = $this->createMock(InMemoryStickyBucketService::class);
+        $stickyBucketIdentifierAttributes = ['id', 'email'];
+
+        $gb = Growthbook::create()
+            ->withFeatures($features)
+            ->withAttributes($attributes)
+            ->withSavedGroups($savedGroups)
+            ->withTrackingCallback($callback)
+            ->withUrl($url)
+            ->withForcedVariations($forcedVariations)
+            ->withForcedFeatures($forcedFeatures)
+            ->withLogger($logger)
+            ->withCache($cache, 120)
+            ->withHttpClient($client, $requestFactory)
+            ->withStickyBucketing($stickyBucketService, $stickyBucketIdentifierAttributes);
+
+        // Test that all properties are set correctly
+        $this->assertSame($attributes, $gb->getAttributes());
+        $this->assertSame($savedGroups, $gb->getSavedGroups());
+        $this->assertSame($callback, $gb->getTrackingCallback());
+        $this->assertSame($url, $gb->getUrl());
+        $this->assertSame($forcedVariations, $gb->getForcedVariations());
+        $this->assertSame($forcedFeatures, $gb->getForcedFeatures());
+        $this->assertSame($logger, $gb->logger);
+        $this->assertSame($cache, $gb->cache);
+        $this->assertSame(120, $gb->cacheTTL);
+        $this->assertSame($client, $gb->httpClient);
+        $this->assertSame($requestFactory, $gb->requestFactory);
+        $this->assertSame($stickyBucketService, $gb->stickyBucketService);
+        $this->assertSame($stickyBucketIdentifierAttributes, $gb->stickyBucketIdentifierAttributes);
+
+        // Test features
+        $actualFeatures = $gb->getFeatures();
+        $this->assertCount(2, $actualFeatures);
+        $this->assertSame(1, $actualFeatures['feature-1']->defaultValue);
+        $this->assertSame(2, $actualFeatures['feature-2']->defaultValue);
+
+        // Test that with* methods return a new instance (immutability)
+        $newAttributes = ['id' => 999];
+        $newGb = $gb->withAttributes($newAttributes);
+
+        $this->assertNotSame($gb, $newGb); // Should be different instances
+        $this->assertSame($attributes, $gb->getAttributes()); // Original unchanged
+        $this->assertSame($newAttributes, $newGb->getAttributes()); // New has updated value
+    }
+
+    /**
+     * @return void
+     */
+    public function testWithMethodsImmutability(): void
+    {
+        $originalGb = Growthbook::create()
+            ->withAttributes(['id' => 1])
+            ->withFeatures(['test' => ['defaultValue' => true]])
+            ->withUrl('/original');
+
+        // Test each with* method creates a new instance
+        $newGb1 = $originalGb->withAttributes(['id' => 2]);
+        $this->assertNotSame($originalGb, $newGb1);
+        $this->assertSame(['id' => 1], $originalGb->getAttributes());
+        $this->assertSame(['id' => 2], $newGb1->getAttributes());
+
+        $newGb2 = $originalGb->withFeatures(['new-feature' => ['defaultValue' => false]]);
+        $this->assertNotSame($originalGb, $newGb2);
+        $this->assertNotSame($newGb1, $newGb2);
+
+        $newGb3 = $originalGb->withUrl('/new-url');
+        $this->assertNotSame($originalGb, $newGb3);
+        $this->assertNotSame($newGb1, $newGb3);
+        $this->assertNotSame($newGb2, $newGb3);
+        $this->assertSame('/original', $originalGb->getUrl());
+        $this->assertSame('/new-url', $newGb3->getUrl());
     }
 }

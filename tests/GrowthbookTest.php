@@ -319,7 +319,7 @@ final class GrowthbookTest extends TestCase
     }
 
 
-    
+
     public function testForcedFeatures(): void
     {
         $gb = Growthbook::create()
@@ -624,7 +624,7 @@ final class GrowthbookTest extends TestCase
     public function testSetTrackingCallback(): void
     {
         $gb = new Growthbook();
-        $callback = function($exp, $res) {
+        $callback = function ($exp, $res) {
             // Test callback
         };
 
@@ -640,7 +640,7 @@ final class GrowthbookTest extends TestCase
     public function testSetTrackingCallbackToNull(): void
     {
         $gb = new Growthbook();
-        $gb->setTrackingCallback(function() {});
+        $gb->setTrackingCallback(function () {});
 
         $result = $gb->setTrackingCallback(null);
 

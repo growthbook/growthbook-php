@@ -155,9 +155,6 @@ class Growthbook implements LoggerAwareInterface
         if ($this->httpClient !== null) {
             $this->httpClient = clone $this->httpClient;
         }
-        if ($this->requestFactory !== null) {
-            $this->requestFactory = clone $this->requestFactory;
-        }
         if ($this->cache !== null) {
             $this->cache = clone $this->cache;
         }

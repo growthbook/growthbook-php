@@ -1200,7 +1200,7 @@ class Growthbook implements LoggerAwareInterface
         // Otherwise, fetch from API
         $req = $this->requestFactory->createRequest('GET', $url);
         $res = $this->httpClient->sendRequest($req);
-        $body = $res->getBody();
+        $body = $res->getBody()->getContents();
         $parsed = json_decode($body, true);
         if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
             $this->log(LogLevel::WARNING, "Could not load features", ["url" => $url, "responseBody" => $body]);

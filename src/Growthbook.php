@@ -147,22 +147,6 @@ class Growthbook implements LoggerAwareInterface
         }
     }
 
-    public function __clone()
-    {
-        if ($this->logger !== null) {
-            $this->logger = clone $this->logger;
-        }
-        if ($this->httpClient !== null) {
-            $this->httpClient = clone $this->httpClient;
-        }
-        if ($this->cache !== null) {
-            $this->cache = clone $this->cache;
-        }
-        if ($this->stickyBucketService !== null) {
-            $this->stickyBucketService = clone $this->stickyBucketService;
-        }
-    }
-
     /**
      * @param array<string,mixed> $attributes
      * @return static

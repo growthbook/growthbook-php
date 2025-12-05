@@ -317,6 +317,10 @@ class Growthbook implements LoggerAwareInterface
         return $self;
     }
 
+    /**
+     * @param LoggerInterface|null $logger
+     * @return static
+     */
     public function setLogger(?LoggerInterface $logger = null): static
     {
         $this->logger = $logger;
@@ -324,6 +328,10 @@ class Growthbook implements LoggerAwareInterface
         return $this;
     }
 
+    /**
+     * @param LoggerInterface|null $logger
+     * @return static
+     */
     public function withLogger(?LoggerInterface $logger = null): static
     {
         $self = clone $this;
@@ -332,6 +340,11 @@ class Growthbook implements LoggerAwareInterface
         return $self;
     }
 
+    /**
+     * @param \Psr\Http\Client\ClientInterface $client
+     * @param \Psr\Http\Message\RequestFactoryInterface $requestFactory
+     * @return static
+     */
     public function setHttpClient(\Psr\Http\Client\ClientInterface $client, \Psr\Http\Message\RequestFactoryInterface $requestFactory): static
     {
         $this->httpClient = $client;
@@ -339,6 +352,13 @@ class Growthbook implements LoggerAwareInterface
         return $this;
     }
 
+    /**
+     * Set the HTTP client and request factory to use for API requests.
+     *
+     * @param \Psr\Http\Client\ClientInterface $client
+     * @param \Psr\Http\Message\RequestFactoryInterface $requestFactory
+     * @return static
+     */
     public function withHttpClient(\Psr\Http\Client\ClientInterface $client, \Psr\Http\Message\RequestFactoryInterface $requestFactory): static
     {
         $self = clone $this;
@@ -362,6 +382,11 @@ class Growthbook implements LoggerAwareInterface
         return $this;
     }
 
+    /**
+     * @param \Psr\SimpleCache\CacheInterface $cache
+     * @param int|null                       $ttl
+     * @return static
+     */
     public function withCache(\Psr\SimpleCache\CacheInterface $cache, ?int $ttl = null): static
     {
         $self = clone $this;
@@ -386,7 +411,7 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @param StickyBucketService $stickyBucketService
      * @param array<string>|null  $stickyBucketIdentifierAttributes
-     * @return $this
+     * @return static
      */
     public function withStickyBucketing(StickyBucketService $stickyBucketService, ?array $stickyBucketIdentifierAttributes): static
     {

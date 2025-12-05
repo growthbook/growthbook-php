@@ -663,7 +663,7 @@ final class GrowthbookTest extends TestCase
         $gb = new Growthbook();
         $features = [
             'feature1' => ['defaultValue' => true],
-            'feature2' => new \Growthbook\Feature(['defaultValue' => false])
+            'feature2' => new \Growthbook\Feature(['defaultValue' => false, 'rules' => []])
         ];
 
         $result = $gb->setFeatures($features);
@@ -911,7 +911,7 @@ final class GrowthbookTest extends TestCase
         };
         $features = [
             'feature-1' => ['defaultValue' => 1, 'rules' => []],
-            'feature-2' => new \Growthbook\Feature(['defaultValue' => 2])
+            'feature-2' => new \Growthbook\Feature(['defaultValue' => 2, 'rules' => []])
         ];
         $url = "/home";
         $forcedVariations = ['exp1' => 0];

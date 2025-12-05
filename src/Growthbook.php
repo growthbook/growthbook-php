@@ -76,9 +76,12 @@ class Growthbook implements LoggerAwareInterface
     /** @var null|array<string, string> */
     private $stickyBucketAttributes = null;
 
+    /**
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>} $options
+     */
     public static function create(array $options = []): static
     {
-        return new static($options);
+        return new static($options); // @phpstan-ignore-line
     }
 
     /**
@@ -367,6 +370,9 @@ class Growthbook implements LoggerAwareInterface
         return $self;
     }
 
+    /**
+     * @param null|array<string> $stickyBucketIdentifierAttributes
+     */
     public function setStickyBucketing(StickyBucketService $stickyBucketService, ?array $stickyBucketIdentifierAttributes): static
     {
         $this->stickyBucketService = $stickyBucketService;

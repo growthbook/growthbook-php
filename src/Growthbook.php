@@ -273,7 +273,7 @@ class Growthbook implements LoggerAwareInterface
         return $self;
     }
 
-     /**
+    /**
      * @param array<string, FeatureResult<mixed>> $forcedFeatures
      * @return static
      */

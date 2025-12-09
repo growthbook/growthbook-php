@@ -617,7 +617,12 @@ final class GrowthbookTest extends TestCase
     public function testSetSavedGroups(): void
     {
         $gb = new Growthbook();
-        $savedGroups = ['group1' => ['param' => 'value']];
+        $savedGroups = [
+            'group1' => [
+                'param' => 'value',
+                'rules' => [],
+            ]
+        ];
 
         $result = $gb->setSavedGroups($savedGroups);
 

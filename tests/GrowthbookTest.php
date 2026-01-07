@@ -656,7 +656,7 @@ final class GrowthbookTest extends TestCase
 
         // Verify features were stored in main cache (but NOT etag - it's in LruETagCache now)
         $this->assertNotNull($cacheData);
-        $this->assertArrayHasKey('features', $cacheData);
+        $this->assertArrayHasKey('data', $cacheData);
         $this->assertArrayNotHasKey('etag', $cacheData); // ETag is now in separate LruETagCache
 
         // Verify we can access ETag via reflection (internal LruETagCache)
@@ -839,7 +839,7 @@ final class GrowthbookTest extends TestCase
 
         // Verify cache was still set with features (no ETag in main cache - it's in LruETagCache)
         $this->assertNotNull($cacheData);
-        $this->assertArrayHasKey('features', $cacheData);
+        $this->assertArrayHasKey('data', $cacheData);
         $this->assertArrayNotHasKey('etag', $cacheData); // ETag is now stored separately in LruETagCache
 
         // Verify LruETagCache has no ETag for this URL (since response didn't have one)

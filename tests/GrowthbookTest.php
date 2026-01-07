@@ -711,11 +711,9 @@ final class GrowthbookTest extends TestCase
         $mockHttpClient = $this->createMock(\Psr\Http\Client\ClientInterface::class);
         $mockHttpClient->method('sendRequest')->willReturn($mockResponse);
 
-        // Create mock cache that returns cached data with ETag
-        // but simulates cache miss (TTL expired) so we make the request
-        $getCalls = 0;
+        // Create mock cache that always misses (TTL expired) so we make the request
         $mockCache = $this->createMock(\Psr\SimpleCache\CacheInterface::class);
-        $mockCache->method('get')->willReturnCallback(function () use (&$getCalls) {
+        $mockCache->method('get')->willReturnCallback(function () {
             // Return null to simulate cache miss (expired)
             return null;
         });

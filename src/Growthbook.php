@@ -1074,7 +1074,9 @@ class Growthbook implements LoggerAwareInterface
             $this->log(LogLevel::DEBUG, "Sending conditional request with ETag", ["url" => $url, "etag" => $cachedETag]);
         }
 
-        $res = $this->httpClient->sendRequest($req);
+        /** @var \Psr\Http\Client\ClientInterface $httpClient */
+        $httpClient = $this->httpClient;
+        $res = $httpClient->sendRequest($req);
         $statusCode = $res->getStatusCode();
 
         // Handle 304 Not Modified - refresh cache TTL with existing data

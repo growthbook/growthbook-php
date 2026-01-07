@@ -67,6 +67,11 @@ class Growthbook implements LoggerAwareInterface
     /** @var StickyBucketService|null */
     private $stickyBucketService = null;
 
+    /**
+     * @var LruETagCache
+     */
+    private LruETagCache $etagCache;
+
     /** @var array<string>|null */
     private $stickyBucketIdentifierAttributes = null;
     /** @var array<string, array> */
@@ -104,7 +109,8 @@ class Growthbook implements LoggerAwareInterface
             "stickyBucketService",
             "stickyBucketIdentifierAttributes",
             "savedGroups",
-            "encryptedSavedGroups"
+            "encryptedSavedGroups",
+            "etagCacheSize"
         ];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
@@ -131,6 +137,10 @@ class Growthbook implements LoggerAwareInterface
         $this->stickyBucketService = $options["stickyBucketService"] ?? null;
         $this->stickyBucketIdentifierAttributes = $options["stickyBucketIdentifierAttributes"] ?? null;
         $this->usingDerivedStickyBucketAttributes = !isset($this->stickyBucketIdentifierAttributes);
+
+        // Initialize LRU ETag cache (default size: 100)
+        $etagCacheSize = $options["etagCacheSize"] ?? 100;
+        $this->etagCache = new LruETagCache($etagCacheSize);
 
 
         if (array_key_exists("forcedFeatures", $options)) {
@@ -1029,7 +1039,9 @@ class Growthbook implements LoggerAwareInterface
 
         $url = rtrim(empty($this->apiHost) ? self::DEFAULT_API_HOST : $this->apiHost, "/") . "/api/features/" . $this->clientKey;
         // Update when the cache format changes to prevent issues when updating the library version
-        $cacheKey = md5($url . 'v2');
+        $cacheKey = md5($url . 'v3');
+
+        $cachedData = null;
 
         // First try fetching from cache
         if ($this->cache) {
@@ -1050,9 +1062,33 @@ class Growthbook implements LoggerAwareInterface
             }
         }
 
-        // Otherwise, fetch from API
+        // Fetch from API with conditional request support
         $req = $this->requestFactory->createRequest('GET', $url);
+
+        // Get ETag from LRU cache (persists even when main cache expires)
+        $cachedETag = $this->etagCache->get($url);
+
+        // Add If-None-Match header if we have a cached ETag
+        if ($cachedETag !== null) {
+            $req = $req->withHeader('If-None-Match', $cachedETag);
+            $this->log(LogLevel::DEBUG, "Sending conditional request with ETag", ["url" => $url, "etag" => $cachedETag]);
+        }
+
         $res = $this->httpClient->sendRequest($req);
+        $statusCode = $res->getStatusCode();
+
+        // Handle 304 Not Modified - refresh cache TTL with existing data
+        if ($statusCode === 304 && $cachedData !== null) {
+            $this->log(LogLevel::INFO, "Received 304 Not Modified, using cached data", ["url" => $url]);
+
+            // Refresh the cache TTL
+            if ($this->cache) {
+                $this->cache->set($cacheKey, json_encode($cachedData), $this->cacheTTL);
+                $this->log(LogLevel::DEBUG, "Refreshed cache TTL", ["url" => $url, "ttl" => $this->cacheTTL]);
+            }
+            return;
+        }
+
         $body = $res->getBody();
         $parsed = json_decode($body, true);
         if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
@@ -1060,7 +1096,7 @@ class Growthbook implements LoggerAwareInterface
             return;
         }
 
-        // Set features and savedGroupd and cache for next time
+        // Set features and savedGroups and cache for next time
         $features = array_key_exists("encryptedFeatures", $parsed)
             ? json_decode($this->decrypt($parsed["encryptedFeatures"]), true)
             : $parsed["features"];
@@ -1076,6 +1112,13 @@ class Growthbook implements LoggerAwareInterface
         $this->withFeatures($features);
         $this->withSavedGroups($savedGroups);
 
+        // Extract and store ETag in LRU cache
+        $etag = $this->extractETagFromResponse($res);
+        if ($etag !== null) {
+            $this->etagCache->put($url, $etag);
+            $this->log(LogLevel::DEBUG, "Stored ETag in cache", ["url" => $url, "etag" => $etag]);
+        }
+
         if ($this->cache) {
             $cacheData = [
                 'features' => $features,
@@ -1089,6 +1132,22 @@ class Growthbook implements LoggerAwareInterface
                 "ttl" => $this->cacheTTL
             ]);
         }
+    }
+
+    /**
+     * Extract ETag header from response
+     *
+     * @param \Psr\Http\Message\ResponseInterface $response
+     * @return string|null
+     */
+    private function extractETagFromResponse(\Psr\Http\Message\ResponseInterface $response): ?string
+    {
+        if (!$response->hasHeader('ETag')) {
+            return null;
+        }
+
+        $etagHeader = $response->getHeader('ETag');
+        return !empty($etagHeader) ? $etagHeader[0] : null;
     }
 
     /**

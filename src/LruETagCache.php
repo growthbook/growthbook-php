@@ -22,16 +22,6 @@ class LruETagCache
     private array $cache = [];
 
     /**
-     * @var array<string, int> Access order tracking (URL => access timestamp)
-     */
-    private array $accessOrder = [];
-
-    /**
-     * @var int Internal counter for access ordering
-     */
-    private int $accessCounter = 0;
-
-    /**
      * @param int $maxSize Maximum number of entries to store (default: 100)
      */
     public function __construct(int $maxSize = 100)
@@ -51,8 +41,9 @@ class LruETagCache
             return null;
         }
 
-        // Update access order (move to most recently used)
-        $this->accessOrder[$url] = ++$this->accessCounter;
+        $etag = $this->cache[$url];
+        unset($this->cache[$url]);
+        $this->cache[$url] = $etag;
 
         return $this->cache[$url];
     }
@@ -73,17 +64,20 @@ class LruETagCache
             return;
         }
 
-        // Check if this is an update (not a new entry)
-        $isUpdate = array_key_exists($url, $this->cache);
-
-        // Update or add the entry
-        $this->cache[$url] = $etag;
-        $this->accessOrder[$url] = ++$this->accessCounter;
-
-        // If not an update and we're over capacity, evict the LRU entry
-        if (!$isUpdate && count($this->cache) > $this->maxSize) {
-            $this->evictLru();
+        // If exists, remove it first (will re-add at end)
+        if (array_key_exists($url, $this->cache)) {
+            unset($this->cache[$url]);
+        } else {
+            // New entry - check if we need to evict
+            if (count($this->cache) >= $this->maxSize) {
+                // Remove first entry (least recently used)
+                // array_shift removes and returns first element
+                array_shift($this->cache);
+            }
         }
+
+        // Add at end (most recently used)
+        $this->cache[$url] = $etag;
     }
 
     /**
@@ -99,8 +93,7 @@ class LruETagCache
         }
 
         $value = $this->cache[$url];
-        unset($this->cache[$url], $this->accessOrder[$url]);
-
+        unset($this->cache[$url]);
         return $value;
     }
 
@@ -131,25 +124,5 @@ class LruETagCache
     public function clear(): void
     {
         $this->cache = [];
-        $this->accessOrder = [];
-        $this->accessCounter = 0;
-    }
-
-    /**
-     * Evict the least recently used entry from the cache.
-     */
-    private function evictLru(): void
-    {
-        if (empty($this->accessOrder)) {
-            return;
-        }
-
-        // Find the URL with the lowest access counter (LRU)
-        $lruUrl = array_search(min($this->accessOrder), $this->accessOrder);
-
-        if ($lruUrl !== false) {
-            unset($this->cache[$lruUrl], $this->accessOrder[$lruUrl]);
-        }
     }
 }
-

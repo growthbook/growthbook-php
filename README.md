@@ -8,7 +8,7 @@ Powerful Feature flagging and A/B testing for PHP.
 
 - **No external dependencies** (besides PSR interfaces)
 - **Extremely fast**, all evaluation happens locally
-- **PHP 7.1+** with 100% test coverage and phpstan on the highest level
+- **PHP 8.0+** with 100% test coverage and phpstan on the highest level
 - **Advanced user and page targeting**
 - **Use your existing event tracking** (GA, Segment, Mixpanel, custom)
 - **Adjust variation weights and targeting** without deploying new code

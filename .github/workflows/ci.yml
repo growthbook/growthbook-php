@@ -11,10 +11,9 @@ jobs:
 
     strategy:
       matrix:
-        php-version: ['7.1', '7.2', '7.3', '7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5' ]
+        php-version: ['8.0', '8.1', '8.2', '8.3', '8.4', '8.5' ]
         dependencies: [ '' ]
         include:
-          - { php-version: '7.1', dependencies: '--prefer-lowest' }
           - { php-version: '8.0', dependencies: '--prefer-lowest' }
 
     steps:

@@ -1071,6 +1071,7 @@ class Growthbook implements LoggerAwareInterface
         }
 
         // 2. Prepare the API request
+        /** @var \Psr\Http\Message\RequestInterface $req */ // Додаємо цей рядок
         $req = $requestFactory->createRequest('GET', $url);
         $cachedETag = $this->etagCache->get($url);
 

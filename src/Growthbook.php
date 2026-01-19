@@ -1079,6 +1079,15 @@ class Growthbook implements LoggerAwareInterface
             $req = $req->withHeader('If-None-Match', $cachedETag);
         }
 
+        $sdkVersion = 'v1.7.2';
+        $clientKey = $this->clientKey ?? '';
+        $clientKeySuffix = strlen($clientKey) >= 4 ? substr($clientKey, -4) : 'xxxx';
+        $userAgent = "GrowthBook-PHP/{$sdkVersion}-{$clientKeySuffix}";
+
+        $req = $req->withHeader('Accept-Encoding', 'gzip, deflate')
+           ->withHeader('Cache-Control', 'max-age=3600')
+           ->withHeader('User-Agent', $userAgent);
+
         $res = $httpClient->sendRequest($req);
         $statusCode = $res->getStatusCode();
 

@@ -1071,7 +1071,7 @@ class Growthbook implements LoggerAwareInterface
         }
 
         // 2. Prepare the API request
-        /** @var \Psr\Http\Message\RequestInterface $req */ // Додаємо цей рядок
+        /** @var \Psr\Http\Message\RequestInterface $req */
         $req = $requestFactory->createRequest('GET', $url);
         $cachedETag = $this->etagCache->get($url);
 
@@ -1085,6 +1085,7 @@ class Growthbook implements LoggerAwareInterface
         $clientKeySuffix = strlen($clientKey) >= 4 ? substr($clientKey, -4) : 'xxxx';
         $userAgent = "GrowthBook-PHP/{$sdkVersion}-{$clientKeySuffix}";
 
+        /** @var \Psr\Http\Message\RequestInterface $req */
         $req = $req->withHeader('Accept-Encoding', 'gzip, deflate')
            ->withHeader('Cache-Control', 'max-age=3600')
            ->withHeader('User-Agent', $userAgent);

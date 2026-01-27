@@ -1481,6 +1481,7 @@ private function startSSEConnection(): void
         $request = $this->requestFactory->createRequest('GET', $sseUrl)
             ->withHeader('Accept', 'text/event-stream');
         
+        /** @var \Psr\Http\Message\RequestInterface $request */
         $response = $this->httpClient->sendRequest($request);
 
         if (!$response->getBody()->isReadable()) {

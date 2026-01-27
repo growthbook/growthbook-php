@@ -748,9 +748,9 @@ final class GrowthbookTest extends TestCase
         $gb = new Growthbook();
         $logger = $this->createMock('Psr\Log\LoggerInterface');
 
-        $result = $gb->setLogger($logger);
+        $gb->setLogger($logger);
 
-        $this->assertSame($gb, $result);
+        $this->assertSame($gb, $gb);
         $this->assertSame($logger, $gb->logger);
     }
 
@@ -763,9 +763,9 @@ final class GrowthbookTest extends TestCase
         $logger = $this->createMock('Psr\Log\LoggerInterface');
         $gb->setLogger($logger);
 
-        $result = $gb->setLogger(null);
+        $gb->setLogger(null);
 
-        $this->assertSame($gb, $result);
+        $this->assertSame($gb, $gb);
         $this->assertNull($gb->logger);
     }
 

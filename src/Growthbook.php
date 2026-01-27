@@ -9,6 +9,7 @@ use Psr\Http\Client\ClientExceptionInterface;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\LogLevel;
+use Psr\Http\Message\ResponseInterface;
 
 class Growthbook implements LoggerAwareInterface
 {
@@ -75,6 +76,15 @@ class Growthbook implements LoggerAwareInterface
     private $usingDerivedStickyBucketAttributes;
     /** @var null|array<string, string> */
     private $stickyBucketAttributes = null;
+    /** @var bool */
+    public $backgroundSync = false;
+
+    /** @var bool */
+    public $isInitialized = false;
+    /** @var bool */
+    private bool $isReady = false;
+    /** @var array<callable> */
+    private array $sseListeners = [];
 
     /**
      * @param array<string, mixed> $options
@@ -110,7 +120,8 @@ class Growthbook implements LoggerAwareInterface
             "stickyBucketService",
             "stickyBucketIdentifierAttributes",
             "savedGroups",
-            "encryptedSavedGroups"
+            "encryptedSavedGroups",
+            "backgroundSync"
         ];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
@@ -122,6 +133,7 @@ class Growthbook implements LoggerAwareInterface
         $this->url = $options["url"] ?? $_SERVER['REQUEST_URI'] ?? "";
         $this->forcedVariations = $options["forcedVariations"] ?? [];
         $this->qaMode = $options["qaMode"] ?? false;
+        $this->backgroundSync = $options["backgroundSync"] ?? false;
         $this->trackingCallback = $options["trackingCallback"] ?? null;
 
         $this->decryptionKey = $options["decryptionKey"] ?? "";
@@ -151,6 +163,12 @@ class Growthbook implements LoggerAwareInterface
         if (array_key_exists("savedGroups", $options)) {
             $this->setSavedGroups(($options["savedGroups"]));
         }
+    }
+
+    public function withBackgroundSync(bool $backgroundSync): Growthbook
+    {
+        $this->backgroundSync = $backgroundSync;
+        return $this;
     }
 
     /**
@@ -322,13 +340,10 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param LoggerInterface|null $logger
-     * @return static
      */
-    public function setLogger(?LoggerInterface $logger = null): static
+    public function setLogger(?LoggerInterface $logger = null): void
     {
         $this->logger = $logger;
-
-        return $this;
     }
 
     /**
@@ -1167,92 +1182,421 @@ class Growthbook implements LoggerAwareInterface
 
         return $decrypted;
     }
-
-    /**
-     * @param string $clientKey
-     * @param string $apiHost
-     * @param string $decryptionKey
-     * @return void
-     * @throws ClientExceptionInterface
-     * @throws Exception
-     */
-    public function initialize(string $clientKey, string $apiHost = "", string $decryptionKey = ""): void
-    {
+    public function initialize(string $clientKey = "", string $apiHost = "", string $decryptionKey = ""): void {
+        $this->validateInitialization($clientKey);
         $this->clientKey = $clientKey;
         $this->apiHost = $apiHost;
         $this->decryptionKey = $decryptionKey;
+        $this->isInitialized = true;
 
-        if (!$this->clientKey) {
-            throw new Exception("Must specify a clientKey before initializing.");
+        $this->fetchFeaturesFromCacheOrApi();
+    
+        if ($this->backgroundSync) {
+            $this->startBackGroundSync();
         }
-        if (!$this->httpClient) {
-            throw new Exception("Must set an HTTP Client before initializing.");
-        }
-        if (!$this->requestFactory) {
-            throw new Exception("Must set an HTTP Request Factory before initializing");
-        }
+    }
 
-        $url = rtrim(empty($this->apiHost) ? self::DEFAULT_API_HOST : $this->apiHost, "/") . "/api/features/" . $this->clientKey;
-        // Update when the cache format changes to prevent issues when updating the library version
-        $cacheKey = md5($url . 'v2');
+    private function startBackGroundSync(): void
+    {
+        if (!$this->isInitialized) {
+        throw new \RuntimeException("Growthbook not initialized");
+    }
 
-        // First try fetching from cache
-        if ($this->cache) {
-            $cachedResponse = $this->cache->get($cacheKey);
-            if ($cachedResponse) {
-                $cachedData = json_decode($cachedResponse, true);
-                if (is_array($cachedData)) {
-                    if (array_key_exists("features", $cachedData) && is_array($cachedData['features'])) {
-                        $this->log(LogLevel::INFO, "Load features from cache", ["url" => $url, "numFeatures" => count($cachedData['features'])]);
-                        $this->setFeatures($cachedData['features']);
-                    }
-                    if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
-                        $this->log(LogLevel::INFO, "Load saved groups from cache", ["url" => $url, "numGroups" => count($cachedData['savedGroups'])]);
-                        $this->setSavedGroups($cachedData['savedGroups']);
-                    }
-                    return;
-                }
+    // Run SSE in background
+    register_shutdown_function(function() {
+        try {
+            $this->startSSEConnection();
+        } catch (\Throwable $e) {
+            $this->log(LogLevel::ERROR, "Background sync error: " . $e->getMessage());
+        }
+    });
+    }
+
+    public function waitForInitialLoad(int $timeout = 5): bool {
+        $start = time();
+        while (!$this->isReady && (time() - $start) < $timeout) {
+            usleep(100000); // 100ms
+        }
+        return $this->isReady;
+    }
+    
+    public function onFeatureUpdate(callable $listener): void {
+        $this->sseListeners[] = $listener;
+    }
+
+    /**
+    * Notify all registered listeners about feature updates
+    * @param array<string, mixed> $features Updated features array
+    */
+    private function notifyFeatureUpdate(array $features): void {
+        foreach ($this->sseListeners as $listener) {
+            try {
+                $listener($features);
+            } catch (\Throwable $e) {
+                $this->log(LogLevel::ERROR, "Feature update listener error: " . $e->getMessage());
             }
         }
+    }
+    
+    
+    private function fetchFeaturesFromCacheOrApi(): void
+{
+    $url = $this->buildFeaturesUrl();
+    $cacheKey = $this->buildCacheKey($url);
 
-        // Otherwise, fetch from API
-        $req = $this->requestFactory->createRequest('GET', $url);
-        $res = $this->httpClient->sendRequest($req);
-        $body = $res->getBody()->getContents();
-        $parsed = json_decode($body, true);
-        if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
-            $this->log(LogLevel::WARNING, "Could not load features", ["url" => $url, "responseBody" => $body]);
+    if ($this->tryLoadFromCache($cacheKey, $url)) {
+        return;
+    }
+
+    $this->fetchFromApi($url, $cacheKey);
+}
+
+    /**
+ * Build features API URL
+ */
+private function buildFeaturesUrl(): string
+{
+    return rtrim(empty($this->apiHost) ? self::DEFAULT_API_HOST : $this->apiHost, "/") 
+        . "/api/features/" . $this->clientKey;
+}
+
+/**
+ * Build cache key for features
+ */
+private function buildCacheKey(string $url): string
+{
+    return md5($url . 'v2');
+}
+
+/**
+ * Try loading features from cache
+ */
+private function tryLoadFromCache(string $cacheKey, string $url): bool
+{
+    if (!$this->cache) {
+        return false;
+    }
+
+    $cachedResponse = $this->cache->get($cacheKey);
+    if (!$cachedResponse) {
+        return false;
+    }
+
+    $cachedData = json_decode($cachedResponse, true);
+    if (!is_array($cachedData)) {
+        return false;
+    }
+
+    $success = false;
+
+    if (isset($cachedData['features']) && is_array($cachedData['features'])) {
+        $this->log(LogLevel::INFO, "Load features from cache", [
+            "url" => $url,
+            "numFeatures" => count($cachedData['features'])
+        ]);
+        $this->withFeatures($cachedData['features']);
+        $success = true;
+    }
+
+    if (isset($cachedData['savedGroups']) && is_array($cachedData['savedGroups'])) {
+        $this->log(LogLevel::INFO, "Load saved groups from cache", [
+            "url" => $url,
+            "numGroups" => count($cachedData['savedGroups'])
+        ]);
+        $this->withSavedGroups($cachedData['savedGroups']);
+        $success = true;
+    }
+
+    return $success;
+}
+
+/**
+ * Fetch features from API and cache them
+ */
+private function fetchFromApi(string $url, string $cacheKey): void
+{
+    try {
+        $response = $this->makeApiRequest($url);
+        $parsed = $this->parseApiResponse($response, $url);
+        
+        if ($parsed === null) {
             return;
         }
 
-        // Set features and savedGroupd and cache for next time
-        $features = array_key_exists("encryptedFeatures", $parsed)
-            ? json_decode($this->decrypt($parsed["encryptedFeatures"]), true)
-            : $parsed["features"];
+        $this->processFeatures($parsed, $url, $cacheKey);
+    } catch (\Throwable $e) {
+        $this->log(LogLevel::ERROR, "API request failed: " . $e->getMessage());
+    }
+}
 
-        $savedGroups = array_key_exists("encryptedSavedGroups", $parsed)
-            ? json_decode($this->decrypt($parsed["encryptedSavedGroups"]), true)
-            : (array_key_exists("savedGroups", $parsed) ? $parsed["savedGroups"] : []);
-        if (!is_array($savedGroups)) {
-            $savedGroups = [];
+/**
+ * Make API request to get features
+ */
+private function makeApiRequest(string $url): ResponseInterface
+{
+    if ($this->requestFactory === null || $this->httpClient === null) {
+        throw new \RuntimeException('Request factory or HTTP client is not initialized');
+    }
+    
+    $req = $this->requestFactory->createRequest('GET', $url);
+    return $this->httpClient->sendRequest($req);
+}
+
+/**
+ * Parse API response
+ * 
+ * @param ResponseInterface $response
+ * @param string $url
+ * @return array{
+ *   features: array,
+ *   encryptedFeatures?: string,
+ *   savedGroups?: array,
+ *   encryptedSavedGroups?: string
+ * }|null
+ */
+
+private function parseApiResponse(ResponseInterface $response, string $url): ?array
+{
+    $body = $response->getBody();
+    $parsed = json_decode($body, true);
+
+    if (
+        !$parsed ||
+        !is_array($parsed) ||
+        !isset($parsed['features']) ||
+        !is_array($parsed['features'])
+    ) {
+        $this->log(LogLevel::WARNING, "Could not load features", [
+            "url" => $url,
+            "responseBody" => $body
+        ]);
+        return null;
+    }
+
+    $result = [
+        'features' => $parsed['features'],
+    ];
+
+    if (isset($parsed['encryptedFeatures']) && is_string($parsed['encryptedFeatures'])) {
+        $result['encryptedFeatures'] = $parsed['encryptedFeatures'];
+    }
+
+    if (isset($parsed['savedGroups']) && is_array($parsed['savedGroups'])) {
+        $result['savedGroups'] = $parsed['savedGroups'];
+    }
+
+    if (isset($parsed['encryptedSavedGroups']) && is_string($parsed['encryptedSavedGroups'])) {
+        $result['encryptedSavedGroups'] = $parsed['encryptedSavedGroups'];
+    }
+
+    return $result;
+}
+
+/**
+ * Process features from API response
+ * @param array{features?: array, encryptedFeatures?: string, savedGroups?: array, encryptedSavedGroups?: string} $parsed
+ */
+private function processFeatures(array $parsed, string $url, string $cacheKey): void
+{
+    $features = $this->extractFeatures($parsed);
+    $savedGroups = $this->extractSavedGroups($parsed);
+
+    $this->log(LogLevel::INFO, "Load features and saved groups from URL", [
+        "url" => $url,
+        "numFeatures" => count($features),
+        "numGroups" => count($savedGroups)
+    ]);
+
+    $this->withFeatures($features);
+    $this->withSavedGroups($savedGroups);
+    $this->cacheFeatures($cacheKey, $features, $savedGroups);
+}
+
+/**
+ * Extract features from API response
+  * @param array{features?: array, encryptedFeatures?: string} $parsed
+ * @return array<string, mixed>
+ */
+private function extractFeatures(array $parsed): array
+{
+    if (isset($parsed['encryptedFeatures'])) {
+        return json_decode($this->decrypt($parsed['encryptedFeatures']), true) ?? [];
+    }
+    return $parsed['features'] ?? [];
+}
+
+/**
+ * Extract saved groups from API response
+  * @param array{savedGroups?: array, encryptedSavedGroups?: string} $parsed
+ * @return array<string, mixed>
+ */
+private function extractSavedGroups(array $parsed): array
+{
+    if (isset($parsed['encryptedSavedGroups'])) {
+        $groups = json_decode($this->decrypt($parsed['encryptedSavedGroups']), true);
+    } else {
+        $groups = $parsed['savedGroups'] ?? [];
+    }
+    return is_array($groups) ? $groups : [];
+}
+
+/**
+ * Cache features and saved groups
+  * @param array<string, mixed> $features
+ * @param array<string, mixed> $savedGroups
+ */
+private function cacheFeatures(string $cacheKey, array $features, array $savedGroups): void
+{
+    if (!$this->cache) {
+        return;
+    }
+
+    $cacheData = [
+        'features' => $features,
+        'savedGroups' => $savedGroups
+    ];
+
+    $this->cache->set($cacheKey, json_encode($cacheData), $this->cacheTTL);
+    $this->log(LogLevel::INFO, "Cache features and saved groups", [
+        "numFeatures" => count($features),
+        "numGroups" => count($savedGroups),
+        "ttl" => $this->cacheTTL
+    ]);
+}
+
+/**
+ * Start SSE connection for real-time updates
+ */
+private function startSSEConnection(): void
+{
+    if ($this->requestFactory === null || $this->httpClient === null) {
+        $this->log(LogLevel::ERROR, "SSE connection failed: Request factory or HTTP client not initialized");
+        $this->fetchFeaturesFromCacheOrApi();
+        return;
+    }
+
+    $sseUrl = $this->buildSSEUrl();
+    
+    try {
+        $request = $this->requestFactory->createRequest('GET', $sseUrl)
+            ->withHeader('Accept', 'text/event-stream');
+        
+        /** @var \Psr\Http\Message\RequestInterface $request */
+        $response = $this->httpClient->sendRequest($request);
+
+        if (!$response->getBody()->isReadable()) {
+            throw new Exception("HTTP client does not support streaming");
         }
 
-        $this->log(LogLevel::INFO, "Load features and saved groups from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
-        $this->setFeatures($features);
-        $this->setSavedGroups($savedGroups);
+        $this->listenToSSEEvents($response);
+    } catch (\Throwable $e) {
+        $this->log(LogLevel::ERROR, "SSE connection failed: " . $e->getMessage());
+        $this->fetchFeaturesFromCacheOrApi();
+    }
+}
 
+/**
+ * Build SSE URL
+ */
+private function buildSSEUrl(): string
+{
+    return rtrim($this->apiHost ?: self::DEFAULT_API_HOST, "/") 
+        . "/sub/" . $this->clientKey;
+}
+
+/**
+ * Listen to SSE events from the server
+ */
+private function listenToSSEEvents(ResponseInterface $response): void
+{
+    $buffer = '';
+    $maxBufferSize = 65536; // 64KB
+
+    
+    while (!$response->getBody()->eof()) {
+        $chunk = $response->getBody()->read(1024);
+        if ($chunk === '') {
+            usleep(10000); 
+            continue;
+        }
+        $buffer .= $chunk;
+
+        if (strlen($buffer) > $maxBufferSize) {
+            $this->log(LogLevel::WARNING, "SSE buffer overflow, resetting connection");
+            throw new \RuntimeException("SSE buffer overflow");
+        }
+        
+        
+        // Process complete SSE messages (delimited by double newline)
+        while (($pos = strpos($buffer, "\n\n")) !== false) {
+            $message = substr($buffer, 0, $pos);
+            $buffer = substr($buffer, $pos + 2);
+            
+            try {
+                $this->handleSSEData($message);
+            } catch (\Throwable $e) {
+                $this->log(LogLevel::ERROR, "Failed to parse SSE message: " . $e->getMessage());
+                // optionally: log $message itself for debugging
+            }
+        }
+    }
+}
+
+/**
+ * Handle incoming SSE data
+ */
+private function handleSSEData(string $data): void
+{
+    $event = null;
+    $eventData = null;
+    
+    // Parse SSE formatted message
+    foreach (explode("\n", $data) as $line) {
+        if (strpos($line, ':') === false) {
+            continue;
+        }
+        
+        [$field, $value] = explode(':', $line, 2);
+        $value = ltrim($value);
+        
+        switch (trim($field)) {
+            case 'event':
+                $event = $value;
+                break;
+            case 'data':
+                $eventData = json_decode($value, true);
+                break;
+        }
+    }
+
+    
+    if ($event === 'features' && $eventData && isset($eventData['features'])) {
+        $this->log(LogLevel::INFO, "Received feature updates via SSE");
+        $this->withFeatures($eventData['features']);
+        
+        // Optionally cache the updated features
         if ($this->cache) {
-            $cacheData = [
-                'features' => $features,
-                'savedGroups' => $savedGroups
-            ];
-            $this->cache->set($cacheKey, json_encode($cacheData), $this->cacheTTL);
-            $this->log(LogLevel::INFO, "Cache features and saved groups", [
-                "url" => $url,
-                "numFeatures" => count($features),
-                "numGroups" => count($savedGroups),
-                "ttl" => $this->cacheTTL
-            ]);
+            $url = $this->buildFeaturesUrl();
+            $cacheKey = $this->buildCacheKey($url);
+            $this->cacheFeatures($cacheKey, $eventData['features'], $eventData['savedGroups'] ?? []);
+        }
+
+        $this->notifyFeatureUpdate($eventData['features']);
+
+    }
+}
+
+    private function validateInitialization(string $clientKey): void {
+        {
+            if (!$clientKey) {
+                throw new Exception("Must specify a clientKey before initializing.");
+            }
+            if (!$this->httpClient) {
+                throw new Exception("Must set an HTTP Client before initializing.");
+            }
+            if (!$this->requestFactory) {
+                throw new Exception("Must set an HTTP Request Factory before initializing");
+            }
         }
     }
 

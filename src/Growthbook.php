@@ -322,13 +322,10 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param LoggerInterface|null $logger
-     * @return static
      */
-    public function setLogger(?LoggerInterface $logger = null): static
+    public function setLogger(?LoggerInterface $logger = null): void
     {
         $this->logger = $logger;
-
-        return $this;
     }
 
     /**

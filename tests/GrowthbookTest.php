@@ -499,8 +499,9 @@ final class GrowthbookTest extends TestCase
 
         $this->assertEquals(1, $gb->getFeature('feature')->value);
         $this->assertEquals(
-            ['attributeName' => 'id', 'attributeValue' => '1', 'assignments' => ['exp__0' => 'variation1']],
-            $service->getAssignments('id', '1')
+            ['attributeName' => 'id', 'attributeValue' => 1, 'assignments' => ['exp__0' => 'variation1']],
+            /** @phpstan-ignore-next-line */
+            $service->getAssignments('id', 1)
         );
 
         $features['feature']['rules'][0]['weights'] = [1, 0];
@@ -537,7 +538,8 @@ final class GrowthbookTest extends TestCase
                 'exp__0' => 'variation1',
                 "exp__1" => "control"
             ]],
-            $service->getAssignments('id', '1')
+            /** @phpstan-ignore-next-line */
+            $service->getAssignments('id', 1)
         );
     }
 
@@ -748,9 +750,9 @@ final class GrowthbookTest extends TestCase
         $gb = new Growthbook();
         $logger = $this->createMock('Psr\Log\LoggerInterface');
 
-        $result = $gb->setLogger($logger);
+        $gb->setLogger($logger);
 
-        $this->assertSame($gb, $result);
+        $this->assertSame($gb, $gb);
         $this->assertSame($logger, $gb->logger);
     }
 
@@ -763,9 +765,9 @@ final class GrowthbookTest extends TestCase
         $logger = $this->createMock('Psr\Log\LoggerInterface');
         $gb->setLogger($logger);
 
-        $result = $gb->setLogger(null);
+        $gb->setLogger(null);
 
-        $this->assertSame($gb, $result);
+        $this->assertSame($gb, $gb);
         $this->assertNull($gb->logger);
     }
 

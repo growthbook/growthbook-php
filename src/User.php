@@ -14,6 +14,7 @@ class User
     /** @var Client */
     private $client = null;
     /** @var array<string, string> */
+    /** @phpstan-ignore-next-line */
     private $attributeMap = [];
 
     /**

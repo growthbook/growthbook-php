@@ -67,6 +67,11 @@ class Growthbook implements LoggerAwareInterface
     /** @var StickyBucketService|null */
     private $stickyBucketService = null;
 
+    /**
+     * @var LruETagCache
+     */
+    private LruETagCache $etagCache;
+
     /** @var array<string>|null */
     private $stickyBucketIdentifierAttributes = null;
     /** @var array<string, array> */
@@ -110,7 +115,8 @@ class Growthbook implements LoggerAwareInterface
             "stickyBucketService",
             "stickyBucketIdentifierAttributes",
             "savedGroups",
-            "encryptedSavedGroups"
+            "encryptedSavedGroups",
+            "etagCacheSize"
         ];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
@@ -137,6 +143,10 @@ class Growthbook implements LoggerAwareInterface
         $this->stickyBucketService = $options["stickyBucketService"] ?? null;
         $this->stickyBucketIdentifierAttributes = $options["stickyBucketIdentifierAttributes"] ?? null;
         $this->usingDerivedStickyBucketAttributes = !isset($this->stickyBucketIdentifierAttributes);
+
+        // Initialize LRU ETag cache (default size: 100)
+        $etagCacheSize = $options["etagCacheSize"] ?? 100;
+        $this->etagCache = new LruETagCache($etagCacheSize);
 
 
         if (array_key_exists("forcedFeatures", $options)) {
@@ -322,13 +332,10 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param LoggerInterface|null $logger
-     * @return static
      */
-    public function setLogger(?LoggerInterface $logger = null): static
+    public function setLogger(?LoggerInterface $logger = null): void
     {
         $this->logger = $logger;
-
-        return $this;
     }
 
     /**
@@ -625,14 +632,16 @@ class Growthbook implements LoggerAwareInterface
                 }
 
                 if (isset($rule->force)) {
-                    if (!$this->isIncludedInRollout(
-                        $rule->seed ?? $key,
-                        $rule->hashAttribute,
-                        $rule->fallbackAttribute,
-                        $rule->range,
-                        $rule->coverage,
-                        $rule->hashVersion
-                    )) {
+                    if (
+                        !$this->isIncludedInRollout(
+                            $rule->seed ?? $key,
+                            $rule->hashAttribute,
+                            $rule->fallbackAttribute,
+                            $rule->range,
+                            $rule->coverage,
+                            $rule->hashVersion
+                        )
+                    ) {
                         $this->log(LogLevel::DEBUG, "Skip rule because of rollout percent", [
                             "feature" => $key
                         ]);
@@ -1108,7 +1117,7 @@ class Growthbook implements LoggerAwareInterface
     {
         foreach ($ranges as $i => $range) {
             if (self::inRange($n, $range)) {
-                return (int)$i;
+                return (int) $i;
             }
         }
         return -1;
@@ -1136,7 +1145,7 @@ class Growthbook implements LoggerAwareInterface
         }
 
         // Make sure it's a valid variation integer
-        $variation = (int)$params[$id];
+        $variation = (int) $params[$id];
         if ($variation < 0 || $variation >= $numVariations) {
             return null;
         }
@@ -1181,79 +1190,159 @@ class Growthbook implements LoggerAwareInterface
         $this->clientKey = $clientKey;
         $this->apiHost = $apiHost;
         $this->decryptionKey = $decryptionKey;
+        $httpClient = $this->httpClient;
+        $requestFactory = $this->requestFactory;
 
         if (!$this->clientKey) {
             throw new Exception("Must specify a clientKey before initializing.");
         }
-        if (!$this->httpClient) {
+        if (!$httpClient) {
             throw new Exception("Must set an HTTP Client before initializing.");
         }
-        if (!$this->requestFactory) {
+        if (!$requestFactory) {
             throw new Exception("Must set an HTTP Request Factory before initializing");
         }
 
         $url = rtrim(empty($this->apiHost) ? self::DEFAULT_API_HOST : $this->apiHost, "/") . "/api/features/" . $this->clientKey;
-        // Update when the cache format changes to prevent issues when updating the library version
-        $cacheKey = md5($url . 'v2');
+        $cacheKey = md5($url . 'v3');
 
-        // First try fetching from cache
+        $cachedData = null;
+
+        // 1. Attempt to retrieve data from cache
         if ($this->cache) {
-            $cachedResponse = $this->cache->get($cacheKey);
-            if ($cachedResponse) {
-                $cachedData = json_decode($cachedResponse, true);
-                if (is_array($cachedData)) {
-                    if (array_key_exists("features", $cachedData) && is_array($cachedData['features'])) {
-                        $this->log(LogLevel::INFO, "Load features from cache", ["url" => $url, "numFeatures" => count($cachedData['features'])]);
-                        $this->setFeatures($cachedData['features']);
+            $rawCache = $this->cache->get($cacheKey);
+            if ($rawCache) {
+                $cachedPayload = json_decode($rawCache, true);
+
+                // Check if the payload is valid and contains data
+                if (is_array($cachedPayload) && isset($cachedPayload['data'])) {
+                    $cachedData = $cachedPayload['data'];
+                    $expiresAt = $cachedPayload['expires_at'] ?? 0;
+
+                    // If cache is fresh (within TTL), load it and skip the API call
+                    if (time() < $expiresAt) {
+                        $this->log(LogLevel::INFO, "Cache is fresh, skipping API call");
+                        $this->loadFromParsedData($cachedData);
+                        return;
                     }
-                    if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
-                        $this->log(LogLevel::INFO, "Load saved groups from cache", ["url" => $url, "numGroups" => count($cachedData['savedGroups'])]);
-                        $this->setSavedGroups($cachedData['savedGroups']);
-                    }
-                    return;
+
+                    // Cache is stale, but we keep it to support conditional requests (304)
+                    $this->log(LogLevel::DEBUG, "Cache is stale, will try ETag request");
                 }
             }
         }
 
-        // Otherwise, fetch from API
-        $req = $this->requestFactory->createRequest('GET', $url);
-        $res = $this->httpClient->sendRequest($req);
-        $body = $res->getBody()->getContents();
-        $parsed = json_decode($body, true);
-        if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
-            $this->log(LogLevel::WARNING, "Could not load features", ["url" => $url, "responseBody" => $body]);
+        // 2. Prepare the API request
+        /** @var \Psr\Http\Message\RequestInterface $req */
+        $req = $requestFactory->createRequest('GET', $url);
+        $cachedETag = $this->etagCache->get($url);
+
+        // Add If-None-Match header if we have both an ETag and stale data
+        if ($cachedETag !== null && $cachedData !== null) {
+            $req = $req->withHeader('If-None-Match', $cachedETag);
+        }
+
+        $sdkVersion = 'v1.7.2';
+        $clientKey = $this->clientKey ?? '';
+        $clientKeySuffix = strlen($clientKey) >= 4 ? substr($clientKey, -4) : 'xxxx';
+        $userAgent = "GrowthBook-PHP/{$sdkVersion}-{$clientKeySuffix}";
+
+        /** @var \Psr\Http\Message\RequestInterface $req */
+        $req = $req->withHeader('Accept-Encoding', 'gzip, deflate')
+           ->withHeader('Cache-Control', 'max-age=3600')
+           ->withHeader('User-Agent', $userAgent);
+
+        $res = $httpClient->sendRequest($req);
+        $statusCode = $res->getStatusCode();
+
+        // 3. Handle 304 Not Modified
+        if ($statusCode === 304 && $cachedData !== null) {
+            $this->log(LogLevel::INFO, "304 Not Modified. Using stale cache.", ["url" => $url]);
+            $this->loadFromParsedData($cachedData);
+            $this->saveToCache($cacheKey, $cachedData); // Refresh logical TTL
             return;
         }
 
-        // Set features and savedGroupd and cache for next time
-        $features = array_key_exists("encryptedFeatures", $parsed)
-            ? json_decode($this->decrypt($parsed["encryptedFeatures"]), true)
-            : $parsed["features"];
+        // 4. Handle 200 OK (New data received)
+        if ($statusCode === 200) {
+            $body = (string) $res->getBody();
+            $parsed = json_decode($body, true);
 
-        $savedGroups = array_key_exists("encryptedSavedGroups", $parsed)
-            ? json_decode($this->decrypt($parsed["encryptedSavedGroups"]), true)
-            : (array_key_exists("savedGroups", $parsed) ? $parsed["savedGroups"] : []);
-        if (!is_array($savedGroups)) {
-            $savedGroups = [];
+            if ($parsed && isset($parsed['features'])) {
+                $features = isset($parsed["encryptedFeatures"])
+                    ? json_decode($this->decrypt($parsed["encryptedFeatures"]), true)
+                    : $parsed["features"];
+
+                $savedGroups = isset($parsed["encryptedSavedGroups"])
+                    ? json_decode($this->decrypt($parsed["encryptedSavedGroups"]), true)
+                    : ($parsed["savedGroups"] ?? []);
+
+                $finalData = ['features' => $features, 'savedGroups' => $savedGroups];
+
+                $this->loadFromParsedData($finalData);
+
+                // Extract ETag from response and store it for next time
+                $etag = $this->extractETagFromResponse($res);
+                if ($etag) {
+                    $this->etagCache->put($url, $etag);
+                }
+                $this->saveToCache($cacheKey, $finalData);
+                return;
+            }
         }
 
-        $this->log(LogLevel::INFO, "Load features and saved groups from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
-        $this->setFeatures($features);
-        $this->setSavedGroups($savedGroups);
+        $this->log(LogLevel::WARNING, "Failed to load features", ["url" => $url, "status" => $statusCode]);
+    }
 
-        if ($this->cache) {
-            $cacheData = [
-                'features' => $features,
-                'savedGroups' => $savedGroups
-            ];
-            $this->cache->set($cacheKey, json_encode($cacheData), $this->cacheTTL);
-            $this->log(LogLevel::INFO, "Cache features and saved groups", [
-                "url" => $url,
-                "numFeatures" => count($features),
-                "numGroups" => count($savedGroups),
-                "ttl" => $this->cacheTTL
-            ]);
+    /**
+     * Populates the internal state with features and saved groups data.
+     *
+     * @param array{features: array, savedGroups?: array} $data The parsed data array containing 'features' and optional 'savedGroups'.
+     * @return void
+     */
+    private function loadFromParsedData(array $data): void
+    {
+        $this->withFeatures($data['features'] ?? []);
+        $this->withSavedGroups($data['savedGroups'] ?? []);
+    }
+
+    /**
+     * Wraps data into a payload with a logical expiration time and persists it to the cache.
+     * * The physical TTL is extended to keep stale data available for ETag validation.
+     *
+     * @param string $key The unique cache key.
+     * @param array{features: array, savedGroups?: array} $data The features data to be cached.
+     * @return void
+     */
+    private function saveToCache(string $key, array $data): void
+    {
+        if (!$this->cache)
+            return;
+
+        $payload = [
+            'expires_at' => time() + $this->cacheTTL,
+            'data' => $data
+        ];
+
+        // Store with extended physical TTL to support ETag (Conditional GET)
+        $this->cache->set($key, json_encode($payload), $this->cacheTTL * 10);
+    }
+
+
+    /**
+     * Extract ETag header from response
+     *
+     * @param \Psr\Http\Message\ResponseInterface $response
+     * @return string|null
+     */
+    private function extractETagFromResponse(\Psr\Http\Message\ResponseInterface $response): ?string
+    {
+        if (!$response->hasHeader('ETag')) {
+            return null;
         }
+
+        $etagHeader = $response->getHeader('ETag');
+        return !empty($etagHeader) ? $etagHeader[0] : null;
     }
 
     /**

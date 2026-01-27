@@ -2,3 +2,4 @@ vendor/
 coverage/
 *.cache
 .idea
+composer.lock

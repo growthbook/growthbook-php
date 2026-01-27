@@ -10,12 +10,13 @@
         "psr/http-factory": "^1.0",
         "psr/http-message": "^1.0|^2.0",
         "php-http/discovery": "^1.15",
-        "react/promise": "^2.8|^3.0",
+        "react/promise": "^3.0",
+        "react/event-loop": "^1.3",
         "ext-json": "*"
     },
     "require-dev": {
         "phpunit/phpunit": "^9.5",
-        "phpstan/phpstan": "^0.12.86",
+        "phpstan/phpstan": "^1.10",
         "friendsofphp/php-cs-fixer": "^3.0.0"
     },
     "license": "MIT",

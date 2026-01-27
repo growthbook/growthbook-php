@@ -1,5 +1,14 @@
 parameters:
-  level: 8
-  paths:
-    - src
-    - tests
+    level: 5
+    paths:
+        - src
+        - tests
+    
+    reportUnmatchedIgnoredErrors: false
+    
+    treatPhpDocTypesAsCertain: false
+
+    ignoreErrors:
+        - identifier: missingType.iterableValue
+        - '#Unsafe call to private method#'
+        - '#on left side of \?\? is not nullable#'

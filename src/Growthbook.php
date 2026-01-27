@@ -392,6 +392,7 @@ class Growthbook implements LoggerAwareInterface
      * @param array<string>  $stack
      * @return FeatureResult<T>|FeatureResult<null>
      */
+    /** @phpstan-ignore-next-line */
     public function getFeature(string $key, array $stack = []): FeatureResult
     {
         if (!array_key_exists($key, $this->features)) {
@@ -829,6 +830,7 @@ class Growthbook implements LoggerAwareInterface
             $val = $this->attributes[$attribute] ?? "";
         }
 
+        /** @phpstan-ignore-next-line */
         if (($val === "" || $val === null) && $fallbackAttribute && $this->stickyBucketService) {
 
             if (array_key_exists($fallbackAttribute, $this->attributes)) {

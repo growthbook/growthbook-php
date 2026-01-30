@@ -3,6 +3,7 @@
 namespace Growthbook;
 
 use Exception;
+use Growthbook\Plugins\GrowthbookPlugin;
 use Http\Discovery\Psr17FactoryDiscovery;
 use Http\Discovery\Psr18ClientDiscovery;
 use Psr\Http\Client\ClientExceptionInterface;
@@ -12,12 +13,16 @@ use Psr\Log\LogLevel;
 
 class Growthbook implements LoggerAwareInterface
 {
+    private const VERSION = '1.8.0';
+
     private const DEFAULT_API_HOST = "https://cdn.growthbook.io";
 
     /** @var bool */
     public $enabled = true;
     /** @var null|\Psr\Log\LoggerInterface */
     public $logger = null;
+    /** @var null|EventLoggerInterface */
+    public $eventLogger = null;
     /** @var string */
     private $url = "";
     /** @var array<string,mixed> */
@@ -47,12 +52,17 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @var null|\Psr\Http\Client\ClientInterface
      */
-    private $httpClient = null;
+    public $httpClient = null;
 
     /**
      * @var null|\Psr\Http\Message\RequestFactoryInterface;
      */
     public $requestFactory = null;
+
+    /**
+     * @var null|\Psr\Http\Message\StreamFactoryInterface;
+     */
+    public $streamFactory = null;
 
     /** @var string */
     private $apiHost = "";
@@ -88,7 +98,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,eventLogger?:EventLoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,streamFactory?:\Psr\Http\Message\StreamFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:array<GrowthbookPlugin>} $options
      */
     public function __construct(array $options = [])
     {
@@ -96,6 +106,7 @@ class Growthbook implements LoggerAwareInterface
         $knownOptions = [
             "enabled",
             "logger",
+            "eventLogger",
             "url",
             "attributes",
             "features",
@@ -106,11 +117,13 @@ class Growthbook implements LoggerAwareInterface
             "cache",
             "httpClient",
             "requestFactory",
+            "streamFactory",
             "decryptionKey",
             "stickyBucketService",
             "stickyBucketIdentifierAttributes",
             "savedGroups",
-            "encryptedSavedGroups"
+            "encryptedSavedGroups",
+            "plugins"
         ];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
@@ -119,6 +132,7 @@ class Growthbook implements LoggerAwareInterface
 
         $this->enabled = $options["enabled"] ?? true;
         $this->logger = $options["logger"] ?? null;
+        $this->eventLogger = $options["eventLogger"] ?? null;
         $this->url = $options["url"] ?? $_SERVER['REQUEST_URI'] ?? "";
         $this->forcedVariations = $options["forcedVariations"] ?? [];
         $this->qaMode = $options["qaMode"] ?? false;
@@ -130,6 +144,7 @@ class Growthbook implements LoggerAwareInterface
         try {
             $this->httpClient = $options["httpClient"] ?? Psr18ClientDiscovery::find();
             $this->requestFactory = $options["requestFactory"] ?? Psr17FactoryDiscovery::findRequestFactory();
+            $this->streamFactory = $options["streamFactory"] ?? Psr17FactoryDiscovery::findStreamFactory();
         } catch (\Throwable $e) {
             // Ignore errors from discovery
         }
@@ -150,6 +165,11 @@ class Growthbook implements LoggerAwareInterface
         }
         if (array_key_exists("savedGroups", $options)) {
             $this->setSavedGroups(($options["savedGroups"]));
+        }
+        if (array_key_exists("plugins", $options)) {
+            foreach ($options["plugins"] as $plugin) {
+                $this->withPlugin($plugin);
+            }
         }
     }
 
@@ -422,6 +442,37 @@ class Growthbook implements LoggerAwareInterface
         $self->setStickyBucketing($stickyBucketService, $stickyBucketIdentifierAttributes);
 
         return $self;
+    }
+
+    /**
+     * @param GrowthbookPlugin $plugin
+     * @return $this
+     */
+    public function withPlugin(GrowthbookPlugin $plugin): Growthbook
+    {
+        $plugin->initialize($this);
+        return $this;
+    }
+
+    /**
+     * @param EventLoggerInterface $eventLogger
+     * @return $this
+     */
+    public function withEventLogger(EventLoggerInterface $eventLogger): Growthbook
+    {
+        $this->eventLogger = $eventLogger;
+        return $this;
+    }
+
+    /**
+     * @param string $eventName
+     * @param array<string,mixed>|null $properties
+     */
+    public function logEvent(string $eventName, ?array $properties = null): void
+    {
+        if ($this->eventLogger) {
+            $this->eventLogger->logEvent($eventName, $properties ?? [], $this->getContext());
+        }
     }
 
     /**
@@ -1459,5 +1510,53 @@ class Growthbook implements LoggerAwareInterface
         }
 
         return array_unique($attributes);
+    }
+
+    /**
+     * @return string
+     */
+    public function getClientKey(): string
+    {
+        return $this->clientKey;
+    }
+
+    /**
+     * @return string
+     */
+    public function getVersion(): string
+    {
+        return self::VERSION;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function getContext(): array
+    {
+        return [
+            'attributes' => $this->getAttributes(),
+            // TODO: Fill it in
+            // enabled?: boolean;
+            // qaMode?: boolean;
+            // enableDevMode?: boolean;
+            // attributes?: Attributes;
+            // url?: string;
+            // blockedChangeIds?: string[];
+            // stickyBucketAssignmentDocs?: Record<
+            //     StickyAttributeKey,
+            //     StickyAssignmentsDocument
+            // >;
+            // saveStickyBucketAssignmentDoc?: (
+            //     doc: StickyAssignmentsDocument
+            // ) => Promise<unknown>;
+            // forcedVariations?: Record<string, number>;
+            // forcedFeatureValues?: Map<string, any>;
+            // attributeOverrides?: Attributes;
+            // trackingCallback?: TrackingCallback;
+            // onFeatureUsage?: FeatureUsageCallback;
+            // trackedExperiments?: Set<string>;
+            // trackedFeatureUsage?: Record<string, string>;
+            // devLogs?: LogUnion[];
+        ];
     }
 }

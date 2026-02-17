@@ -13,6 +13,7 @@ use Psr\Log\LogLevel;
 class Growthbook implements LoggerAwareInterface
 {
     private const DEFAULT_API_HOST = "https://cdn.growthbook.io";
+    private const DEFAULT_API_TIMEOUT = 2;
 
     /** @var bool */
     public $enabled = true;
@@ -1274,43 +1275,51 @@ class Growthbook implements LoggerAwareInterface
             }
         }
 
-        // Otherwise, fetch from API
-        $req = $this->requestFactory->createRequest('GET', $url);
-        $res = $this->httpClient->sendRequest($req);
-        $body = $res->getBody()->getContents();
-        $parsed = json_decode($body, true);
-        if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
-            $this->log(LogLevel::WARNING, "Could not load features", ["url" => $url, "responseBody" => $body]);
-            return;
-        }
+        try {
+            // Otherwise, fetch from API
+            $req = $this->requestFactory->createRequest('GET', $url);
+            $res = $this->httpClient->sendRequest($req);
+            $body = $res->getBody()->getContents();
+            $parsed = json_decode($body, true);
+            if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
+                $this->log(LogLevel::WARNING, "Could not load features", ["url" => $url, "responseBody" => $body]);
+                return;
+            }
 
-        // Set features and savedGroupd and cache for next time
-        $features = array_key_exists("encryptedFeatures", $parsed)
-            ? json_decode($this->decrypt($parsed["encryptedFeatures"]), true)
-            : $parsed["features"];
+            // Set features and savedGroupd and cache for next time
+            $features = array_key_exists("encryptedFeatures", $parsed)
+                ? json_decode($this->decrypt($parsed["encryptedFeatures"]), true)
+                : $parsed["features"];
 
-        $savedGroups = array_key_exists("encryptedSavedGroups", $parsed)
-            ? json_decode($this->decrypt($parsed["encryptedSavedGroups"]), true)
-            : (array_key_exists("savedGroups", $parsed) ? $parsed["savedGroups"] : []);
-        if (!is_array($savedGroups)) {
-            $savedGroups = [];
-        }
+            $savedGroups = array_key_exists("encryptedSavedGroups", $parsed)
+                ? json_decode($this->decrypt($parsed["encryptedSavedGroups"]), true)
+                : (array_key_exists("savedGroups", $parsed) ? $parsed["savedGroups"] : []);
+            if (!is_array($savedGroups)) {
+                $savedGroups = [];
+            }
 
-        $this->log(LogLevel::INFO, "Load features and saved groups from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
-        $this->setFeatures($features);
-        $this->setSavedGroups($savedGroups);
+            $this->log(LogLevel::INFO, "Load features and saved groups from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
+            $this->setFeatures($features);
+            $this->setSavedGroups($savedGroups);
 
-        if ($this->cache) {
-            $cacheData = [
-                'features' => $features,
-                'savedGroups' => $savedGroups
-            ];
-            $this->cache->set($cacheKey, json_encode($cacheData), $this->cacheTTL);
-            $this->log(LogLevel::INFO, "Cache features and saved groups", [
+            if ($this->cache) {
+                $cacheData = [
+                    'features' => $features,
+                    'savedGroups' => $savedGroups
+                ];
+                $this->cache->set($cacheKey, json_encode($cacheData), $this->cacheTTL);
+                $this->log(LogLevel::INFO, "Cache features and saved groups", [
+                    "url" => $url,
+                    "numFeatures" => count($features),
+                    "numGroups" => count($savedGroups),
+                    "ttl" => $this->cacheTTL
+                ]);
+            }
+        } catch (\Throwable $e) {
+            $this->log(LogLevel::ERROR, "Failed to fetch features from API", [
                 "url" => $url,
-                "numFeatures" => count($features),
-                "numGroups" => count($savedGroups),
-                "ttl" => $this->cacheTTL
+                "error" => $e->getMessage(),
+                "errorClass" => get_class($e)
             ]);
         }
     }

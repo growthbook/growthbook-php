@@ -332,13 +332,10 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param LoggerInterface|null $logger
-     * @return static
      */
-    public function setLogger(?LoggerInterface $logger = null): static
+    public function setLogger(?LoggerInterface $logger = null): void
     {
         $this->logger = $logger;
-
-        return $this;
     }
 
     /**
@@ -685,14 +682,16 @@ class Growthbook implements LoggerAwareInterface
                 }
 
                 if (isset($rule->force)) {
-                    if (!$this->isIncludedInRollout(
-                        $rule->seed ?? $key,
-                        $rule->hashAttribute,
-                        $rule->fallbackAttribute,
-                        $rule->range,
-                        $rule->coverage,
-                        $rule->hashVersion
-                    )) {
+                    if (
+                        !$this->isIncludedInRollout(
+                            $rule->seed ?? $key,
+                            $rule->hashAttribute,
+                            $rule->fallbackAttribute,
+                            $rule->range,
+                            $rule->coverage,
+                            $rule->hashVersion
+                        )
+                    ) {
                         $this->log(LogLevel::DEBUG, "Skip rule because of rollout percent", [
                             "feature" => $key
                         ]);
@@ -1168,7 +1167,7 @@ class Growthbook implements LoggerAwareInterface
     {
         foreach ($ranges as $i => $range) {
             if (self::inRange($n, $range)) {
-                return (int)$i;
+                return (int) $i;
             }
         }
         return -1;
@@ -1196,7 +1195,7 @@ class Growthbook implements LoggerAwareInterface
         }
 
         // Make sure it's a valid variation integer
-        $variation = (int)$params[$id];
+        $variation = (int) $params[$id];
         if ($variation < 0 || $variation >= $numVariations) {
             return null;
         }

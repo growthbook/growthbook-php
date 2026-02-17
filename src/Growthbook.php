@@ -75,6 +75,11 @@ class Growthbook implements LoggerAwareInterface
     private $usingDerivedStickyBucketAttributes;
     /** @var null|array<string, string> */
     private $stickyBucketAttributes = null;
+    /** @var int */
+    private $apiTimeout = self::DEFAULT_API_TIMEOUT;
+
+    /** @var int */
+    private $apiConnectTimeout = self::DEFAULT_API_TIMEOUT;
 
     /**
      * @param array<string, mixed> $options
@@ -110,7 +115,9 @@ class Growthbook implements LoggerAwareInterface
             "stickyBucketService",
             "stickyBucketIdentifierAttributes",
             "savedGroups",
-            "encryptedSavedGroups"
+            "encryptedSavedGroups",
+            "apiTimeout",
+            "apiConnectTimeout"
         ];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
@@ -127,8 +134,10 @@ class Growthbook implements LoggerAwareInterface
         $this->decryptionKey = $options["decryptionKey"] ?? "";
 
         $this->cache = $options["cache"] ?? null;
+        $this->apiTimeout = $options["apiTimeout"] ?? self::DEFAULT_API_TIMEOUT;
+        $this->apiConnectTimeout = $options["apiConnectTimeout"] ?? self::DEFAULT_API_TIMEOUT;
         try {
-            $this->httpClient = $options["httpClient"] ?? Psr18ClientDiscovery::find();
+            $this->httpClient = $options["httpClient"] ?? $this->createDefaultHttpClient();
             $this->requestFactory = $options["requestFactory"] ?? Psr17FactoryDiscovery::findRequestFactory();
         } catch (\Throwable $e) {
             // Ignore errors from discovery
@@ -367,6 +376,56 @@ class Growthbook implements LoggerAwareInterface
         $self = clone $this;
         $self->setHttpClient($client, $requestFactory);
 
+        return $self;
+    }
+
+    /**
+     * Set API request timeout in seconds
+     * 
+     * @param int $seconds Timeout in seconds (default: 2)
+     * @return static
+     */
+    public function setApiTimeout(int $seconds): static
+    {
+        $this->apiTimeout = max(1, $seconds); // min 1 sec
+        return $this;
+    }
+
+    /**
+     * Set API request timeout in seconds
+     * 
+     * @param int $seconds Timeout in seconds (default: 2)
+     * @return static
+     */
+    public function withApiTimeout(int $seconds): static
+    {
+        $self = clone $this;
+        $self->setApiTimeout($seconds);
+        return $self;
+    }
+
+    /**
+     * Set API connection timeout in seconds
+     * 
+     * @param int $seconds Connection timeout in seconds (default: 2)
+     * @return static
+     */
+    public function setApiConnectTimeout(int $seconds): static
+    {
+        $this->apiConnectTimeout = max(1, $seconds);
+        return $this;
+    }
+
+    /**
+     * Set API connection timeout in seconds
+     * 
+     * @param int $seconds Connection timeout in seconds (default: 2)
+     * @return static
+     */
+    public function withApiConnectTimeout(int $seconds): static
+    {
+        $self = clone $this;
+        $self->setApiConnectTimeout($seconds);
         return $self;
     }
 
@@ -1270,6 +1329,36 @@ class Growthbook implements LoggerAwareInterface
         $this->initialize($clientKey, $apiHost, $decryptionKey);
     }
 
+    /**
+     * Create HTTP client with safe default timeout settings
+     * 
+     * @return \Psr\Http\Client\ClientInterface
+     */
+    private function createDefaultHttpClient(): \Psr\Http\Client\ClientInterface
+    {
+        // Try to create Guzzle client with timeout if available
+        if (class_exists(\GuzzleHttp\Client::class)) {
+            $client = new \GuzzleHttp\Client([
+                'timeout' => $this->apiTimeout,
+                'connect_timeout' => $this->apiConnectTimeout,
+            ]);
+
+            /** @var \Psr\Http\Client\ClientInterface $client */
+            return $client;
+        }
+
+        // Fallback to PSR-18 discovery
+        // Note: discovered client may not have timeout configured
+        $client = Psr18ClientDiscovery::find();
+
+        $this->log(
+            LogLevel::WARNING,
+            "Using discovered HTTP client without guaranteed timeout. " .
+            "Consider providing a configured client via withHttpClient()."
+        );
+
+        return $client;
+    }
     /**
      * @param string                                                   $key
      * @param int|null                                                 $bucketVersion

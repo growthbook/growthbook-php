@@ -95,6 +95,43 @@ To load features, we require a PSR-17 (HttpClient) and PSR-18 (RequestFactoryInt
 
 We will auto-discover most HTTP libraries without any configuration required, but if you prefer to specify it explicitly, you can use the `withHttpClient` method. Note - you'll need to specify both an `HttpClient` and a `RequestFactoryInterface` implementation.
 
+#### API Timeout
+
+By default, the SDK applies a **2-second timeout** for API requests made by `initialize`. This prevents your application from hanging if the GrowthBook API is slow or unreachable.
+
+This works automatically when [Guzzle](https://docs.guzzlephp.org/) is installed:
+```bash
+composer require guzzlehttp/guzzle
+```
+
+You can customize the timeout values:
+```php
+// Via constructor options
+$growthbook = new Growthbook\Growthbook([
+  'apiTimeout' => 5,        // Total request timeout in seconds
+  'apiConnectTimeout' => 3,  // Connection timeout in seconds
+]);
+
+// Or via fluent interface
+$growthbook = Growthbook\Growthbook::create()
+  ->withApiTimeout(5)
+  ->withApiConnectTimeout(3);
+```
+
+If you provide your own HTTP client via `withHttpClient`, timeout configuration is your responsibility:
+```php
+$growthbook = Growthbook\Growthbook::create()
+  ->withHttpClient(
+    new \GuzzleHttp\Client([
+      'timeout' => 3,
+      'connect_timeout' => 2,
+    ]),
+    new \Http\Factory\Guzzle\RequestFactory()
+  );
+```
+
+> **Note:** If Guzzle is not installed, the SDK will use a discovered PSR-18 client which may not have timeout guarantees. A warning will be logged in this case.
+
 The `initialize` method takes 3 arguments:
 
 - `$clientKey` (required) - Get this from your SDK Connection in GrowthBook.

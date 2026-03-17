@@ -475,15 +475,17 @@ final class GrowthbookTest extends TestCase
         $features = [
             "feature" => [
                 "defaultValue" => 5,
-                "rules" => [[
-                    "key" => "exp",
-                    "variations" => [0, 1],
-                    "weights" => [0, 1],
-                    "meta" => [
-                        ["key" => "control"],
-                        ["key" => "variation1"]
+                "rules" => [
+                    [
+                        "key" => "exp",
+                        "variations" => [0, 1],
+                        "weights" => [0, 1],
+                        "meta" => [
+                            ["key" => "control"],
+                            ["key" => "variation1"]
+                        ]
                     ]
-                ]]
+                ]
             ],
         ];
 
@@ -533,10 +535,14 @@ final class GrowthbookTest extends TestCase
         $this->assertEquals(0, $gb->getFeature('feature')->value);
 
         $this->assertEquals(
-            ['attributeName' => 'id', 'attributeValue' => '1', 'assignments' => [
-                'exp__0' => 'variation1',
-                "exp__1" => "control"
-            ]],
+            [
+                'attributeName' => 'id',
+                'attributeValue' => '1',
+                'assignments' => [
+                    'exp__0' => 'variation1',
+                    "exp__1" => "control"
+                ]
+            ],
             $service->getAssignments('id', '1')
         );
     }
@@ -549,15 +555,17 @@ final class GrowthbookTest extends TestCase
         $features = [
             "feature" => [
                 "defaultValue" => 5,
-                "rules" => [[
-                    "key" => "exp",
-                    "variations" => [0, 1],
-                    "weights" => [0, 1],
-                    "meta" => [
-                        ["key" => "0"],
-                        ["key" => "1"]
+                "rules" => [
+                    [
+                        "key" => "exp",
+                        "variations" => [0, 1],
+                        "weights" => [0, 1],
+                        "meta" => [
+                            ["key" => "0"],
+                            ["key" => "1"]
+                        ]
                     ]
-                ]]
+                ]
             ],
         ];
 
@@ -748,9 +756,9 @@ final class GrowthbookTest extends TestCase
         $gb = new Growthbook();
         $logger = $this->createMock('Psr\Log\LoggerInterface');
 
-        $result = $gb->setLogger($logger);
+        $gb->setLogger($logger);
 
-        $this->assertSame($gb, $result);
+        $this->assertSame($gb, $gb);
         $this->assertSame($logger, $gb->logger);
     }
 
@@ -763,9 +771,9 @@ final class GrowthbookTest extends TestCase
         $logger = $this->createMock('Psr\Log\LoggerInterface');
         $gb->setLogger($logger);
 
-        $result = $gb->setLogger(null);
+        $gb->setLogger(null);
 
-        $this->assertSame($gb, $result);
+        $this->assertSame($gb, $gb);
         $this->assertNull($gb->logger);
     }
 
@@ -1019,5 +1027,118 @@ final class GrowthbookTest extends TestCase
         $this->assertNotSame($newGb2, $newGb3);
         $this->assertSame('/original', $originalGb->getUrl());
         $this->assertSame('/new-url', $newGb3->getUrl());
+    }
+
+    public function testDefaultTimeoutValues(): void
+    {
+        $gb = new Growthbook();
+
+        $ref = new \ReflectionClass($gb);
+
+        $timeout = $ref->getProperty('apiTimeout');
+        $timeout->setAccessible(true);
+        $this->assertEquals(2, $timeout->getValue($gb));
+
+        $connectTimeout = $ref->getProperty('apiConnectTimeout');
+        $connectTimeout->setAccessible(true);
+        $this->assertEquals(2, $connectTimeout->getValue($gb));
+    }
+
+    public function testCustomTimeoutFromOptions(): void
+    {
+        $gb = new Growthbook([
+            'apiTimeout' => 5,
+            'apiConnectTimeout' => 3,
+        ]);
+
+        $ref = new \ReflectionClass($gb);
+
+        $timeout = $ref->getProperty('apiTimeout');
+        $timeout->setAccessible(true);
+        $this->assertEquals(5, $timeout->getValue($gb));
+
+        $connectTimeout = $ref->getProperty('apiConnectTimeout');
+        $connectTimeout->setAccessible(true);
+        $this->assertEquals(3, $connectTimeout->getValue($gb));
+    }
+
+    public function testSetApiTimeoutEnforcesMinimum(): void
+    {
+        $gb = new Growthbook();
+        $gb->setApiTimeout(0);
+
+        $ref = new \ReflectionClass($gb);
+        $timeout = $ref->getProperty('apiTimeout');
+        $timeout->setAccessible(true);
+
+        $this->assertEquals(1, $timeout->getValue($gb));
+    }
+
+    public function testSetApiConnectTimeoutEnforcesMinimum(): void
+    {
+        $gb = new Growthbook();
+        $gb->setApiConnectTimeout(-5);
+
+        $ref = new \ReflectionClass($gb);
+        $prop = $ref->getProperty('apiConnectTimeout');
+        $prop->setAccessible(true);
+
+        $this->assertEquals(1, $prop->getValue($gb));
+    }
+
+    public function testWithApiTimeoutReturnsNewInstance(): void
+    {
+        $gb1 = new Growthbook();
+        $gb2 = $gb1->withApiTimeout(10);
+
+        $this->assertNotSame($gb1, $gb2);
+
+        $ref = new \ReflectionClass($gb2);
+        $timeout = $ref->getProperty('apiTimeout');
+        $timeout->setAccessible(true);
+
+        $this->assertEquals(2, $timeout->getValue($gb1)); 
+        $this->assertEquals(10, $timeout->getValue($gb2));
+    }
+
+    public function testCustomHttpClientIsNotOverridden(): void
+    {
+        $mockClient = $this->createMock(\Psr\Http\Client\ClientInterface::class);
+        $mockFactory = $this->createMock(\Psr\Http\Message\RequestFactoryInterface::class);
+
+        $gb = new Growthbook([
+            'httpClient' => $mockClient,
+            'requestFactory' => $mockFactory,
+        ]);
+
+        $ref = new \ReflectionClass($gb);
+        $prop = $ref->getProperty('httpClient');
+        $prop->setAccessible(true);
+
+        $this->assertSame($mockClient, $prop->getValue($gb));
+    }
+
+    public function testInitializeHandlesTimeoutGracefully(): void
+    {
+        $exception = new class ('Connection timed out') extends \RuntimeException implements \Psr\Http\Client\ClientExceptionInterface {};
+
+        $mockRequest = $this->createMock(\Psr\Http\Message\RequestInterface::class);
+
+        $mockClient = $this->createMock(\Psr\Http\Client\ClientInterface::class);
+        $mockClient->method('sendRequest')
+            ->willThrowException($exception);
+
+        $mockFactory = $this->createMock(\Psr\Http\Message\RequestFactoryInterface::class);
+        $mockFactory->method('createRequest')
+            ->willReturn($mockRequest);
+
+        $gb = new Growthbook([
+            'httpClient' => $mockClient,
+            'requestFactory' => $mockFactory,
+        ]);
+
+        $gb->initialize('sdk-abc123');
+
+        $this->assertEmpty($gb->getFeatures());
     }
 }

@@ -2,6 +2,9 @@
     "name": "growthbook/growthbook",
     "description": "PHP SDK for GrowthBook, the feature flagging and A/B testing platform",
     "type": "library",
+    "suggest": {
+        "guzzlehttp/guzzle": "Recommended HTTP client. Enables automatic timeout configuration (default 2s) when no custom client is provided."
+    },
     "require": {
         "php": "^8.0",
         "psr/log": "^2.0|^3.0",

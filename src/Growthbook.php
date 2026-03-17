@@ -13,6 +13,7 @@ use Psr\Log\LogLevel;
 class Growthbook implements LoggerAwareInterface
 {
     private const DEFAULT_API_HOST = "https://cdn.growthbook.io";
+    private const DEFAULT_API_TIMEOUT = 2;
 
     /** @var bool */
     public $enabled = true;
@@ -75,6 +76,11 @@ class Growthbook implements LoggerAwareInterface
     private $usingDerivedStickyBucketAttributes;
     /** @var null|array<string, string> */
     private $stickyBucketAttributes = null;
+    /** @var int */
+    private $apiTimeout = self::DEFAULT_API_TIMEOUT;
+
+    /** @var int */
+    private $apiConnectTimeout = self::DEFAULT_API_TIMEOUT;
 
     /**
      * @param array<string, mixed> $options
@@ -110,7 +116,9 @@ class Growthbook implements LoggerAwareInterface
             "stickyBucketService",
             "stickyBucketIdentifierAttributes",
             "savedGroups",
-            "encryptedSavedGroups"
+            "encryptedSavedGroups",
+            "apiTimeout",
+            "apiConnectTimeout"
         ];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
@@ -127,8 +135,10 @@ class Growthbook implements LoggerAwareInterface
         $this->decryptionKey = $options["decryptionKey"] ?? "";
 
         $this->cache = $options["cache"] ?? null;
+        $this->apiTimeout = $options["apiTimeout"] ?? self::DEFAULT_API_TIMEOUT;
+        $this->apiConnectTimeout = $options["apiConnectTimeout"] ?? self::DEFAULT_API_TIMEOUT;
         try {
-            $this->httpClient = $options["httpClient"] ?? Psr18ClientDiscovery::find();
+            $this->httpClient = $options["httpClient"] ?? $this->createDefaultHttpClient();
             $this->requestFactory = $options["requestFactory"] ?? Psr17FactoryDiscovery::findRequestFactory();
         } catch (\Throwable $e) {
             // Ignore errors from discovery
@@ -322,13 +332,10 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * @param LoggerInterface|null $logger
-     * @return static
      */
-    public function setLogger(?LoggerInterface $logger = null): static
+    public function setLogger(?LoggerInterface $logger = null): void
     {
         $this->logger = $logger;
-
-        return $this;
     }
 
     /**
@@ -367,6 +374,56 @@ class Growthbook implements LoggerAwareInterface
         $self = clone $this;
         $self->setHttpClient($client, $requestFactory);
 
+        return $self;
+    }
+
+    /**
+     * Set API request timeout in seconds
+     * 
+     * @param int $seconds Timeout in seconds (default: 2)
+     * @return static
+     */
+    public function setApiTimeout(int $seconds): static
+    {
+        $this->apiTimeout = max(1, $seconds); // min 1 sec
+        return $this;
+    }
+
+    /**
+     * Set API request timeout in seconds
+     * 
+     * @param int $seconds Timeout in seconds (default: 2)
+     * @return static
+     */
+    public function withApiTimeout(int $seconds): static
+    {
+        $self = clone $this;
+        $self->setApiTimeout($seconds);
+        return $self;
+    }
+
+    /**
+     * Set API connection timeout in seconds
+     * 
+     * @param int $seconds Connection timeout in seconds (default: 2)
+     * @return static
+     */
+    public function setApiConnectTimeout(int $seconds): static
+    {
+        $this->apiConnectTimeout = max(1, $seconds);
+        return $this;
+    }
+
+    /**
+     * Set API connection timeout in seconds
+     * 
+     * @param int $seconds Connection timeout in seconds (default: 2)
+     * @return static
+     */
+    public function withApiConnectTimeout(int $seconds): static
+    {
+        $self = clone $this;
+        $self->setApiConnectTimeout($seconds);
         return $self;
     }
 
@@ -625,14 +682,16 @@ class Growthbook implements LoggerAwareInterface
                 }
 
                 if (isset($rule->force)) {
-                    if (!$this->isIncludedInRollout(
-                        $rule->seed ?? $key,
-                        $rule->hashAttribute,
-                        $rule->fallbackAttribute,
-                        $rule->range,
-                        $rule->coverage,
-                        $rule->hashVersion
-                    )) {
+                    if (
+                        !$this->isIncludedInRollout(
+                            $rule->seed ?? $key,
+                            $rule->hashAttribute,
+                            $rule->fallbackAttribute,
+                            $rule->range,
+                            $rule->coverage,
+                            $rule->hashVersion
+                        )
+                    ) {
                         $this->log(LogLevel::DEBUG, "Skip rule because of rollout percent", [
                             "feature" => $key
                         ]);
@@ -1108,7 +1167,7 @@ class Growthbook implements LoggerAwareInterface
     {
         foreach ($ranges as $i => $range) {
             if (self::inRange($n, $range)) {
-                return (int)$i;
+                return (int) $i;
             }
         }
         return -1;
@@ -1136,7 +1195,7 @@ class Growthbook implements LoggerAwareInterface
         }
 
         // Make sure it's a valid variation integer
-        $variation = (int)$params[$id];
+        $variation = (int) $params[$id];
         if ($variation < 0 || $variation >= $numVariations) {
             return null;
         }
@@ -1215,43 +1274,51 @@ class Growthbook implements LoggerAwareInterface
             }
         }
 
-        // Otherwise, fetch from API
-        $req = $this->requestFactory->createRequest('GET', $url);
-        $res = $this->httpClient->sendRequest($req);
-        $body = $res->getBody()->getContents();
-        $parsed = json_decode($body, true);
-        if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
-            $this->log(LogLevel::WARNING, "Could not load features", ["url" => $url, "responseBody" => $body]);
-            return;
-        }
+        try {
+            // Otherwise, fetch from API
+            $req = $this->requestFactory->createRequest('GET', $url);
+            $res = $this->httpClient->sendRequest($req);
+            $body = $res->getBody()->getContents();
+            $parsed = json_decode($body, true);
+            if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
+                $this->log(LogLevel::WARNING, "Could not load features", ["url" => $url, "responseBody" => $body]);
+                return;
+            }
 
-        // Set features and savedGroupd and cache for next time
-        $features = array_key_exists("encryptedFeatures", $parsed)
-            ? json_decode($this->decrypt($parsed["encryptedFeatures"]), true)
-            : $parsed["features"];
+            // Set features and savedGroupd and cache for next time
+            $features = array_key_exists("encryptedFeatures", $parsed)
+                ? json_decode($this->decrypt($parsed["encryptedFeatures"]), true)
+                : $parsed["features"];
 
-        $savedGroups = array_key_exists("encryptedSavedGroups", $parsed)
-            ? json_decode($this->decrypt($parsed["encryptedSavedGroups"]), true)
-            : (array_key_exists("savedGroups", $parsed) ? $parsed["savedGroups"] : []);
-        if (!is_array($savedGroups)) {
-            $savedGroups = [];
-        }
+            $savedGroups = array_key_exists("encryptedSavedGroups", $parsed)
+                ? json_decode($this->decrypt($parsed["encryptedSavedGroups"]), true)
+                : (array_key_exists("savedGroups", $parsed) ? $parsed["savedGroups"] : []);
+            if (!is_array($savedGroups)) {
+                $savedGroups = [];
+            }
 
-        $this->log(LogLevel::INFO, "Load features and saved groups from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
-        $this->setFeatures($features);
-        $this->setSavedGroups($savedGroups);
+            $this->log(LogLevel::INFO, "Load features and saved groups from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
+            $this->setFeatures($features);
+            $this->setSavedGroups($savedGroups);
 
-        if ($this->cache) {
-            $cacheData = [
-                'features' => $features,
-                'savedGroups' => $savedGroups
-            ];
-            $this->cache->set($cacheKey, json_encode($cacheData), $this->cacheTTL);
-            $this->log(LogLevel::INFO, "Cache features and saved groups", [
+            if ($this->cache) {
+                $cacheData = [
+                    'features' => $features,
+                    'savedGroups' => $savedGroups
+                ];
+                $this->cache->set($cacheKey, json_encode($cacheData), $this->cacheTTL);
+                $this->log(LogLevel::INFO, "Cache features and saved groups", [
+                    "url" => $url,
+                    "numFeatures" => count($features),
+                    "numGroups" => count($savedGroups),
+                    "ttl" => $this->cacheTTL
+                ]);
+            }
+        } catch (\Throwable $e) {
+            $this->log(LogLevel::ERROR, "Failed to fetch features from API", [
                 "url" => $url,
-                "numFeatures" => count($features),
-                "numGroups" => count($savedGroups),
-                "ttl" => $this->cacheTTL
+                "error" => $e->getMessage(),
+                "errorClass" => get_class($e)
             ]);
         }
     }
@@ -1270,6 +1337,36 @@ class Growthbook implements LoggerAwareInterface
         $this->initialize($clientKey, $apiHost, $decryptionKey);
     }
 
+    /**
+     * Create HTTP client with safe default timeout settings
+     * 
+     * @return \Psr\Http\Client\ClientInterface
+     */
+    private function createDefaultHttpClient(): \Psr\Http\Client\ClientInterface
+    {
+        // Try to create Guzzle client with timeout if available
+        if (class_exists(\GuzzleHttp\Client::class)) {
+            $client = new \GuzzleHttp\Client([
+                'timeout' => $this->apiTimeout,
+                'connect_timeout' => $this->apiConnectTimeout,
+            ]);
+
+            /** @var \Psr\Http\Client\ClientInterface $client */
+            return $client;
+        }
+
+        // Fallback to PSR-18 discovery
+        // Note: discovered client may not have timeout configured
+        $client = Psr18ClientDiscovery::find();
+
+        $this->log(
+            LogLevel::WARNING,
+            "Using discovered HTTP client without guaranteed timeout. " .
+            "Consider providing a configured client via withHttpClient()."
+        );
+
+        return $client;
+    }
     /**
      * @param string                                                   $key
      * @param int|null                                                 $bucketVersion

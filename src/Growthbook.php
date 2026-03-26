@@ -178,13 +178,11 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @param array<string,mixed> $attributes
      * @return static
+     * @deprecated Use setAttributes() instead. withAttributes() will become immutable in 2.0.0.
      */
     public function withAttributes(array $attributes): static
     {
-        $self = clone $this;
-        $self->setAttributes($attributes);
-
-        return $self;
+        return $this->setAttributes($attributes);
     }
 
     /**
@@ -201,13 +199,11 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @param array<string,mixed> $savedGroups
      * @return static
+     * @deprecated Use setSavedGroups() instead. withSavedGroups() will become immutable in 2.0.0.
      */
     public function withSavedGroups(array $savedGroups): static
     {
-        $self = clone $this;
-        $self->setSavedGroups($savedGroups);
-
-        return $self;
+        return $this->setSavedGroups($savedGroups);
     }
 
     /**
@@ -224,13 +220,11 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @param callable|null $trackingCallback
      * @return static
+     * @deprecated Use setTrackingCallback() instead. withTrackingCallback() will become immutable in 2.0.0.
      */
     public function withTrackingCallback($trackingCallback): static
     {
-        $self = clone $this;
-        $self->setTrackingCallback($trackingCallback);
-
-        return $self;
+        return $this->setTrackingCallback($trackingCallback);
     }
 
     /**
@@ -255,13 +249,11 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @param array<string,Feature<mixed>|mixed> $features
      * @return static
+     * @deprecated Use setFeatures() instead. withFeatures() will become immutable in 2.0.0.
      */
     public function withFeatures(array $features): static
     {
-        $self = clone $this;
-        $self->setFeatures($features);
-
-        return $self;
+        return $this->setFeatures($features);
     }
 
     /**
@@ -277,13 +269,11 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @param array<string,int> $forcedVariations
      * @return static
+     * @deprecated Use setForcedVariations() instead. withForcedVariations() will become immutable in 2.0.0.
      */
     public function withForcedVariations(array $forcedVariations): static
     {
-        $self = clone $this;
-        $self->setForcedVariations($forcedVariations);
-
-        return $self;
+        return $this->setForcedVariations($forcedVariations);
     }
 
     /**
@@ -299,13 +289,11 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @param array<string, FeatureResult<mixed>> $forcedFeatures
      * @return static
+     * @deprecated Use setForcedFeatures() instead. withForcedFeatures() will become immutable in 2.0.0.
      */
     public function withForcedFeatures(array $forcedFeatures): static
     {
-        $self = clone $this;
-        $self->setForcedFeatures($forcedFeatures);
-
-        return $self;
+        return $this->setForcedFeatures($forcedFeatures);
     }
 
     /**
@@ -321,13 +309,11 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @param string $url
      * @return static
+     * @deprecated Use setUrl() instead. withUrl() will become immutable in 2.0.0.
      */
     public function withUrl(string $url): static
     {
-        $self = clone $this;
-        $self->setUrl($url);
-
-        return $self;
+        return $this->setUrl($url);
     }
 
     /**
@@ -341,13 +327,12 @@ class Growthbook implements LoggerAwareInterface
     /**
      * @param LoggerInterface|null $logger
      * @return static
+     * @deprecated Use setLogger() instead. withLogger() will become immutable in 2.0.0.
      */
     public function withLogger(?LoggerInterface $logger = null): static
     {
-        $self = clone $this;
-        $self->setLogger($logger);
-
-        return $self;
+        $this->setLogger($logger);
+        return $this;
     }
 
     /**
@@ -368,13 +353,11 @@ class Growthbook implements LoggerAwareInterface
      * @param \Psr\Http\Client\ClientInterface $client
      * @param \Psr\Http\Message\RequestFactoryInterface $requestFactory
      * @return static
+     * @deprecated Use setHttpClient() instead. withHttpClient() will become immutable in 2.0.0.
      */
     public function withHttpClient(\Psr\Http\Client\ClientInterface $client, \Psr\Http\Message\RequestFactoryInterface $requestFactory): static
     {
-        $self = clone $this;
-        $self->setHttpClient($client, $requestFactory);
-
-        return $self;
+        return $this->setHttpClient($client, $requestFactory);
     }
 
     /**
@@ -391,15 +374,14 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * Set API request timeout in seconds
-     * 
+     *
      * @param int $seconds Timeout in seconds (default: 2)
      * @return static
+     * @deprecated Use setApiTimeout() instead. withApiTimeout() will become immutable in 2.0.0.
      */
     public function withApiTimeout(int $seconds): static
     {
-        $self = clone $this;
-        $self->setApiTimeout($seconds);
-        return $self;
+        return $this->setApiTimeout($seconds);
     }
 
     /**
@@ -416,15 +398,14 @@ class Growthbook implements LoggerAwareInterface
 
     /**
      * Set API connection timeout in seconds
-     * 
+     *
      * @param int $seconds Connection timeout in seconds (default: 2)
      * @return static
+     * @deprecated Use setApiConnectTimeout() instead. withApiConnectTimeout() will become immutable in 2.0.0.
      */
     public function withApiConnectTimeout(int $seconds): static
     {
-        $self = clone $this;
-        $self->setApiConnectTimeout($seconds);
-        return $self;
+        return $this->setApiConnectTimeout($seconds);
     }
 
     /**
@@ -446,13 +427,11 @@ class Growthbook implements LoggerAwareInterface
      * @param \Psr\SimpleCache\CacheInterface $cache
      * @param int|null                       $ttl
      * @return static
+     * @deprecated Use setCache() instead. withCache() will become immutable in 2.0.0.
      */
     public function withCache(\Psr\SimpleCache\CacheInterface $cache, ?int $ttl = null): static
     {
-        $self = clone $this;
-        $self->setCache($cache, $ttl);
-
-        return $self;
+        return $this->setCache($cache, $ttl);
     }
 
     /**
@@ -472,13 +451,11 @@ class Growthbook implements LoggerAwareInterface
      * @param StickyBucketService $stickyBucketService
      * @param array<string>|null  $stickyBucketIdentifierAttributes
      * @return static
+     * @deprecated Use setStickyBucketing() instead. withStickyBucketing() will become immutable in 2.0.0.
      */
     public function withStickyBucketing(StickyBucketService $stickyBucketService, ?array $stickyBucketIdentifierAttributes): static
     {
-        $self = clone $this;
-        $self->setStickyBucketing($stickyBucketService, $stickyBucketIdentifierAttributes);
-
-        return $self;
+        return $this->setStickyBucketing($stickyBucketService, $stickyBucketIdentifierAttributes);
     }
 
     /**

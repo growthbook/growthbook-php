@@ -992,35 +992,41 @@ final class GrowthbookTest extends TestCase
         $this->assertSame(1, $actualFeatures['feature-1']->defaultValue);
         $this->assertSame(2, $actualFeatures['feature-2']->defaultValue);
 
-        // Test that with* methods return the same instance (mutable, backward compatible)
+        // Test that with* methods return a new instance (immutability)
         $newAttributes = ['id' => 999];
         $newGb = $gb->withAttributes($newAttributes);
 
-        $this->assertSame($gb, $newGb); // Should be the same instance
-        $this->assertSame($newAttributes, $gb->getAttributes()); // Original updated in place
+        $this->assertNotSame($gb, $newGb); // Should be different instances
+        $this->assertSame($attributes, $gb->getAttributes()); // Original unchanged
+        $this->assertSame($newAttributes, $newGb->getAttributes()); // New has updated value
     }
 
     /**
      * @return void
      */
-    public function testWithMethodsMutability(): void
+    public function testWithMethodsImmutability(): void
     {
-        $gb = Growthbook::create()
+        $originalGb = Growthbook::create()
             ->withAttributes(['id' => 1])
             ->withFeatures(['test' => ['defaultValue' => true]])
             ->withUrl('/original');
 
-        // Test each with* method mutates the same instance (backward compatible behavior)
-        $result = $gb->withAttributes(['id' => 2]);
-        $this->assertSame($gb, $result);
-        $this->assertSame(['id' => 2], $gb->getAttributes());
+        // Test each with* method creates a new instance
+        $newGb1 = $originalGb->withAttributes(['id' => 2]);
+        $this->assertNotSame($originalGb, $newGb1);
+        $this->assertSame(['id' => 1], $originalGb->getAttributes());
+        $this->assertSame(['id' => 2], $newGb1->getAttributes());
 
-        $result2 = $gb->withFeatures(['new-feature' => ['defaultValue' => false]]);
-        $this->assertSame($gb, $result2);
+        $newGb2 = $originalGb->withFeatures(['new-feature' => ['defaultValue' => false]]);
+        $this->assertNotSame($originalGb, $newGb2);
+        $this->assertNotSame($newGb1, $newGb2);
 
-        $result3 = $gb->withUrl('/new-url');
-        $this->assertSame($gb, $result3);
-        $this->assertSame('/new-url', $gb->getUrl());
+        $newGb3 = $originalGb->withUrl('/new-url');
+        $this->assertNotSame($originalGb, $newGb3);
+        $this->assertNotSame($newGb1, $newGb3);
+        $this->assertNotSame($newGb2, $newGb3);
+        $this->assertSame('/original', $originalGb->getUrl());
+        $this->assertSame('/new-url', $newGb3->getUrl());
     }
 
     public function testDefaultTimeoutValues(): void
@@ -1080,18 +1086,19 @@ final class GrowthbookTest extends TestCase
         $this->assertEquals(1, $prop->getValue($gb));
     }
 
-    public function testWithApiTimeoutMutatesInstance(): void
+    public function testWithApiTimeoutReturnsNewInstance(): void
     {
-        $gb = new Growthbook();
-        $result = $gb->withApiTimeout(10);
+        $gb1 = new Growthbook();
+        $gb2 = $gb1->withApiTimeout(10);
 
-        $this->assertSame($gb, $result);
+        $this->assertNotSame($gb1, $gb2);
 
-        $ref = new \ReflectionClass($gb);
+        $ref = new \ReflectionClass($gb2);
         $timeout = $ref->getProperty('apiTimeout');
         $timeout->setAccessible(true);
 
-        $this->assertEquals(10, $timeout->getValue($gb));
+        $this->assertEquals(2, $timeout->getValue($gb1)); 
+        $this->assertEquals(10, $timeout->getValue($gb2));
     }
 
     public function testCustomHttpClientIsNotOverridden(): void

@@ -203,11 +203,11 @@ class GrowthBookTrackingPlugin implements Plugin
                 return;
             }
 
-            $request = $factory
-                ->createRequest('POST', $url)
-                ->withHeader('Content-Type', 'application/json')
-                ->withHeader('User-Agent', 'growthbook-php-sdk/' . self::sdkVersion())
-                ->withBody($this->createStream($factory, $payload));
+            /** @var \Psr\Http\Message\RequestInterface $request */
+            $request = $factory->createRequest('POST', $url);
+            $request = $request->withHeader('Content-Type', 'application/json');
+            $request = $request->withHeader('User-Agent', 'growthbook-php-sdk/' . self::sdkVersion());
+            $request = $request->withBody($this->createStream($factory, $payload));
 
             $client->sendRequest($request);
         } catch (\Throwable $e) {

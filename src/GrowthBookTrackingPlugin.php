@@ -9,9 +9,9 @@ use Psr\Http\Message\RequestFactoryInterface;
  * Built-in plugin that batches experiment and feature evaluation events
  * and POSTs them to the GrowthBook ingest endpoint.
  *
- * Endpoint:  POST {ingestorHost}/track
+ * Endpoint:  POST {ingestorHost}/track?client_key={clientKey}
  * Default host: https://us1.gb-ingest.com
- * Body: { "client_key": "...", "events": [...] }
+ * Body: [...events]  (plain JSON array)
  *
  * Flush triggers:
  *   - batch reaches $batchSize events
@@ -155,18 +155,17 @@ class GrowthBookTrackingPlugin implements Plugin
      */
     private function post(array $events): void
     {
-        $payload = json_encode([
-            'client_key' => $this->clientKey,
-            'events'     => $events,
-        ]);
+        $payload = json_encode($events);
 
         if ($payload === false) {
             return;
         }
 
+        $url = $this->ingestorHost . '/track?client_key=' . rawurlencode($this->clientKey);
+
         // Test hook — bypasses real HTTP
         if ($this->sendHandler !== null) {
-            ($this->sendHandler)($payload);
+            ($this->sendHandler)($url, $payload);
             return;
         }
 
@@ -178,7 +177,7 @@ class GrowthBookTrackingPlugin implements Plugin
             }
 
             $request = $factory
-                ->createRequest('POST', $this->ingestorHost . '/track')
+                ->createRequest('POST', $url)
                 ->withHeader('Content-Type', 'application/json')
                 ->withHeader('User-Agent', 'growthbook-php-sdk/' . self::SDK_VERSION)
                 ->withBody($this->createStream($factory, $payload));
@@ -220,10 +219,10 @@ class GrowthBookTrackingPlugin implements Plugin
     }
 
     /**
-     * For testing only — injects a callable that receives the raw JSON payload
-     * instead of making a real HTTP request.
+     * For testing only — injects a callable that receives the request URL and
+     * raw JSON body instead of making a real HTTP request.
      *
-     * @param callable(string):void $handler
+     * @param callable(string $url, string $body):void $handler
      */
     public function setSendHandler(callable $handler): void
     {

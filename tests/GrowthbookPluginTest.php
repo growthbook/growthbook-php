@@ -282,25 +282,27 @@ final class GrowthBookTrackingPluginTest extends TestCase
 
     public function testNoOpWithEmptyClientKey(): void
     {
-        $sent = [];
+        $calls = [];
         $plugin = $this->makePlugin(1);
-        $plugin->setSendHandler(function (string $payload) use (&$sent) { $sent[] = $payload; });
+        $plugin->setSendHandler(function (string $url, string $body) use (&$calls) { $calls[] = $body; });
 
         $plugin->initialize('');
         $exp = $this->makeExperiment();
         $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
         $plugin->close();
 
-        $this->assertCount(0, $sent);
+        $this->assertCount(0, $calls);
     }
 
     // ---- Batch size flush ----
 
     public function testFlushWhenBatchSizeReached(): void
     {
-        $sent = [];
+        $calls = [];
         $plugin = $this->makePlugin(3);
-        $plugin->setSendHandler(function (string $payload) use (&$sent) { $sent[] = json_decode($payload, true); });
+        $plugin->setSendHandler(function (string $url, string $body) use (&$calls) {
+            $calls[] = ['url' => $url, 'events' => json_decode($body, true)];
+        });
         $plugin->initialize('sdk-test');
 
         $exp = $this->makeExperiment();
@@ -308,16 +310,16 @@ final class GrowthBookTrackingPluginTest extends TestCase
             $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
         }
 
-        $this->assertCount(1, $sent);
-        $this->assertSame('sdk-test', $sent[0]['client_key']);
-        $this->assertCount(3, $sent[0]['events']);
+        $this->assertCount(1, $calls);
+        $this->assertStringContainsString('client_key=sdk-test', $calls[0]['url']);
+        $this->assertCount(3, $calls[0]['events']);
     }
 
     public function testNoFlushBeforeBatchSizeReached(): void
     {
-        $sent = [];
+        $calls = [];
         $plugin = $this->makePlugin(5);
-        $plugin->setSendHandler(function (string $payload) use (&$sent) { $sent[] = $payload; });
+        $plugin->setSendHandler(function (string $url, string $body) use (&$calls) { $calls[] = $body; });
         $plugin->initialize('sdk-test');
 
         $exp = $this->makeExperiment();
@@ -325,7 +327,7 @@ final class GrowthBookTrackingPluginTest extends TestCase
             $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
         }
 
-        $this->assertCount(0, $sent);
+        $this->assertCount(0, $calls);
         $plugin->close();
     }
 
@@ -333,58 +335,78 @@ final class GrowthBookTrackingPluginTest extends TestCase
 
     public function testCloseFlushesSynchronously(): void
     {
-        $sent = [];
+        $calls = [];
         $plugin = $this->makePlugin(100);
-        $plugin->setSendHandler(function (string $payload) use (&$sent) { $sent[] = $payload; });
+        $plugin->setSendHandler(function (string $url, string $body) use (&$calls) { $calls[] = $body; });
         $plugin->initialize('sdk-test');
 
         $exp = $this->makeExperiment();
         $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
 
-        $this->assertCount(0, $sent, "no request before close()");
+        $this->assertCount(0, $calls, "no request before close()");
         $plugin->close();
-        $this->assertCount(1, $sent, "close() must flush synchronously");
+        $this->assertCount(1, $calls, "close() must flush synchronously");
     }
 
     public function testCloseWithNoEventsDoesNotSendRequest(): void
     {
-        $sent = [];
+        $calls = [];
         $plugin = $this->makePlugin();
-        $plugin->setSendHandler(function (string $payload) use (&$sent) { $sent[] = $payload; });
+        $plugin->setSendHandler(function (string $url, string $body) use (&$calls) { $calls[] = $body; });
         $plugin->initialize('sdk-test');
         $plugin->close();
 
-        $this->assertCount(0, $sent);
+        $this->assertCount(0, $calls);
     }
 
     public function testCloseIsIdempotent(): void
     {
-        $sent = [];
+        $calls = [];
         $plugin = $this->makePlugin(100);
-        $plugin->setSendHandler(function (string $payload) use (&$sent) { $sent[] = $payload; });
+        $plugin->setSendHandler(function (string $url, string $body) use (&$calls) { $calls[] = $body; });
         $plugin->initialize('sdk-test');
 
         $exp = $this->makeExperiment();
         $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
         $plugin->close();
-        $plugin->close(); // second call must not send again
+        $plugin->close();
 
-        $this->assertCount(1, $sent);
+        $this->assertCount(1, $calls);
     }
 
-    // ---- Payload format ----
+    // ---- Request format ----
 
-    public function testExperimentViewedEventFormat(): void
+    public function testClientKeyInQueryString(): void
     {
-        $sent = [];
+        $urls = [];
         $plugin = $this->makePlugin(1);
-        $plugin->setSendHandler(function (string $payload) use (&$sent) { $sent[] = json_decode($payload, true); });
+        $plugin->setSendHandler(function (string $url, string $body) use (&$urls) { $urls[] = $url; });
+        $plugin->initialize('my-client-key');
+
+        $exp = $this->makeExperiment();
+        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
+
+        $this->assertStringContainsString('client_key=my-client-key', $urls[0]);
+        $this->assertStringContainsString('/track', $urls[0]);
+    }
+
+    public function testBodyIsPlainEventArray(): void
+    {
+        $bodies = [];
+        $plugin = $this->makePlugin(1);
+        $plugin->setSendHandler(function (string $url, string $body) use (&$bodies) {
+            $bodies[] = json_decode($body, true);
+        });
         $plugin->initialize('sdk-test');
 
         $exp = $this->makeExperiment('my-experiment');
         $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
 
-        $event = $sent[0]['events'][0];
+        // Body must be a plain array, not wrapped in {client_key, events}
+        $this->assertIsArray($bodies[0]);
+        $this->assertArrayNotHasKey('client_key', $bodies[0]);
+        $this->assertArrayNotHasKey('events', $bodies[0]);
+        $event = $bodies[0][0];
         $this->assertSame('experiment_viewed', $event['event']);
         $this->assertSame('my-experiment', $event['experimentKey']);
         $this->assertSame(1, $event['variationId']);
@@ -392,46 +414,37 @@ final class GrowthBookTrackingPluginTest extends TestCase
 
     public function testFeatureEvaluatedEventFormat(): void
     {
-        $sent = [];
+        $bodies = [];
         $plugin = $this->makePlugin(1);
-        $plugin->setSendHandler(function (string $payload) use (&$sent) { $sent[] = json_decode($payload, true); });
+        $plugin->setSendHandler(function (string $url, string $body) use (&$bodies) {
+            $bodies[] = json_decode($body, true);
+        });
         $plugin->initialize('sdk-test');
 
         $plugin->onFeatureEvaluated('my-feature', $this->makeFeatureResult());
 
-        $event = $sent[0]['events'][0];
+        $event = $bodies[0][0];
         $this->assertSame('feature_evaluated', $event['event']);
         $this->assertSame('my-feature', $event['featureKey']);
         $this->assertSame('defaultValue', $event['source']);
     }
 
-    public function testPayloadContainsClientKey(): void
-    {
-        $sent = [];
-        $plugin = $this->makePlugin(1);
-        $plugin->setSendHandler(function (string $payload) use (&$sent) { $sent[] = json_decode($payload, true); });
-        $plugin->initialize('my-client-key');
-
-        $exp = $this->makeExperiment();
-        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
-
-        $this->assertSame('my-client-key', $sent[0]['client_key']);
-    }
-
     public function testMixedEventTypesInOneBatch(): void
     {
-        $sent = [];
+        $bodies = [];
         $plugin = $this->makePlugin(2);
-        $plugin->setSendHandler(function (string $payload) use (&$sent) { $sent[] = json_decode($payload, true); });
+        $plugin->setSendHandler(function (string $url, string $body) use (&$bodies) {
+            $bodies[] = json_decode($body, true);
+        });
         $plugin->initialize('sdk-test');
 
         $exp = $this->makeExperiment();
         $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
         $plugin->onFeatureEvaluated('flag', $this->makeFeatureResult());
 
-        $this->assertCount(1, $sent);
-        $this->assertCount(2, $sent[0]['events']);
-        $this->assertSame('experiment_viewed', $sent[0]['events'][0]['event']);
-        $this->assertSame('feature_evaluated', $sent[0]['events'][1]['event']);
+        $this->assertCount(1, $bodies);
+        $this->assertCount(2, $bodies[0]);
+        $this->assertSame('experiment_viewed', $bodies[0][0]['event']);
+        $this->assertSame('feature_evaluated', $bodies[0][1]['event']);
     }
 }

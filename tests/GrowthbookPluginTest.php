@@ -34,8 +34,9 @@ final class MockPlugin implements Plugin
     /**
      * @param InlineExperiment<mixed> $experiment
      * @param ExperimentResult<mixed> $result
+     * @param array<string,mixed>     $attributes
      */
-    public function onExperimentViewed(InlineExperiment $experiment, ExperimentResult $result): void
+    public function onExperimentViewed(InlineExperiment $experiment, ExperimentResult $result, array $attributes): void
     {
         $this->experimentCallCount++;
         $this->experimentEvents[] = ['experiment' => $experiment, 'result' => $result];
@@ -43,8 +44,9 @@ final class MockPlugin implements Plugin
 
     /**
      * @param FeatureResult<mixed> $result
+     * @param array<string,mixed>  $attributes
      */
-    public function onFeatureEvaluated(string $featureKey, FeatureResult $result): void
+    public function onFeatureEvaluated(string $featureKey, FeatureResult $result, array $attributes): void
     {
         $this->featureCallCount++;
         $this->featureEvents[] = ['key' => $featureKey, 'result' => $result];
@@ -223,10 +225,10 @@ final class GrowthbookPluginIntegrationTest extends TestCase
     {
         $badPlugin = new class implements Plugin {
             public function initialize(string $clientKey): void { throw new \RuntimeException("boom"); }
-            /** @param InlineExperiment<mixed> $e @param ExperimentResult<mixed> $r */
-            public function onExperimentViewed(InlineExperiment $e, ExperimentResult $r): void { throw new \RuntimeException("boom"); }
-            /** @param FeatureResult<mixed> $r */
-            public function onFeatureEvaluated(string $k, FeatureResult $r): void { throw new \RuntimeException("boom"); }
+            /** @param InlineExperiment<mixed> $e @param ExperimentResult<mixed> $r @param array<string,mixed> $a */
+            public function onExperimentViewed(InlineExperiment $e, ExperimentResult $r, array $a): void { throw new \RuntimeException("boom"); }
+            /** @param FeatureResult<mixed> $r @param array<string,mixed> $a */
+            public function onFeatureEvaluated(string $k, FeatureResult $r, array $a): void { throw new \RuntimeException("boom"); }
             public function close(): void { throw new \RuntimeException("boom"); }
         };
 
@@ -288,7 +290,7 @@ final class GrowthBookTrackingPluginTest extends TestCase
 
         $plugin->initialize('');
         $exp = $this->makeExperiment();
-        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
+        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp), []);
         $plugin->close();
 
         $this->assertCount(0, $calls);
@@ -307,7 +309,7 @@ final class GrowthBookTrackingPluginTest extends TestCase
 
         $exp = $this->makeExperiment();
         for ($i = 0; $i < 3; $i++) {
-            $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
+            $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp), []);
         }
 
         $this->assertCount(1, $calls);
@@ -324,7 +326,7 @@ final class GrowthBookTrackingPluginTest extends TestCase
 
         $exp = $this->makeExperiment();
         for ($i = 0; $i < 4; $i++) {
-            $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
+            $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp), []);
         }
 
         $this->assertCount(0, $calls);
@@ -341,7 +343,7 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $plugin->initialize('sdk-test');
 
         $exp = $this->makeExperiment();
-        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
+        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp), []);
 
         $this->assertCount(0, $calls, "no request before close()");
         $plugin->close();
@@ -367,7 +369,7 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $plugin->initialize('sdk-test');
 
         $exp = $this->makeExperiment();
-        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
+        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp), []);
         $plugin->close();
         $plugin->close();
 
@@ -384,7 +386,7 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $plugin->initialize('my-client-key');
 
         $exp = $this->makeExperiment();
-        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
+        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp), []);
 
         $this->assertStringContainsString('client_key=my-client-key', $urls[0]);
         $this->assertStringContainsString('/track', $urls[0]);
@@ -400,16 +402,36 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $plugin->initialize('sdk-test');
 
         $exp = $this->makeExperiment('my-experiment');
-        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
+        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp), ['id' => 'user-1']);
 
         // Body must be a plain array, not wrapped in {client_key, events}
         $this->assertIsArray($bodies[0]);
         $this->assertArrayNotHasKey('client_key', $bodies[0]);
         $this->assertArrayNotHasKey('events', $bodies[0]);
+
         $event = $bodies[0][0];
-        $this->assertSame('experiment_viewed', $event['event']);
-        $this->assertSame('my-experiment', $event['experimentKey']);
-        $this->assertSame(1, $event['variationId']);
+        $this->assertSame('Experiment Viewed', $event['event_name']);
+        $this->assertSame('my-experiment', $event['properties']['experimentId']);
+        $this->assertSame(1, $event['properties']['variationId']);
+    }
+
+    public function testExperimentViewedAttributesMerged(): void
+    {
+        $bodies = [];
+        $plugin = $this->makePlugin(1);
+        $plugin->setSendHandler(function (string $url, string $body) use (&$bodies) {
+            $bodies[] = json_decode($body, true);
+        });
+        $plugin->initialize('sdk-test');
+
+        $exp = $this->makeExperiment();
+        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp), ['id' => 'user-1', 'country' => 'UA']);
+
+        $attrs = $bodies[0][0]['attributes'];
+        $this->assertSame('user-1', $attrs['id']);
+        $this->assertSame('UA', $attrs['country']);
+        $this->assertSame('php', $attrs['sdk_language']);
+        $this->assertArrayHasKey('sdk_version', $attrs);
     }
 
     public function testFeatureEvaluatedEventFormat(): void
@@ -421,12 +443,13 @@ final class GrowthBookTrackingPluginTest extends TestCase
         });
         $plugin->initialize('sdk-test');
 
-        $plugin->onFeatureEvaluated('my-feature', $this->makeFeatureResult());
+        $plugin->onFeatureEvaluated('my-feature', $this->makeFeatureResult(), []);
 
         $event = $bodies[0][0];
-        $this->assertSame('feature_evaluated', $event['event']);
-        $this->assertSame('my-feature', $event['featureKey']);
-        $this->assertSame('defaultValue', $event['source']);
+        $this->assertSame('Feature Evaluated', $event['event_name']);
+        $this->assertSame('my-feature', $event['properties']['feature']);
+        $this->assertSame('defaultValue', $event['properties']['source']);
+        $this->assertSame('php', $event['attributes']['sdk_language']);
     }
 
     public function testMixedEventTypesInOneBatch(): void
@@ -439,12 +462,12 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $plugin->initialize('sdk-test');
 
         $exp = $this->makeExperiment();
-        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp));
-        $plugin->onFeatureEvaluated('flag', $this->makeFeatureResult());
+        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp), []);
+        $plugin->onFeatureEvaluated('flag', $this->makeFeatureResult(), []);
 
         $this->assertCount(1, $bodies);
         $this->assertCount(2, $bodies[0]);
-        $this->assertSame('experiment_viewed', $bodies[0][0]['event']);
-        $this->assertSame('feature_evaluated', $bodies[0][1]['event']);
+        $this->assertSame('Experiment Viewed', $bodies[0][0]['event_name']);
+        $this->assertSame('Feature Evaluated', $bodies[0][1]['event_name']);
     }
 }

@@ -32,21 +32,23 @@ final class PluginRegistry
     /**
      * @param InlineExperiment<mixed> $experiment
      * @param ExperimentResult<mixed> $result
+     * @param array<string,mixed>     $attributes
      */
-    public function onExperimentViewed(InlineExperiment $experiment, ExperimentResult $result): void
+    public function onExperimentViewed(InlineExperiment $experiment, ExperimentResult $result, array $attributes): void
     {
         foreach ($this->plugins as $plugin) {
-            $this->safeCall($plugin, fn() => $plugin->onExperimentViewed($experiment, $result));
+            $this->safeCall($plugin, fn() => $plugin->onExperimentViewed($experiment, $result, $attributes));
         }
     }
 
     /**
      * @param FeatureResult<mixed> $result
+     * @param array<string,mixed>  $attributes
      */
-    public function onFeatureEvaluated(string $featureKey, FeatureResult $result): void
+    public function onFeatureEvaluated(string $featureKey, FeatureResult $result, array $attributes): void
     {
         foreach ($this->plugins as $plugin) {
-            $this->safeCall($plugin, fn() => $plugin->onFeatureEvaluated($featureKey, $result));
+            $this->safeCall($plugin, fn() => $plugin->onFeatureEvaluated($featureKey, $result, $attributes));
         }
     }
 

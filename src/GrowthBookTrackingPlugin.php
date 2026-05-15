@@ -83,35 +83,53 @@ class GrowthBookTrackingPlugin implements Plugin
     /**
      * @param InlineExperiment<mixed> $experiment
      * @param ExperimentResult<mixed> $result
+     * @param array<string,mixed>     $attributes
      */
-    public function onExperimentViewed(InlineExperiment $experiment, ExperimentResult $result): void
+    public function onExperimentViewed(InlineExperiment $experiment, ExperimentResult $result, array $attributes): void
     {
         if (!$this->initialized) {
             return;
         }
         $this->enqueue([
-            'event'         => 'experiment_viewed',
-            'experimentKey' => $experiment->key,
-            'variationId'   => $result->variationId,
-            'hashAttribute' => $result->hashAttribute,
-            'hashValue'     => $result->hashValue,
+            'event_name' => 'Experiment Viewed',
+            'properties' => [
+                'experimentId' => $experiment->key,
+                'variationId'  => $result->variationId,
+            ],
+            'attributes' => $this->mergedAttributes($attributes),
         ]);
     }
 
     /**
      * @param FeatureResult<mixed> $result
+     * @param array<string,mixed>  $attributes
      */
-    public function onFeatureEvaluated(string $featureKey, FeatureResult $result): void
+    public function onFeatureEvaluated(string $featureKey, FeatureResult $result, array $attributes): void
     {
         if (!$this->initialized) {
             return;
         }
         $this->enqueue([
-            'event'      => 'feature_evaluated',
-            'featureKey' => $featureKey,
-            'value'      => $result->value,
-            'source'     => $result->source,
-            'ruleId'     => $result->ruleId ?? null,
+            'event_name' => 'Feature Evaluated',
+            'properties' => [
+                'feature' => $featureKey,
+                'value'   => $result->value,
+                'source'  => $result->source,
+                'ruleId'  => $result->ruleId ?? null,
+            ],
+            'attributes' => $this->mergedAttributes($attributes),
+        ]);
+    }
+
+    /**
+     * @param array<string,mixed> $userAttributes
+     * @return array<string,mixed>
+     */
+    private function mergedAttributes(array $userAttributes): array
+    {
+        return array_merge($userAttributes, [
+            'sdk_language' => 'php',
+            'sdk_version'  => self::SDK_VERSION,
         ]);
     }
 

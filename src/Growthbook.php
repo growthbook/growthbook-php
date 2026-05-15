@@ -676,7 +676,7 @@ class Growthbook implements LoggerAwareInterface
     {
         $result = $this->evaluateFeature($key, $stack);
         if (empty($stack)) {
-            $this->pluginRegistry->onFeatureEvaluated($key, $result);
+            $this->pluginRegistry->onFeatureEvaluated($key, $result, $this->attributes);
         }
         return $result;
     }
@@ -1050,7 +1050,7 @@ class Growthbook implements LoggerAwareInterface
                 }
             }
         }
-        $this->pluginRegistry->onExperimentViewed($exp, $result);
+        $this->pluginRegistry->onExperimentViewed($exp, $result, $this->attributes);
 
         // 15. Return the result
         $this->log(LogLevel::DEBUG, "Assigned user a variation", [

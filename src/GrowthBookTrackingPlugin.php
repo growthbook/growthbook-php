@@ -22,7 +22,7 @@ class GrowthBookTrackingPlugin implements Plugin
     public const DEFAULT_INGESTOR_HOST = "https://us1.gb-ingest.com";
     public const DEFAULT_BATCH_SIZE    = 100;
 
-    private const SDK_VERSION = "2.0.0";
+    private const PACKAGE_NAME = "growthbook/growthbook";
 
     private string $ingestorHost;
     private int $batchSize;
@@ -129,8 +129,17 @@ class GrowthBookTrackingPlugin implements Plugin
     {
         return array_merge($userAttributes, [
             'sdk_language' => 'php',
-            'sdk_version'  => self::SDK_VERSION,
+            'sdk_version'  => self::sdkVersion(),
         ]);
+    }
+
+    private static function sdkVersion(): string
+    {
+        try {
+            return \Composer\InstalledVersions::getPrettyVersion(self::PACKAGE_NAME) ?? 'unknown';
+        } catch (\Throwable $e) {
+            return 'unknown';
+        }
     }
 
     /** Synchronously flush all buffered events. Safe to call multiple times. */
@@ -197,7 +206,7 @@ class GrowthBookTrackingPlugin implements Plugin
             $request = $factory
                 ->createRequest('POST', $url)
                 ->withHeader('Content-Type', 'application/json')
-                ->withHeader('User-Agent', 'growthbook-php-sdk/' . self::SDK_VERSION)
+                ->withHeader('User-Agent', 'growthbook-php-sdk/' . self::sdkVersion())
                 ->withBody($this->createStream($factory, $payload));
 
             $client->sendRequest($request);

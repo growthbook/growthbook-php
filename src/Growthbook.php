@@ -86,8 +86,8 @@ class Growthbook implements LoggerAwareInterface
     /** @var int */
     private $apiConnectTimeout = self::DEFAULT_API_TIMEOUT;
 
-    /** @var Plugin[] */
-    private $plugins = [];
+    /** @var PluginRegistry */
+    private $pluginRegistry;
 
     /**
      * @param array<string, mixed> $options
@@ -133,6 +133,7 @@ class Growthbook implements LoggerAwareInterface
             trigger_error('Unknown Config options: ' . implode(", ", $unknownOptions), E_USER_NOTICE);
         }
 
+        $this->pluginRegistry = new PluginRegistry();
         $this->enabled = $options["enabled"] ?? true;
         $this->logger = $options["logger"] ?? null;
         $this->url = $options["url"] ?? $_SERVER['REQUEST_URI'] ?? "";
@@ -178,13 +179,7 @@ class Growthbook implements LoggerAwareInterface
 
     public function __destruct()
     {
-        foreach ($this->plugins as $plugin) {
-            try {
-                $plugin->close();
-            } catch (\Throwable $e) {
-                // never propagate plugin errors
-            }
-        }
+        $this->pluginRegistry->close();
     }
 
     /**
@@ -483,7 +478,7 @@ class Growthbook implements LoggerAwareInterface
 
     public function addPlugin(Plugin $plugin): static
     {
-        $this->plugins[] = $plugin;
+        $this->pluginRegistry->add($plugin);
         return $this;
     }
 
@@ -681,13 +676,7 @@ class Growthbook implements LoggerAwareInterface
     {
         $result = $this->evaluateFeature($key, $stack);
         if (empty($stack)) {
-            foreach ($this->plugins as $plugin) {
-                try {
-                    $plugin->onFeatureEvaluated($key, $result);
-                } catch (\Throwable $e) {
-                    // never propagate plugin errors
-                }
-            }
+            $this->pluginRegistry->onFeatureEvaluated($key, $result);
         }
         return $result;
     }
@@ -1061,13 +1050,7 @@ class Growthbook implements LoggerAwareInterface
                 }
             }
         }
-        foreach ($this->plugins as $plugin) {
-            try {
-                $plugin->onExperimentViewed($exp, $result);
-            } catch (\Throwable $e) {
-                // never propagate plugin errors
-            }
-        }
+        $this->pluginRegistry->onExperimentViewed($exp, $result);
 
         // 15. Return the result
         $this->log(LogLevel::DEBUG, "Assigned user a variation", [
@@ -1494,13 +1477,7 @@ class Growthbook implements LoggerAwareInterface
 
     private function initializePlugins(): void
     {
-        foreach ($this->plugins as $plugin) {
-            try {
-                $plugin->initialize($this->clientKey);
-            } catch (\Throwable $e) {
-                // never propagate plugin errors
-            }
-        }
+        $this->pluginRegistry->initialize($this->clientKey);
     }
 
     /**

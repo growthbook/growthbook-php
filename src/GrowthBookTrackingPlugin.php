@@ -4,6 +4,8 @@ namespace Growthbook;
 
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestFactoryInterface;
+use Psr\Log\LoggerInterface;
+use Psr\Log\LogLevel;
 
 /**
  * Built-in plugin that batches experiment and feature evaluation events
@@ -32,6 +34,7 @@ class GrowthBookTrackingPlugin implements Plugin
 
     private ?ClientInterface $httpClient;
     private ?RequestFactoryInterface $requestFactory;
+    private ?LoggerInterface $logger;
 
     /** @var callable|null — overrides HTTP sending in tests */
     private $sendHandler;
@@ -40,15 +43,18 @@ class GrowthBookTrackingPlugin implements Plugin
      * @param GrowthBookTrackingPluginConfig|null $config         Plugin configuration; defaults used when null
      * @param ClientInterface|null                $httpClient     PSR-18 client; auto-discovered when null
      * @param RequestFactoryInterface|null        $requestFactory PSR-17 factory; auto-discovered when null
+     * @param LoggerInterface|null                $logger         PSR-3 logger; errors are silently dropped when null
      */
     public function __construct(
         ?GrowthBookTrackingPluginConfig $config = null,
         ?ClientInterface $httpClient = null,
-        ?RequestFactoryInterface $requestFactory = null
+        ?RequestFactoryInterface $requestFactory = null,
+        ?LoggerInterface $logger = null
     ) {
         $this->config         = $config ?? new GrowthBookTrackingPluginConfig();
         $this->httpClient     = $httpClient;
         $this->requestFactory = $requestFactory;
+        $this->logger         = $logger;
         $this->sendHandler    = null;
 
         // Flush remaining events when the PHP process shuts down (covers the
@@ -205,7 +211,11 @@ class GrowthBookTrackingPlugin implements Plugin
 
             $client->sendRequest($request);
         } catch (\Throwable $e) {
-            // never propagate network errors
+            if ($this->logger) {
+                $this->logger->log(LogLevel::ERROR, "GrowthBookTrackingPlugin: failed to send events", [
+                    "error" => $e->getMessage(),
+                ]);
+            }
         }
     }
 

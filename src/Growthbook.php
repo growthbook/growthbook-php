@@ -133,9 +133,9 @@ class Growthbook implements LoggerAwareInterface
             trigger_error('Unknown Config options: ' . implode(", ", $unknownOptions), E_USER_NOTICE);
         }
 
-        $this->pluginRegistry = new PluginRegistry();
         $this->enabled = $options["enabled"] ?? true;
         $this->logger = $options["logger"] ?? null;
+        $this->pluginRegistry = new PluginRegistry([], $this->logger);
         $this->url = $options["url"] ?? $_SERVER['REQUEST_URI'] ?? "";
         $this->forcedVariations = $options["forcedVariations"] ?? [];
         $this->qaMode = $options["qaMode"] ?? false;
@@ -355,6 +355,7 @@ class Growthbook implements LoggerAwareInterface
     public function setLogger(?LoggerInterface $logger = null): void
     {
         $this->logger = $logger;
+        $this->pluginRegistry->setLogger($logger);
     }
 
     /**

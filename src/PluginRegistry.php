@@ -2,6 +2,9 @@
 
 namespace Growthbook;
 
+use Psr\Log\LoggerInterface;
+use Psr\Log\LogLevel;
+
 /**
  * Holds all registered plugins and dispatches lifecycle and evaluation
  * events to each one. A failure in one plugin never affects the others.
@@ -11,10 +14,21 @@ final class PluginRegistry
     /** @var Plugin[] */
     private array $plugins;
 
-    /** @param Plugin[] $plugins */
-    public function __construct(array $plugins = [])
+    private ?LoggerInterface $logger;
+
+    /**
+     * @param Plugin[]             $plugins
+     * @param LoggerInterface|null $logger
+     */
+    public function __construct(array $plugins = [], ?LoggerInterface $logger = null)
     {
         $this->plugins = $plugins;
+        $this->logger  = $logger;
+    }
+
+    public function setLogger(?LoggerInterface $logger): void
+    {
+        $this->logger = $logger;
     }
 
     public function add(Plugin $plugin): void
@@ -64,7 +78,12 @@ final class PluginRegistry
         try {
             $block();
         } catch (\Throwable $e) {
-            // never propagate plugin errors
+            if ($this->logger) {
+                $this->logger->log(LogLevel::ERROR, "Plugin error in " . get_class($plugin), [
+                    "error" => $e->getMessage(),
+                    "plugin" => get_class($plugin),
+                ]);
+            }
         }
     }
 }

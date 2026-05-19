@@ -5,6 +5,7 @@ require_once __DIR__ . '/../vendor/autoload.php';
 use Growthbook\ExperimentResult;
 use Growthbook\FeatureResult;
 use Growthbook\GrowthBookTrackingPlugin;
+use Growthbook\GrowthBookTrackingPluginConfig;
 use Growthbook\Growthbook;
 use Growthbook\InlineExperiment;
 use Growthbook\Plugin;
@@ -251,11 +252,10 @@ final class GrowthbookPluginIntegrationTest extends TestCase
 
 final class GrowthBookTrackingPluginTest extends TestCase
 {
-    private function makePlugin(int $batchSize = GrowthBookTrackingPlugin::DEFAULT_BATCH_SIZE): GrowthBookTrackingPlugin
+    private function makePlugin(int $batchSize = GrowthBookTrackingPluginConfig::DEFAULT_BATCH_SIZE): GrowthBookTrackingPlugin
     {
         return new GrowthBookTrackingPlugin(
-            GrowthBookTrackingPlugin::DEFAULT_INGESTOR_HOST,
-            $batchSize
+            new GrowthBookTrackingPluginConfig(batchSize: $batchSize)
         );
     }
 

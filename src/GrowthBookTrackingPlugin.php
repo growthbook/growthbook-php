@@ -13,19 +13,16 @@ use Psr\Http\Message\RequestFactoryInterface;
  * Default host: https://us1.gb-ingest.com
  * Body: [...events]  (plain JSON array)
  *
+ * Configure via GrowthBookTrackingPluginConfig.
  * Flush triggers:
- *   - batch reaches $batchSize events
+ *   - batch reaches config->batchSize events
  *   - close() is called (e.g. on object destruction or end of request)
  */
 class GrowthBookTrackingPlugin implements Plugin
 {
-    public const DEFAULT_INGESTOR_HOST = "https://us1.gb-ingest.com";
-    public const DEFAULT_BATCH_SIZE    = 100;
-
     private const PACKAGE_NAME = "growthbook/growthbook";
 
-    private string $ingestorHost;
-    private int $batchSize;
+    private GrowthBookTrackingPluginConfig $config;
     private string $clientKey = "";
     private bool $initialized = false;
     private bool $closed = false;
@@ -40,19 +37,16 @@ class GrowthBookTrackingPlugin implements Plugin
     private $sendHandler;
 
     /**
-     * @param string                        $ingestorHost
-     * @param int                           $batchSize
-     * @param ClientInterface|null          $httpClient      PSR-18 client; auto-discovered when null
-     * @param RequestFactoryInterface|null  $requestFactory  PSR-17 factory; auto-discovered when null
+     * @param GrowthBookTrackingPluginConfig|null $config         Plugin configuration; defaults used when null
+     * @param ClientInterface|null                $httpClient     PSR-18 client; auto-discovered when null
+     * @param RequestFactoryInterface|null        $requestFactory PSR-17 factory; auto-discovered when null
      */
     public function __construct(
-        string $ingestorHost = self::DEFAULT_INGESTOR_HOST,
-        int $batchSize = self::DEFAULT_BATCH_SIZE,
+        ?GrowthBookTrackingPluginConfig $config = null,
         ?ClientInterface $httpClient = null,
         ?RequestFactoryInterface $requestFactory = null
     ) {
-        $this->ingestorHost   = rtrim($ingestorHost, "/");
-        $this->batchSize      = max(1, $batchSize);
+        $this->config         = $config ?? new GrowthBookTrackingPluginConfig();
         $this->httpClient     = $httpClient;
         $this->requestFactory = $requestFactory;
         $this->sendHandler    = null;
@@ -162,7 +156,7 @@ class GrowthBookTrackingPlugin implements Plugin
     private function enqueue(array $event): void
     {
         $this->queue[] = $event;
-        if (count($this->queue) >= $this->batchSize) {
+        if (count($this->queue) >= $this->config->batchSize) {
             $this->flush();
         }
     }
@@ -188,7 +182,7 @@ class GrowthBookTrackingPlugin implements Plugin
             return;
         }
 
-        $url = $this->ingestorHost . '/track?client_key=' . rawurlencode($this->clientKey);
+        $url = $this->config->ingestorHost . '/track?client_key=' . rawurlencode($this->clientKey);
 
         // Test hook — bypasses real HTTP
         if ($this->sendHandler !== null) {

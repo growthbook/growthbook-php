@@ -255,7 +255,26 @@ $growthbook = new Growthbook([
 $trackingCallback = $growthbook->getTrackingCallback();
 ```
 
-Or track all events at the end of the request by looping through an array:
+### Tracking Feature Usage
+
+You can also track every time a feature is evaluated using `featureUsageCallback`. Unlike `trackingCallback`, this fires for all feature evaluations — not just experiments.
+
+```php
+$growthbook = Growthbook\Growthbook::create()
+  ->withFeatureUsageCallback(function (
+    string $featureKey,
+    Growthbook\FeatureResult $result
+  ) {
+    echo $featureKey . ': ' . json_encode($result->value) . ' (' . $result->source . ')';
+  });
+
+// Getter method
+$featureUsageCallback = $growthbook->getFeatureUsageCallback();
+```
+
+The callback is deduplicated — it will only fire again for the same feature if the value changes.
+
+Or track all experiment events at the end of the request by looping through an array:
 
 ```php
 $impressions = $growthbook->getViewedExperiments();

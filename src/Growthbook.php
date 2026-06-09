@@ -1046,7 +1046,7 @@ class Growthbook implements LoggerAwareInterface
             return;
         }
 
-        $value = json_encode($result->value);
+        $value = json_encode($result->value) ?: '';
         if (isset($this->trackedFeatures[$key]) && $this->trackedFeatures[$key] === $value) {
             return;
         }

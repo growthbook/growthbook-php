@@ -1141,4 +1141,47 @@ final class GrowthbookTest extends TestCase
 
         $this->assertEmpty($gb->getFeatures());
     }
+
+    public function testTrackingCallbackExceptionWithLogger(): void
+    {
+        $logCalls = [];
+        $logger = $this->createMock('Psr\Log\AbstractLogger');
+        $logger->method('log')->willReturnCallback(function ($level, $message, $context = []) use (&$logCalls) {
+            $logCalls[] = [$level, $message, $context];
+        });
+
+        $gb = Growthbook::create()
+            ->withLogger($logger)
+            ->withAttributes(['id' => 'user123'])
+            ->withTrackingCallback(function () {
+                throw new \Exception("Test exception");
+            });
+
+        $exp = new InlineExperiment("test-exp", [0, 1]);
+        $gb->runInlineExperiment($exp);
+
+        $foundErrorLog = false;
+        foreach ($logCalls as $call) {
+            if ($call[0] === 'error' && strpos($call[1], 'Error calling the trackingCallback function') !== false) {
+                $foundErrorLog = true;
+                break;
+            }
+        }
+        $this->assertTrue($foundErrorLog, 'Expected error log was not found');
+    }
+
+    public function testTrackingCallbackExceptionWithoutLogger(): void
+    {
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage("Test exception");
+
+        $gb = Growthbook::create()
+            ->withAttributes(['id' => 'user123'])
+            ->withTrackingCallback(function () {
+                throw new \Exception("Test exception");
+            });
+
+        $exp = new InlineExperiment("test-exp", [0, 1]);
+        $gb->runInlineExperiment($exp);
+    }
 }

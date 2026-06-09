@@ -35,6 +35,10 @@ class Growthbook implements LoggerAwareInterface
     public $qaMode = false;
     /** @var callable|null */
     private $trackingCallback = null;
+    /** @var callable|null */
+    private $featureUsageCallback = null;
+    /** @var array<string,string> */
+    private $trackedFeatures = [];
 
     /**
      * @var null|\Psr\SimpleCache\CacheInterface
@@ -532,6 +536,37 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
+     * @param callable|null $featureUsageCallback
+     * @return static
+     */
+    public function setFeatureUsageCallback($featureUsageCallback): static
+    {
+        $this->featureUsageCallback = $featureUsageCallback;
+
+        return $this;
+    }
+
+    /**
+     * @param callable|null $featureUsageCallback
+     * @return static
+     */
+    public function withFeatureUsageCallback($featureUsageCallback): static
+    {
+        $self = clone $this;
+        $self->setFeatureUsageCallback($featureUsageCallback);
+
+        return $self;
+    }
+
+    /**
+     * @return callable|null
+     */
+    public function getFeatureUsageCallback(): ?callable
+    {
+        return $this->featureUsageCallback;
+    }
+
+    /**
      * @return array<string,array<string,mixed>>
      */
     public function getSavedGroups(): array
@@ -620,7 +655,9 @@ class Growthbook implements LoggerAwareInterface
     {
         if (!array_key_exists($key, $this->features)) {
             $this->log(LogLevel::DEBUG, "Unknown feature - $key");
-            return new FeatureResult(null, "unknownFeature");
+            $result = new FeatureResult(null, "unknownFeature");
+            $this->fireFeatureUsageCallback($key, $result);
+            return $result;
         }
         $this->log(LogLevel::DEBUG, "Evaluating feature - $key");
         $feature = $this->features[$key];
@@ -629,7 +666,9 @@ class Growthbook implements LoggerAwareInterface
             $this->log(LogLevel::WARNING, "Cyclic prerequisite detected, stack", [
                 "stack" => $stack,
             ]);
-            return new FeatureResult(null, "cyclicPrerequisite");
+            $result = new FeatureResult(null, "cyclicPrerequisite");
+            $this->fireFeatureUsageCallback($key, $result);
+            return $result;
         }
         $stack[] = $key;
 
@@ -651,10 +690,14 @@ class Growthbook implements LoggerAwareInterface
                         $this->log(LogLevel::DEBUG, "Top-level prerequisite failed, return None, feature", [
                             "feature" => $key,
                         ]);
-                        return new FeatureResult(null, "prerequisite");
+                        $result = new FeatureResult(null, "prerequisite");
+                        $this->fireFeatureUsageCallback($key, $result);
+                        return $result;
                     }
                     if ($prereqRes === 'cyclic') {
-                        return new FeatureResult(null, "cyclicPrerequisite");
+                        $result = new FeatureResult(null, "cyclicPrerequisite");
+                        $this->fireFeatureUsageCallback($key, $result);
+                        return $result;
                     }
                     if ($prereqRes === 'fail') {
                         $this->log(LogLevel::DEBUG, "Skip rule because of failing prerequisite, feature", [
@@ -703,7 +746,9 @@ class Growthbook implements LoggerAwareInterface
                         "feature" => $key,
                         "value" => $rule->force
                     ]);
-                    return new FeatureResult($rule->force, "force", null, null, $rule->id);
+                    $result = new FeatureResult($rule->force, "force", null, null, $rule->id);
+                    $this->fireFeatureUsageCallback($key, $result);
+                    return $result;
                 }
                 $exp = $rule->toExperiment($key);
                 if (!$exp) {
@@ -730,10 +775,14 @@ class Growthbook implements LoggerAwareInterface
                     "feature" => $key,
                     "value" => $result->value
                 ]);
-                return new FeatureResult($result->value, "experiment", $exp, $result, $rule->id);
+                $featureResult = new FeatureResult($result->value, "experiment", $exp, $result, $rule->id);
+                $this->fireFeatureUsageCallback($key, $featureResult);
+                return $featureResult;
             }
         }
-        return new FeatureResult($feature->defaultValue ?? null, "defaultValue");
+        $result = new FeatureResult($feature->defaultValue ?? null, "defaultValue");
+        $this->fireFeatureUsageCallback($key, $result);
+        return $result;
     }
 
     /**
@@ -947,15 +996,23 @@ class Growthbook implements LoggerAwareInterface
         }
 
         // 14. Fire tracking callback
-        $this->tracks[$exp->key] = new ViewedExperiment($exp, $result);
+        $dedupeKey = $result->hashAttribute . $result->hashValue . $exp->key . $result->variationId;
+        if (isset($this->tracks[$dedupeKey])) {
+            return $result;
+        }
+        $this->tracks[$dedupeKey] = new ViewedExperiment($exp, $result);
         if ($this->trackingCallback) {
             try {
                 call_user_func($this->trackingCallback, $exp, $result);
             } catch (\Throwable $e) {
-                $this->log(LogLevel::ERROR, "Error calling the trackingCallback function", [
-                    "experiment" => $exp->key,
-                    "error" => $e
-                ]);
+                if ($this->logger) {
+                    $this->log(LogLevel::ERROR, "Error calling the trackingCallback function", [
+                        "experiment" => $exp->key,
+                        "error" => $e
+                    ]);
+                } else {
+                    throw $e;
+                }
             }
         }
 
@@ -976,6 +1033,36 @@ class Growthbook implements LoggerAwareInterface
     {
         if ($this->logger) {
             $this->logger->log($level, $message, $context);
+        }
+    }
+
+    /**
+     * @param string $key
+     * @param FeatureResult<mixed> $result
+     */
+    private function fireFeatureUsageCallback(string $key, FeatureResult $result): void
+    {
+        if (!$this->featureUsageCallback) {
+            return;
+        }
+
+        $value = json_encode($result->value);
+        if (isset($this->trackedFeatures[$key]) && $this->trackedFeatures[$key] === $value) {
+            return;
+        }
+        $this->trackedFeatures[$key] = $value;
+
+        try {
+            call_user_func($this->featureUsageCallback, $key, $result);
+        } catch (\Throwable $e) {
+            if ($this->logger) {
+                $this->log(LogLevel::ERROR, "Error calling the featureUsageCallback function", [
+                    "feature" => $key,
+                    "error" => $e
+                ]);
+            } else {
+                throw $e;
+            }
         }
     }
 

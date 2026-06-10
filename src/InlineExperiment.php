@@ -55,6 +55,11 @@ class InlineExperiment
     public $parentConditions;
 
     /**
+     * @var array<string,mixed>|null
+     */
+    public $customFields;
+
+    /**
      * @param string $key
      * @param T[] $variations
      * @return InlineExperiment<T>
@@ -67,7 +72,7 @@ class InlineExperiment
     /**
      * @param string $key
      * @param T[] $variations
-     * @param array{weights?: float[], coverage?: float, force?: int|null, active?: bool, condition?: array<string, mixed>, namespace?: array{0: string, 1: float, 2: float}, hashAttribute?: string, fallbackAttribute?: string, filters?: array{seed: string, ranges: array{0: float, 1: float}[], hashVersion?: int, attribute?: string}[], seed?: string, hashVersion?: int, meta?: array{key?: string, name?: string, passthrough?: bool}[], ranges?: array{0: float, 1: float}[], name?: string, phase?: string, disableStickyBucketing?: bool, bucketVersion?: int, minBucketVersion?: int} $options
+     * @param array{weights?: float[], coverage?: float, force?: int|null, active?: bool, condition?: array<string, mixed>, namespace?: array{0: string, 1: float, 2: float}, hashAttribute?: string, fallbackAttribute?: string, filters?: array{seed: string, ranges: array{0: float, 1: float}[], hashVersion?: int, attribute?: string}[], seed?: string, hashVersion?: int, meta?: array{key?: string, name?: string, passthrough?: bool}[], ranges?: array{0: float, 1: float}[], name?: string, phase?: string, disableStickyBucketing?: bool, bucketVersion?: int, minBucketVersion?: int, customFields?: array<string, mixed>} $options
      */
     public function __construct(string $key, $variations, array $options = [])
     {
@@ -91,6 +96,7 @@ class InlineExperiment
         $this->bucketVersion = $options["bucketVersion"] ?? null;
         $this->minBucketVersion = $options["minBucketVersion"] ?? null;
         $this->parentConditions = $options["parentConditions"] ?? null;
+        $this->customFields = $options["customFields"] ?? null;
         $this->fallbackAttribute = null;
         if (!is_null($this->disableStickyBucketing)) {
             $this->fallbackAttribute = $options["fallbackAttribute"] ?? null;

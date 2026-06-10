@@ -1256,4 +1256,46 @@ final class GrowthbookTest extends TestCase
             '$regexi - invalid pattern' => ['$regexi', 'Hello', '[', false],
         ];
     }
+
+    public function testInlineExperimentCustomFields(): void
+    {
+        $customFields = ['badge' => 'new', 'priority' => 1];
+
+        $exp = new InlineExperiment('my-test', [0, 1], ['customFields' => $customFields]);
+
+        $this->assertSame($customFields, $exp->customFields);
+    }
+
+    public function testInlineExperimentCustomFieldsDefaultNull(): void
+    {
+        $exp = new InlineExperiment('my-test', [0, 1]);
+
+        $this->assertNull($exp->customFields);
+    }
+
+    public function testFeatureRuleCustomFieldsPassedToExperiment(): void
+    {
+        $customFields = ['color' => 'blue', 'weight' => 2.5];
+
+        /** @phpstan-ignore-next-line */
+        $rule = new \Growthbook\FeatureRule(['variations' => [false, true], 'customFields' => $customFields]);
+
+        $exp = $rule->toExperiment('test-feature');
+
+        $this->assertNotNull($exp);
+        assert($exp !== null);
+        $this->assertSame($customFields, $exp->customFields);
+    }
+
+    public function testFeatureRuleWithoutCustomFieldsProducesNullOnExperiment(): void
+    {
+        /** @phpstan-ignore-next-line */
+        $rule = new \Growthbook\FeatureRule(['variations' => [false, true]]);
+
+        $exp = $rule->toExperiment('test-feature');
+
+        $this->assertNotNull($exp);
+        assert($exp !== null);
+        $this->assertNull($exp->customFields);
+    }
 }

@@ -91,6 +91,12 @@ $growthbook = Growthbook\Growthbook::create()
   ->withCache($cache, 120); // Cache for 120s instead
 ```
 
+#### Cache Resilience
+
+If the GrowthBook API is unavailable and an expired cache exists, the SDK will automatically use the stale cached data as a fallback instead of failing. This means a brief API outage will not affect your users — features continue to work from the last known state.
+
+The cached data is stored with a hard TTL of 10× the configured TTL, so stale data remains available as a fallback for that duration.
+
 To load features, we require a PSR-17 (HttpClient) and PSR-18 (RequestFactoryInterface) compatible library like Guzzle to be installed.
 
 We will auto-discover most HTTP libraries without any configuration required, but if you prefer to specify it explicitly, you can use the `withHttpClient` method. Note - you'll need to specify both an `HttpClient` and a `RequestFactoryInterface` implementation.

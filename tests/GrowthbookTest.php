@@ -1097,7 +1097,7 @@ final class GrowthbookTest extends TestCase
         $timeout = $ref->getProperty('apiTimeout');
         $timeout->setAccessible(true);
 
-        $this->assertEquals(2, $timeout->getValue($gb1)); 
+        $this->assertEquals(2, $timeout->getValue($gb1));
         $this->assertEquals(10, $timeout->getValue($gb2));
     }
 
@@ -1120,7 +1120,7 @@ final class GrowthbookTest extends TestCase
 
     public function testInitializeHandlesTimeoutGracefully(): void
     {
-        $exception = new class ('Connection timed out') extends \RuntimeException implements \Psr\Http\Client\ClientExceptionInterface {};
+        $exception = new class('Connection timed out') extends \RuntimeException implements \Psr\Http\Client\ClientExceptionInterface {};
 
         $mockRequest = $this->createMock(\Psr\Http\Message\RequestInterface::class);
 
@@ -1140,6 +1140,50 @@ final class GrowthbookTest extends TestCase
         $gb->initialize('sdk-abc123');
 
         $this->assertEmpty($gb->getFeatures());
+    }
+
+    public function testInitializeUsesStaleCacheWhenNoHttpClient(): void
+    {
+        $staleData = json_encode([
+            'features' => ['my-feature' => ['defaultValue' => true]],
+            'savedGroups' => [],
+            'expiresAt' => time() - 100,
+        ]);
+
+        $cache = $this->createMock(\Psr\SimpleCache\CacheInterface::class);
+        $cache->method('get')->willReturn($staleData);
+
+        $gb = Growthbook::create()->withCache($cache);
+        $gb->initialize('sdk-abc123');
+
+        $this->assertTrue($gb->isOn('my-feature'));
+    }
+
+    public function testInitializeUsesStaleCacheWhenApiFails(): void
+    {
+        $staleData = json_encode([
+            'features' => ['my-feature' => ['defaultValue' => true]],
+            'savedGroups' => [],
+            'expiresAt' => time() - 100
+        ]);
+
+        $cache = $this->createMock(\Psr\SimpleCache\CacheInterface::class);
+        $cache->method('get')->willReturn($staleData);
+
+        $exception = new class('timeout') extends \RuntimeException implements \Psr\Http\Client\ClientExceptionInterface {};
+        $mockClient = $this->createMock(\Psr\Http\Client\ClientInterface::class);
+        $mockClient->method('sendRequest')->willThrowException($exception);
+        $mockFactory = $this->createMock(\Psr\Http\Message\RequestFactoryInterface::class);
+        $mockFactory->method('createRequest')->willReturn($this->createMock(\Psr\Http\Message\RequestInterface::class));
+
+        $gb = new Growthbook([
+            'httpClient' => $mockClient,
+            'requestFactory' => $mockFactory,
+        ]);
+        $gb->setCache($cache);
+        $gb->initialize('sdk-abc123');
+
+        $this->assertTrue($gb->isOn('my-feature'));
     }
 
     public function testTrackingCallbackExceptionWithLogger(): void

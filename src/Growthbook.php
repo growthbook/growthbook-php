@@ -1333,34 +1333,48 @@ class Growthbook implements LoggerAwareInterface
         if (!$this->clientKey) {
             throw new Exception("Must specify a clientKey before initializing.");
         }
-        if (!$this->httpClient) {
-            throw new Exception("Must set an HTTP Client before initializing.");
-        }
-        if (!$this->requestFactory) {
-            throw new Exception("Must set an HTTP Request Factory before initializing");
-        }
 
         $url = rtrim(empty($this->apiHost) ? self::DEFAULT_API_HOST : $this->apiHost, "/") . "/api/features/" . $this->clientKey;
         // Update when the cache format changes to prevent issues when updating the library version
         $cacheKey = md5($url . 'v2');
 
         // First try fetching from cache
+        $cachedData = null;
         if ($this->cache) {
             $cachedResponse = $this->cache->get($cacheKey);
             if ($cachedResponse) {
-                $cachedData = json_decode($cachedResponse, true);
-                if (is_array($cachedData)) {
-                    if (array_key_exists("features", $cachedData) && is_array($cachedData['features'])) {
-                        $this->log(LogLevel::INFO, "Load features from cache", ["url" => $url, "numFeatures" => count($cachedData['features'])]);
-                        $this->setFeatures($cachedData['features']);
+                $decoded = json_decode($cachedResponse, true);
+                if (is_array($decoded)) {
+                    $isFresh = isset($decoded['expiresAt']) && $decoded['expiresAt'] > time();
+                    if ($isFresh) {
+                        if (array_key_exists("features", $decoded) && is_array($decoded['features'])) {
+                            $this->log(LogLevel::INFO, "Load features from cache", ["url" => $url, "numFeatures" => count($decoded['features'])]);
+                            $this->setFeatures($decoded['features']);
+                        }
+                        if (array_key_exists("savedGroups", $decoded) && is_array($decoded['savedGroups'])) {
+                            $this->log(LogLevel::INFO, "Load saved groups from cache", ["url" => $url, "numGroups" => count($decoded['savedGroups'])]);
+                            $this->setSavedGroups($decoded['savedGroups']);
+                        }
+                        return;
                     }
-                    if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
-                        $this->log(LogLevel::INFO, "Load saved groups from cache", ["url" => $url, "numGroups" => count($cachedData['savedGroups'])]);
-                        $this->setSavedGroups($cachedData['savedGroups']);
-                    }
-                    return;
+                    $cachedData = $decoded;
                 }
             }
+        }
+
+        if (!$this->httpClient || !$this->requestFactory) {
+            if ($cachedData !== null) {
+                $this->log(LogLevel::WARNING, "HTTP client not set, using stale cache as fallback", ["url" => $url]);
+                if (array_key_exists("features", $cachedData) && is_array($cachedData['features'])) {
+                    $this->setFeatures($cachedData['features']);
+                }
+                if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
+                    $this->setSavedGroups($cachedData['savedGroups']);
+                }
+            } else {
+                $this->log(LogLevel::WARNING, "HTTP client or request factory not set, unable to load features from API");
+            }
+            return;
         }
 
         try {
@@ -1393,9 +1407,10 @@ class Growthbook implements LoggerAwareInterface
             if ($this->cache) {
                 $cacheData = [
                     'features' => $features,
-                    'savedGroups' => $savedGroups
+                    'savedGroups' => $savedGroups,
+                    'expiresAt' => time() + $this->cacheTTL
                 ];
-                $this->cache->set($cacheKey, json_encode($cacheData), $this->cacheTTL);
+                $this->cache->set($cacheKey, json_encode($cacheData), $this->cacheTTL * 10);
                 $this->log(LogLevel::INFO, "Cache features and saved groups", [
                     "url" => $url,
                     "numFeatures" => count($features),
@@ -1409,6 +1424,15 @@ class Growthbook implements LoggerAwareInterface
                 "error" => $e->getMessage(),
                 "errorClass" => get_class($e)
             ]);
+            if ($cachedData !== null) {
+                $this->log(LogLevel::WARNING, "Using stale cache as fallback", ["url" => $url]);
+                if (array_key_exists("features", $cachedData) && is_array($cachedData['features'])) {
+                    $this->setFeatures($cachedData['features']);
+                }
+                if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
+                    $this->setSavedGroups($cachedData['savedGroups']);
+                }
+            }
         }
     }
 

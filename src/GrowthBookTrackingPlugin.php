@@ -67,10 +67,6 @@ class GrowthBookTrackingPlugin implements Plugin
         $this->close();
     }
 
-    // -------------------------------------------------------------------------
-    // Plugin interface
-    // -------------------------------------------------------------------------
-
     public function initialize(string $clientKey): void
     {
         if (empty($clientKey)) {
@@ -151,10 +147,6 @@ class GrowthBookTrackingPlugin implements Plugin
         $this->closed = true;
         $this->flush();
     }
-
-    // -------------------------------------------------------------------------
-    // Internal
-    // -------------------------------------------------------------------------
 
     /**
      * @param array<string, mixed> $event

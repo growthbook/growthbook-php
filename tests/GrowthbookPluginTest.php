@@ -11,10 +11,6 @@ use Growthbook\InlineExperiment;
 use Growthbook\Plugin;
 use PHPUnit\Framework\TestCase;
 
-// ---------------------------------------------------------------------------
-// MockPlugin — records all plugin calls for assertions
-// ---------------------------------------------------------------------------
-
 final class MockPlugin implements Plugin
 {
     public ?string $initializedWith = null;
@@ -59,10 +55,6 @@ final class MockPlugin implements Plugin
     }
 }
 
-// ---------------------------------------------------------------------------
-// Plugin integration tests
-// ---------------------------------------------------------------------------
-
 final class GrowthbookPluginIntegrationTest extends TestCase
 {
     private function makeGrowthbook(MockPlugin ...$plugins): Growthbook
@@ -73,8 +65,6 @@ final class GrowthbookPluginIntegrationTest extends TestCase
         }
         return $gb;
     }
-
-    // ---- Lifecycle ----
 
     public function testPluginReceivesInitialize(): void
     {
@@ -102,8 +92,6 @@ final class GrowthbookPluginIntegrationTest extends TestCase
         $this->assertTrue($plugin->closeCalled);
     }
 
-    // ---- Experiment events ----
-
     public function testPluginReceivesOnExperimentViewed(): void
     {
         $plugin = new MockPlugin();
@@ -127,8 +115,6 @@ final class GrowthbookPluginIntegrationTest extends TestCase
 
         $this->assertSame(0, $plugin->experimentCallCount);
     }
-
-    // ---- Feature events ----
 
     public function testPluginReceivesOnFeatureEvaluated(): void
     {
@@ -195,8 +181,6 @@ final class GrowthbookPluginIntegrationTest extends TestCase
         $this->assertSame(2, $plugin->featureCallCount);
     }
 
-    // ---- Multiple plugins ----
-
     public function testMultiplePluginsAllReceiveEvents(): void
     {
         $p1 = new MockPlugin();
@@ -246,10 +230,6 @@ final class GrowthbookPluginIntegrationTest extends TestCase
     }
 }
 
-// ---------------------------------------------------------------------------
-// GrowthBookTrackingPlugin unit tests
-// ---------------------------------------------------------------------------
-
 final class GrowthBookTrackingPluginTest extends TestCase
 {
     private function makePlugin(int $batchSize = GrowthBookTrackingPluginConfig::DEFAULT_BATCH_SIZE): GrowthBookTrackingPlugin
@@ -280,8 +260,6 @@ final class GrowthBookTrackingPluginTest extends TestCase
         return new FeatureResult(true, 'defaultValue');
     }
 
-    // ---- No-op without clientKey ----
-
     public function testNoOpWithEmptyClientKey(): void
     {
         $calls = [];
@@ -295,8 +273,6 @@ final class GrowthBookTrackingPluginTest extends TestCase
 
         $this->assertCount(0, $calls);
     }
-
-    // ---- Batch size flush ----
 
     public function testFlushWhenBatchSizeReached(): void
     {
@@ -332,8 +308,6 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $this->assertCount(0, $calls);
         $plugin->close();
     }
-
-    // ---- close() synchronous flush ----
 
     public function testCloseFlushesSynchronously(): void
     {

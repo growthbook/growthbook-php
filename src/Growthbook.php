@@ -1412,6 +1412,7 @@ class Growthbook implements LoggerAwareInterface
             } else {
                 $this->log(LogLevel::WARNING, "HTTP client or request factory not set, unable to load features from API");
             }
+            $this->initializePlugins();
             return;
         }
 

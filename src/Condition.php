@@ -153,21 +153,39 @@ class Condition
      */
     private static function evalConditionValue($conditionValue, $attributeValue, array $savedGroups, bool $insensitive = false): bool
     {
+        if ($conditionValue === null) {
+            return $attributeValue === null;
+        }
         // Simple equality comparison with optional case-insensitivity
         if ($insensitive && is_string($conditionValue) && is_string($attributeValue)) {
             return strcasecmp($conditionValue, $attributeValue) === 0;
         }
 
-        if (is_array($conditionValue) && static::isOperatorObject($conditionValue)) {
-            foreach ($conditionValue as $key => $value) {
-                if (!static::evalOperatorCondition($key, $attributeValue, $value, $savedGroups)) {
-                    return false;
-                }
-            }
-            return true;
-        }
+        $type = static::getType($conditionValue);
 
-        return json_encode($attributeValue) === json_encode($conditionValue);
+        switch ($type) {
+            case 'string':
+            case 'number':
+            case 'boolean':
+                return static::isMatchingPrimitive($conditionValue, $attributeValue);
+            case 'array':
+                return is_array($attributeValue) && static::toJson($conditionValue) === static::toJson($attributeValue);
+            case 'object':
+                if (static::isOperatorObject($conditionValue)) {
+                    foreach ($conditionValue as $key => $value) {
+                        if (!static::evalOperatorCondition($key, $attributeValue, $value, $savedGroups)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+                return is_array($attributeValue) && static::toJson($conditionValue) === static::toJson($attributeValue);
+
+            case 'null':
+                return $attributeValue === null;
+            default:
+                return strval($conditionValue) === strval($attributeValue);
+        }
     }
 
     /**
@@ -432,5 +450,32 @@ class Condition
     {
         $modifiers = $caseInsensitive ? 'i' : '';
         return @preg_match('/' . $pattern . '/' . $modifiers, $value ?? '');
+    }
+
+    /**
+     * @param mixed $conditionValue
+     * @param mixed $attributeValue
+     * @return bool
+     */
+    private static function isMatchingPrimitive($conditionValue, $attributeValue): bool
+    {
+        if ($attributeValue === null) {
+            return false;
+        }
+
+        if (gettype($conditionValue) !== gettype($attributeValue)) {
+            return false;
+        }
+
+        return $conditionValue === $attributeValue;
+    }
+
+    /**
+     * @param mixed $value
+     * @return string
+     */
+    private static function toJson($value): string
+    {
+        return json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: 'null';
     }
 }

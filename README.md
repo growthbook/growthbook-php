@@ -138,6 +138,21 @@ $growthbook = Growthbook\Growthbook::create()
 
 > **Note:** If Guzzle is not installed, the SDK will use a discovered PSR-18 client which may not have timeout guarantees. A warning will be logged in this case.
 
+#### ETag Caching
+
+The SDK automatically uses ETag-based conditional requests (HTTP Conditional GET) to reduce bandwidth. When the GrowthBook API returns an `ETag` header, the SDK stores it and sends `If-None-Match` on subsequent requests. A `304 Not Modified` response reuses the existing cached data without re-downloading the full payload.
+
+This works automatically alongside the existing PSR cache — no extra configuration needed.
+
+You can optionally configure the in-memory ETag cache size (default: 100 entries):
+
+```php
+$growthbook = new Growthbook\Growthbook([
+  'cache' => $cache,
+  'etagCacheSize' => 50,
+]);
+```
+
 The `initialize` method takes 3 arguments:
 
 - `$clientKey` (required) - Get this from your SDK Connection in GrowthBook.

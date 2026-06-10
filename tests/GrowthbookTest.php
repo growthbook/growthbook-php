@@ -1228,4 +1228,32 @@ final class GrowthbookTest extends TestCase
         $exp = new InlineExperiment("test-exp", [0, 1]);
         $gb->runInlineExperiment($exp);
     }
+
+    /**
+     * @dataProvider regexOperatorProvider
+     * @param string $operator
+     * @param string $attributeValue
+     * @param string $pattern
+     * @param bool $expected
+     */
+    public function testRegexOperators(string $operator, string $attributeValue, string $pattern, bool $expected): void
+    {
+        $condition = ["name" => [$operator => $pattern]];
+        $this->assertSame($expected, Condition::evalCondition(["name" => $attributeValue], $condition, []));
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function regexOperatorProvider(): array
+    {
+        return [
+            '$regex - match' => ['$regex', 'hello', 'ell', true],
+            '$regex - no match' => ['$regex', 'hello', 'xyz', false],
+            '$regex - invalid pattern' => ['$regex', 'hello', '[', false],
+            '$regexi - match different case' => ['$regexi', 'Hello', 'ell', true],
+            '$regexi - no match' => ['$regexi', 'Hello', 'xyz', false],
+            '$regexi - invalid pattern' => ['$regexi', 'Hello', '[', false],
+        ];
+    }
 }

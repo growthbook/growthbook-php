@@ -151,8 +151,13 @@ class Condition
      * @param array<string,mixed> $savedGroups
      * @return bool
      */
-    private static function evalConditionValue($conditionValue, $attributeValue, array $savedGroups): bool
+    private static function evalConditionValue($conditionValue, $attributeValue, array $savedGroups, bool $insensitive = false): bool
     {
+        // Simple equality comparison with optional case-insensitivity
+        if ($insensitive && is_string($conditionValue) && is_string($attributeValue)) {
+            return strcasecmp($conditionValue, $attributeValue) === 0;
+        }
+
         if (is_array($conditionValue) && static::isOperatorObject($conditionValue)) {
             foreach ($conditionValue as $key => $value) {
                 if (!static::evalOperatorCondition($key, $attributeValue, $value, $savedGroups)) {
@@ -205,7 +210,7 @@ class Condition
             if ($val2 === null) {
                 $val2 = 0;
             } else {
-                $val2 = (float)$val2;
+                $val2 = (float) $val2;
             }
         }
 
@@ -213,7 +218,7 @@ class Condition
             if ($val1 === null) {
                 $val1 = 0;
             } else {
-                $val1 = (float)$val1;
+                $val1 = (float) $val1;
             }
         }
 
@@ -261,23 +266,29 @@ class Condition
             case '$vlte':
                 return static::parseVersionString($attributeValue) <= static::parseVersionString($conditionValue);
             case '$regex':
-                return @preg_match('/' . $conditionValue . '/', $attributeValue ?? '') === 1;
+                return static::regexMatch($conditionValue, $attributeValue) === 1;
+            case '$regexi':
+                return static::regexMatch($conditionValue, $attributeValue, true) === 1;
             case '$in':
                 if (!is_array($conditionValue)) {
                     return false;
                 }
-                if (!is_array($attributeValue)) {
-                    $attributeValue = [$attributeValue];
+                return static::isIn($attributeValue, $conditionValue, false);
+            case '$ini':
+                if (!is_array($conditionValue)) {
+                    return false;
                 }
-                return array_intersect($attributeValue, $conditionValue) !== [];
+                return static::isIn($attributeValue, $conditionValue, true);
             case '$nin':
                 if (!is_array($conditionValue)) {
                     return false;
                 }
-                if (!is_array($attributeValue)) {
-                    $attributeValue = [$attributeValue];
+                return !static::isIn($attributeValue, $conditionValue, false);
+            case '$nini':
+                if (!is_array($conditionValue)) {
+                    return false;
                 }
-                return array_intersect($attributeValue, $conditionValue) === [];
+                return !static::isIn($attributeValue, $conditionValue, true);
             case '$inGroup':
                 if (!array_key_exists($conditionValue, $savedGroups)) {
                     return false;
@@ -309,19 +320,12 @@ class Condition
                 if (!is_array($attributeValue) || !is_array($conditionValue)) {
                     return false;
                 }
-                foreach ($conditionValue as $a) {
-                    $pass = false;
-                    foreach ($attributeValue as $b) {
-                        if (static::evalConditionValue($a, $b, $savedGroups)) {
-                            $pass = true;
-                            break;
-                        }
-                    }
-                    if (!$pass) {
-                        return false;
-                    }
+                return static::isInAll($attributeValue, $conditionValue, $savedGroups, false);
+            case '$alli':
+                if (!is_array($attributeValue) || !is_array($conditionValue)) {
+                    return false;
                 }
-                return true;
+                return static::isInAll($attributeValue, $conditionValue, $savedGroups, true);
             case '$exists':
                 if (!$conditionValue) {
                     return $attributeValue === null;
@@ -361,5 +365,72 @@ class Condition
         }, $parts);
 
         return implode('-', $parts);
+    }
+
+    /**
+     * @param mixed $attributeValue
+     * @param array<mixed> $conditionValue
+     * @param bool $insensitive
+     * @return bool
+     */
+    private static function isIn($attributeValue, array $conditionValue, bool $insensitive = false): bool
+    {
+        if (!is_array($attributeValue)) {
+            $attributeValue = [$attributeValue];
+        }
+
+        foreach ($attributeValue as $actual) {
+            foreach ($conditionValue as $expected) {
+                if ($insensitive && is_string($actual) && is_string($expected)) {
+                    if (strcasecmp($actual, $expected) === 0) {
+                        return true;
+                    }
+                } elseif ($actual === $expected) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @param array<mixed> $attributeValue
+     * @param array<mixed> $conditionValue
+     * @param array<string,mixed> $savedGroups
+     * @param bool $insensitive
+     * @return bool
+     */
+    private static function isInAll($attributeValue, $conditionValue, $savedGroups, bool $insensitive = false): bool
+    {
+        foreach ($conditionValue as $a) {
+            $pass = false;
+            foreach ($attributeValue as $b) {
+                if (static::evalConditionValue($a, $b, $savedGroups, $insensitive)) {
+                    $pass = true;
+                    break;
+                }
+            }
+            if (!$pass) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Runs preg_match for a condition regex pattern against an attribute value.
+     * Returns 1 (match), 0 (no match) or false (invalid/incomparable pattern),
+     * mirroring preg_match's own return values so callers can distinguish a
+     * real "no match" from an unmatchable pattern.
+     *
+     * @param mixed $pattern
+     * @param mixed $value
+     * @param bool $caseInsensitive
+     * @return int|false
+     */
+    private static function regexMatch($pattern, $value, bool $caseInsensitive = false)
+    {
+        $modifiers = $caseInsensitive ? 'i' : '';
+        return @preg_match('/' . $pattern . '/' . $modifiers, $value ?? '');
     }
 }

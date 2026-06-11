@@ -133,7 +133,7 @@ class GrowthBookTrackingPlugin implements Plugin
     {
         try {
             return \Composer\InstalledVersions::getPrettyVersion(self::PACKAGE_NAME) ?? 'unknown';
-        } catch (\Throwable $e) {
+        } catch (\Throwable) {
             return 'unknown';
         }
     }

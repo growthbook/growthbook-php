@@ -1546,4 +1546,92 @@ final class GrowthbookTest extends TestCase
         assert($exp !== null);
         $this->assertNull($exp->customFields);
     }
+
+    public function testBucketRangeSerializesAsTwoElementArray(): void
+    {
+        $ranges = Growthbook::getBucketRanges(2, 1.0);
+
+        $encoded = json_encode($ranges);
+        assert(is_string($encoded));
+        $decoded = json_decode($encoded, true);
+
+        $this->assertCount(2, $decoded);
+        foreach ($decoded as $range) {
+            $this->assertCount(2, $range, 'BucketRange must serialize as [start, end] — exactly 2 elements, not 3 like Namespace');
+            $this->assertIsNumeric($range[0]);
+            $this->assertIsNumeric($range[1]);
+        }
+    }
+
+    public function testBucketRangeRoundTripSerialization(): void
+    {
+        $original = Growthbook::getBucketRanges(3, 0.9, [0.3, 0.3, 0.4]);
+
+        $encoded = json_encode($original);
+        assert(is_string($encoded));
+        $decoded = json_decode($encoded, true);
+
+        $this->assertCount(count($original), $decoded);
+        foreach ($original as $i => $range) {
+            $this->assertCount(2, $decoded[$i]);
+            $this->assertEqualsWithDelta($range[0], $decoded[$i][0], 0.0001);
+            $this->assertEqualsWithDelta($range[1], $decoded[$i][1], 0.0001);
+        }
+    }
+
+    public function testDeserializedBucketRangesWorkWithChooseVariation(): void
+    {
+        $original = Growthbook::getBucketRanges(2, 1.0);
+
+        $encoded = json_encode($original);
+        assert(is_string($encoded));
+        $decoded = json_decode($encoded, true);
+
+        $this->assertSame(0, Growthbook::chooseVariation(0.1, $decoded));
+        $this->assertSame(1, Growthbook::chooseVariation(0.6, $decoded));
+    }
+
+    public function testFeatureWithBucketRangesSerializesCorrectly(): void
+    {
+        $feature = [
+            'defaultValue' => false,
+            'rules' => [
+                [
+                    'variations' => [false, true],
+                    'ranges' => [[0.0, 0.5], [0.5, 1.0]],
+                ]
+            ]
+        ];
+
+        $encoded = json_encode($feature);
+        assert(is_string($encoded));
+        $decoded = json_decode($encoded, true);
+
+        $ranges = $decoded['rules'][0]['ranges'];
+        $this->assertCount(2, $ranges);
+        $this->assertCount(2, $ranges[0], 'BucketRange in feature must serialize as [start, end]');
+        $this->assertCount(2, $ranges[1], 'BucketRange in feature must serialize as [start, end]');
+        $this->assertEqualsWithDelta(0.0, $ranges[0][0], 0.0001);
+        $this->assertEqualsWithDelta(0.5, $ranges[0][1], 0.0001);
+        $this->assertEqualsWithDelta(0.5, $ranges[1][0], 0.0001);
+        $this->assertEqualsWithDelta(1.0, $ranges[1][1], 0.0001);
+    }
+
+    public function testFeatureRuleRangesRoundTripSerialization(): void
+    {
+        /** @phpstan-ignore-next-line */
+        $rule = new \Growthbook\FeatureRule([
+            'variations' => [false, true],
+            'ranges' => [[0.0, 0.5], [0.5, 1.0]],
+        ]);
+
+        $encoded = json_encode(['ranges' => $rule->ranges]);
+        assert(is_string($encoded));
+        $decoded = json_decode($encoded, true);
+
+        $this->assertCount(2, $decoded['ranges']);
+        foreach ($decoded['ranges'] as $range) {
+            $this->assertCount(2, $range, 'FeatureRule ranges must round-trip as [start, end] arrays');
+        }
+    }
 }

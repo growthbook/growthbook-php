@@ -86,6 +86,9 @@ class Growthbook implements LoggerAwareInterface
     /** @var int */
     private $apiConnectTimeout = self::DEFAULT_API_TIMEOUT;
 
+    /** @var PluginRegistry */
+    private $pluginRegistry;
+
     /**
      * @param array<string, mixed> $options
      * @return static
@@ -98,7 +101,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[]} $options
      */
     public function __construct(array $options = [])
     {
@@ -122,7 +125,8 @@ class Growthbook implements LoggerAwareInterface
             "savedGroups",
             "encryptedSavedGroups",
             "apiTimeout",
-            "apiConnectTimeout"
+            "apiConnectTimeout",
+            "plugins"
         ];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
@@ -131,6 +135,7 @@ class Growthbook implements LoggerAwareInterface
 
         $this->enabled = $options["enabled"] ?? true;
         $this->logger = $options["logger"] ?? null;
+        $this->pluginRegistry = new PluginRegistry([], $this->logger);
         $this->url = $options["url"] ?? $_SERVER['REQUEST_URI'] ?? "";
         $this->forcedVariations = $options["forcedVariations"] ?? [];
         $this->qaMode = $options["qaMode"] ?? false;
@@ -165,6 +170,16 @@ class Growthbook implements LoggerAwareInterface
         if (array_key_exists("savedGroups", $options)) {
             $this->setSavedGroups(($options["savedGroups"]));
         }
+        if (array_key_exists("plugins", $options)) {
+            foreach ($options["plugins"] as $plugin) {
+                $this->addPlugin($plugin);
+            }
+        }
+    }
+
+    public function __destruct()
+    {
+        $this->pluginRegistry->close();
     }
 
     /**
@@ -340,6 +355,7 @@ class Growthbook implements LoggerAwareInterface
     public function setLogger(?LoggerInterface $logger = null): void
     {
         $this->logger = $logger;
+        $this->pluginRegistry->setLogger($logger);
     }
 
     /**
@@ -459,6 +475,12 @@ class Growthbook implements LoggerAwareInterface
         $self->setCache($cache, $ttl);
 
         return $self;
+    }
+
+    public function addPlugin(Plugin $plugin): static
+    {
+        $this->pluginRegistry->add($plugin);
+        return $this;
     }
 
     /**
@@ -616,7 +638,7 @@ class Growthbook implements LoggerAwareInterface
 
         foreach ($parentConditions as $parentCondition) {
             $conditionId = $parentCondition['id'] ?? null;
-            $parentRes = $this->getFeature($conditionId, $stack);
+            $parentRes = $this->evaluateFeature($conditionId, $stack);
 
             if ($parentRes->source === "cyclicPrerequisite") {
                 return "cyclic";
@@ -652,6 +674,20 @@ class Growthbook implements LoggerAwareInterface
      * @return FeatureResult<T>|FeatureResult<null>
      */
     public function getFeature(string $key, array $stack = []): FeatureResult
+    {
+        $result = $this->evaluateFeature($key, $stack);
+        if (empty($stack)) {
+            $this->pluginRegistry->onFeatureEvaluated($key, $result, $this->attributes);
+        }
+        return $result;
+    }
+
+    /**
+     * @param string        $key
+     * @param array<string> $stack
+     * @return FeatureResult<mixed>
+     */
+    private function evaluateFeature(string $key, array $stack): FeatureResult
     {
         if (!array_key_exists($key, $this->features)) {
             $this->log(LogLevel::DEBUG, "Unknown feature - $key");
@@ -1015,6 +1051,7 @@ class Growthbook implements LoggerAwareInterface
                 }
             }
         }
+        $this->pluginRegistry->onExperimentViewed($exp, $result, $this->attributes);
 
         // 15. Return the result
         $this->log(LogLevel::DEBUG, "Assigned user a variation", [
@@ -1355,6 +1392,7 @@ class Growthbook implements LoggerAwareInterface
                             $this->log(LogLevel::INFO, "Load saved groups from cache", ["url" => $url, "numGroups" => count($decoded['savedGroups'])]);
                             $this->setSavedGroups($decoded['savedGroups']);
                         }
+                        $this->initializePlugins();
                         return;
                     }
                     $cachedData = $decoded;
@@ -1374,6 +1412,7 @@ class Growthbook implements LoggerAwareInterface
             } else {
                 $this->log(LogLevel::WARNING, "HTTP client or request factory not set, unable to load features from API");
             }
+            $this->initializePlugins();
             return;
         }
 
@@ -1434,6 +1473,13 @@ class Growthbook implements LoggerAwareInterface
                 }
             }
         }
+
+        $this->initializePlugins();
+    }
+
+    private function initializePlugins(): void
+    {
+        $this->pluginRegistry->initialize($this->clientKey);
     }
 
     /**

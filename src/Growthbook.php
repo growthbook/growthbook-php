@@ -1424,6 +1424,7 @@ class Growthbook implements LoggerAwareInterface
         try {
             // Fetch from API, with conditional GET if we have a cached ETag
             $req = $this->requestFactory->createRequest('GET', $url);
+            $req = $req->withHeader('User-Agent', 'growthbook-php/' . $this->sdkVersion());
 
             $cachedETag = $this->etagCache->get($url);
             if ($cachedETag !== null && $cachedData !== null) {
@@ -1516,6 +1517,15 @@ class Growthbook implements LoggerAwareInterface
     private function initializePlugins(): void
     {
         $this->pluginRegistry->initialize($this->clientKey);
+    }
+
+    private static function sdkVersion(): string
+    {
+        try {
+            return \Composer\InstalledVersions::getPrettyVersion('growthbook/growthbook') ?? 'unknown';
+        } catch (\Throwable) {
+            return 'unknown';
+        }
     }
 
     /**

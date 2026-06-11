@@ -1425,10 +1425,12 @@ class Growthbook implements LoggerAwareInterface
             // Fetch from API, with conditional GET if we have a cached ETag
             $req = $this->requestFactory->createRequest('GET', $url);
             $req = $req->withHeader('User-Agent', 'growthbook-php/' . $this->sdkVersion());
+            \assert($req instanceof \Psr\Http\Message\RequestInterface);
 
             $cachedETag = $this->etagCache->get($url);
             if ($cachedETag !== null && $cachedData !== null) {
                 $req = $req->withHeader('If-None-Match', $cachedETag);
+                \assert($req instanceof \Psr\Http\Message\RequestInterface);
             }
 
             $res = $this->httpClient->sendRequest($req);

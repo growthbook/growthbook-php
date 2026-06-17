@@ -1634,4 +1634,316 @@ final class GrowthbookTest extends TestCase
             $this->assertCount(2, $range, 'FeatureRule ranges must round-trip as [start, end] arrays');
         }
     }
+
+    // ---------------------------------------------------------------------
+    // Remote evaluation
+    // ---------------------------------------------------------------------
+
+    /**
+     * Build mock HTTP client + request factory that capture the outgoing request
+     * (method, url, body) and return a fixed response.
+     *
+     * @param string                   $responseBody
+     * @param int                      $statusCode
+     * @param array<string,mixed>|null $captured     Filled by reference with method/url/body
+     * @return array{0:\Psr\Http\Client\ClientInterface,1:\Psr\Http\Message\RequestFactoryInterface}
+     */
+    private function makeRemoteEvalHttp(string $responseBody, int $statusCode, &$captured): array
+    {
+        $captured = ['body' => '', 'sendCount' => 0];
+
+        $bodyStream = $this->createMock(\Psr\Http\Message\StreamInterface::class);
+        $bodyStream->method('write')->willReturnCallback(function ($s) use (&$captured) {
+            $captured['body'] .= $s;
+            return strlen($s);
+        });
+        $bodyStream->method('isSeekable')->willReturn(true);
+
+        $mockRequest = $this->createMock(\Psr\Http\Message\RequestInterface::class);
+        $mockRequest->method('withHeader')->willReturnSelf();
+        $mockRequest->method('getBody')->willReturn($bodyStream);
+
+        $mockFactory = $this->createMock(\Psr\Http\Message\RequestFactoryInterface::class);
+        $mockFactory->method('createRequest')->willReturnCallback(function ($method, $url) use (&$captured, $mockRequest) {
+            $captured['method'] = $method;
+            $captured['url'] = $url;
+            return $mockRequest;
+        });
+
+        $respStream = $this->createMock(\Psr\Http\Message\StreamInterface::class);
+        $respStream->method('getContents')->willReturn($responseBody);
+
+        $mockResponse = $this->createMock(\Psr\Http\Message\ResponseInterface::class);
+        $mockResponse->method('getStatusCode')->willReturn($statusCode);
+        $mockResponse->method('getBody')->willReturn($respStream);
+
+        $mockClient = $this->createMock(\Psr\Http\Client\ClientInterface::class);
+        $mockClient->method('sendRequest')->willReturnCallback(function () use (&$captured, $mockResponse) {
+            $captured['sendCount']++;
+            return $mockResponse;
+        });
+
+        return [$mockClient, $mockFactory];
+    }
+
+    public function testRemoteEvalSendsPostToEvalEndpoint(): void
+    {
+        $response = (string) json_encode([
+            'features' => ['my-feature' => ['defaultValue' => true]],
+            'savedGroups' => [],
+        ]);
+
+        [$client, $factory] = $this->makeRemoteEvalHttp($response, 200, $captured);
+
+        $gb = new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'attributes' => ['id' => 'u1', 'country' => 'US'],
+            'forcedVariations' => ['exp-1' => 2],
+            'url' => '/checkout',
+        ]);
+        $gb->initialize('sdk-test', 'https://proxy.example.com');
+
+        // Endpoint + method
+        $this->assertSame('POST', $captured['method']);
+        $this->assertSame('https://proxy.example.com/api/eval/sdk-test', $captured['url']);
+
+        // Request body shape
+        $body = json_decode($captured['body'], true);
+        $this->assertSame(['id' => 'u1', 'country' => 'US'], $body['attributes']);
+        $this->assertSame(['exp-1' => 2], $body['forcedVariations']);
+        $this->assertSame('/checkout', $body['url']);
+        $this->assertSame([], $body['forcedFeatures']);
+
+        // Response applied
+        $this->assertTrue($gb->isOn('my-feature'));
+    }
+
+    public function testRemoteEvalSerializesForcedFeaturesAsPairs(): void
+    {
+        $response = (string) json_encode(['features' => [], 'savedGroups' => []]);
+        [$client, $factory] = $this->makeRemoteEvalHttp($response, 200, $captured);
+
+        $gb = new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'forcedFeatures' => ['banner' => new FeatureResult('v2', 'force')],
+        ]);
+        $gb->initialize('sdk-test', 'https://proxy.example.com');
+
+        $body = json_decode($captured['body'], true);
+        $this->assertSame([['banner', 'v2']], $body['forcedFeatures']);
+    }
+
+    public function testRemoteEvalSerializesEmptyMapsAsObjects(): void
+    {
+        $response = (string) json_encode(['features' => [], 'savedGroups' => []]);
+        [$client, $factory] = $this->makeRemoteEvalHttp($response, 200, $captured);
+
+        // No attributes and no forcedVariations: both must still serialize as {} not []
+        $gb = new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+        ]);
+        $gb->initialize('sdk-test', 'https://proxy.example.com');
+
+        $this->assertStringContainsString('"attributes":{}', $captured['body']);
+        $this->assertStringContainsString('"forcedVariations":{}', $captured['body']);
+        // forcedFeatures is a list and stays an array
+        $this->assertStringContainsString('"forcedFeatures":[]', $captured['body']);
+    }
+
+    public function testRemoteEvalRejectsDecryptionKey(): void
+    {
+        $gb = new Growthbook(['remoteEval' => true]);
+
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('Encryption is not available for remoteEval');
+        $gb->initialize('sdk-test', 'https://proxy.example.com', 'some-decryption-key');
+    }
+
+    public function testRemoteEvalRejectsStickyBucketService(): void
+    {
+        $gb = new Growthbook([
+            'remoteEval' => true,
+            'stickyBucketService' => new InMemoryStickyBucketService(),
+        ]);
+
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('stickyBucketService is not compatible with remoteEval');
+        $gb->initialize('sdk-test', 'https://proxy.example.com');
+    }
+
+    public function testRemoteEvalRejectsCloudHost(): void
+    {
+        $gb = new Growthbook(['remoteEval' => true]);
+
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('Cannot use remoteEval on GrowthBook Cloud');
+        $gb->initialize('sdk-test', 'https://cdn.growthbook.io');
+    }
+
+    public function testRemoteEvalCacheKeyExcludesForcedFeatures(): void
+    {
+        $gb = new Growthbook(['remoteEval' => true]);
+
+        $ref = new \ReflectionMethod($gb, 'getRemoteEvalCacheKey');
+        $ref->setAccessible(true);
+
+        $url = 'https://proxy.example.com/api/eval/sdk-test';
+        $base = ['attributes' => ['id' => 'u1'], 'forcedVariations' => [], 'url' => ''];
+
+        $keyA = $ref->invoke($gb, $url, $base + ['forcedFeatures' => [['a', 1]]]);
+        $keyB = $ref->invoke($gb, $url, $base + ['forcedFeatures' => [['b', 2]]]);
+
+        $this->assertSame($keyA, $keyB, 'forcedFeatures must not affect the cache key');
+    }
+
+    public function testRemoteEvalCacheKeyUsesCacheKeyAttributes(): void
+    {
+        $gb = new Growthbook(['remoteEval' => true, 'cacheKeyAttributes' => ['id']]);
+
+        $ref = new \ReflectionMethod($gb, 'getRemoteEvalCacheKey');
+        $ref->setAccessible(true);
+
+        $url = 'https://proxy.example.com/api/eval/sdk-test';
+
+        // Only 'id' is part of the key, so changing 'country' must not change the key
+        $keyA = $ref->invoke($gb, $url, ['attributes' => ['id' => 'u1', 'country' => 'US'], 'forcedFeatures' => [], 'forcedVariations' => [], 'url' => '']);
+        $keyB = $ref->invoke($gb, $url, ['attributes' => ['id' => 'u1', 'country' => 'UA'], 'forcedFeatures' => [], 'forcedVariations' => [], 'url' => '']);
+        $this->assertSame($keyA, $keyB);
+
+        // Changing 'id' must change the key
+        $keyC = $ref->invoke($gb, $url, ['attributes' => ['id' => 'u2', 'country' => 'US'], 'forcedFeatures' => [], 'forcedVariations' => [], 'url' => '']);
+        $this->assertNotSame($keyA, $keyC);
+    }
+
+    public function testRemoteEvalCacheKeyIsOrderIndependent(): void
+    {
+        $gb = new Growthbook(['remoteEval' => true]);
+
+        $ref = new \ReflectionMethod($gb, 'getRemoteEvalCacheKey');
+        $ref->setAccessible(true);
+
+        $url = 'https://proxy.example.com/api/eval/sdk-test';
+
+        $keyA = $ref->invoke($gb, $url, [
+            'attributes' => ['id' => 'u1', 'country' => 'US'],
+            'forcedFeatures' => [],
+            'forcedVariations' => ['a' => 1, 'b' => 0],
+            'url' => '',
+        ]);
+        $keyB = $ref->invoke($gb, $url, [
+            'attributes' => ['country' => 'US', 'id' => 'u1'],
+            'forcedFeatures' => [],
+            'forcedVariations' => ['b' => 0, 'a' => 1],
+            'url' => '',
+        ]);
+
+        $this->assertSame($keyA, $keyB, 'Cache key must be independent of attribute/forcedVariation order');
+    }
+
+    public function testRemoteEvalAutoRefetchOnSetAttributes(): void
+    {
+        $response = (string) json_encode(['features' => [], 'savedGroups' => []]);
+        [$client, $factory] = $this->makeRemoteEvalHttp($response, 200, $captured);
+
+        $gb = new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'attributes' => ['id' => 'u1'],
+        ]);
+        $gb->initialize('sdk-test', 'https://proxy.example.com');
+        $this->assertSame(1, $captured['sendCount']);
+
+        // New context -> new POST
+        $gb->setAttributes(['id' => 'u2']);
+        $this->assertSame(2, $captured['sendCount']);
+    }
+
+    public function testRemoteEvalFiresRuleTracks(): void
+    {
+        $response = (string) json_encode([
+            'features' => [
+                'ab-feature' => [
+                    'defaultValue' => false,
+                    'rules' => [[
+                        'force' => true,
+                        'tracks' => [[
+                            'experiment' => ['key' => 'exp-A', 'variations' => [0, 1]],
+                            'result' => [
+                                'variationId' => 1,
+                                'inExperiment' => true,
+                                'value' => 1,
+                                'hashUsed' => true,
+                                'hashAttribute' => 'id',
+                                'hashValue' => 'u1',
+                                'featureId' => 'ab-feature',
+                                'key' => '1',
+                            ],
+                        ]],
+                    ]],
+                ],
+            ],
+            'savedGroups' => [],
+        ]);
+
+        [$client, $factory] = $this->makeRemoteEvalHttp($response, 200, $captured);
+
+        $tracked = [];
+        $gb = new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'attributes' => ['id' => 'u1'],
+            'trackingCallback' => function ($exp, $result) use (&$tracked) {
+                $tracked[] = [$exp, $result];
+            },
+        ]);
+        $gb->initialize('sdk-test', 'https://proxy.example.com');
+
+        // Evaluating the feature triggers the force rule, which fires the tracks
+        $this->assertTrue($gb->isOn('ab-feature'));
+
+        $this->assertCount(1, $tracked);
+        [$exp, $result] = $tracked[0];
+        $this->assertSame('exp-A', $exp->key);
+        $this->assertSame(1, $result->variationId);
+        $this->assertSame(1, $result->value);
+        $this->assertTrue($result->inExperiment);
+    }
+
+    public function testRemoteEvalFallsBackToStaleCacheOnError(): void
+    {
+        $staleData = json_encode([
+            'features' => ['my-feature' => ['defaultValue' => true]],
+            'savedGroups' => [],
+            'expiresAt' => time() - 100,
+        ]);
+        $cache = $this->createMock(\Psr\SimpleCache\CacheInterface::class);
+        $cache->method('get')->willReturn($staleData);
+
+        $exception = new class('timeout') extends \RuntimeException implements \Psr\Http\Client\ClientExceptionInterface {};
+        $mockClient = $this->createMock(\Psr\Http\Client\ClientInterface::class);
+        $mockClient->method('sendRequest')->willThrowException($exception);
+        $mockRequest = $this->createMock(\Psr\Http\Message\RequestInterface::class);
+        $mockRequest->method('withHeader')->willReturnSelf();
+        $mockRequest->method('getBody')->willReturn($this->createMock(\Psr\Http\Message\StreamInterface::class));
+        $mockFactory = $this->createMock(\Psr\Http\Message\RequestFactoryInterface::class);
+        $mockFactory->method('createRequest')->willReturn($mockRequest);
+
+        $gb = new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $mockClient,
+            'requestFactory' => $mockFactory,
+            'cache' => $cache,
+        ]);
+        $gb->initialize('sdk-test', 'https://proxy.example.com');
+
+        $this->assertTrue($gb->isOn('my-feature'));
+    }
 }

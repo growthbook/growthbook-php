@@ -92,6 +92,12 @@ class Growthbook implements LoggerAwareInterface
     /** @var PluginRegistry */
     private $pluginRegistry;
 
+    /** @var bool */
+    private $remoteEval = false;
+
+    /** @var array<string>|null */
+    private $cacheKeyAttributes = null;
+
     /**
      * @param array<string, mixed> $options
      * @return static
@@ -104,7 +110,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[]} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[],remoteEval?:bool,cacheKeyAttributes?:array<string>} $options
      */
     public function __construct(array $options = [])
     {
@@ -130,7 +136,9 @@ class Growthbook implements LoggerAwareInterface
             "apiTimeout",
             "apiConnectTimeout",
             "plugins",
-            "etagCacheSize"
+            "etagCacheSize",
+            "remoteEval",
+            "cacheKeyAttributes"
         ];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
@@ -180,6 +188,12 @@ class Growthbook implements LoggerAwareInterface
                 $this->addPlugin($plugin);
             }
         }
+        if (array_key_exists("cacheKeyAttributes", $options)) {
+            $this->setCacheKeyAttributes($options["cacheKeyAttributes"]);
+        }
+        if (array_key_exists("remoteEval", $options)) {
+            $this->setRemoteEval($options["remoteEval"]);
+        }
     }
 
     public function __destruct()
@@ -195,6 +209,7 @@ class Growthbook implements LoggerAwareInterface
     {
         $this->attributes = $attributes;
         $this->refreshStickyBuckets();
+        $this->refreshForRemoteEval();
 
         return $this;
     }
@@ -295,6 +310,7 @@ class Growthbook implements LoggerAwareInterface
     public function setForcedVariations(array $forcedVariations): static
     {
         $this->forcedVariations = $forcedVariations;
+        $this->refreshForRemoteEval();
         return $this;
     }
 
@@ -339,6 +355,7 @@ class Growthbook implements LoggerAwareInterface
     public function setUrl(string $url): static
     {
         $this->url = $url;
+        $this->refreshForRemoteEval();
         return $this;
     }
 
@@ -486,6 +503,72 @@ class Growthbook implements LoggerAwareInterface
     {
         $this->pluginRegistry->add($plugin);
         return $this;
+    }
+
+    /**
+     * Enable or disable remote evaluation mode. When enabled, feature evaluation
+     * is delegated to a self-hosted GrowthBook proxy/edge via POST /api/eval/{clientKey}.
+     *
+     * @param bool $remoteEval
+     * @return static
+     */
+    public function setRemoteEval(bool $remoteEval): static
+    {
+        $this->remoteEval = $remoteEval;
+        return $this;
+    }
+
+    /**
+     * @param bool $remoteEval
+     * @return static
+     */
+    public function withRemoteEval(bool $remoteEval): static
+    {
+        $self = clone $this;
+        $self->setRemoteEval($remoteEval);
+
+        return $self;
+    }
+
+    /**
+     * @return bool
+     */
+    public function isRemoteEval(): bool
+    {
+        return $this->remoteEval;
+    }
+
+    /**
+     * Restrict which attributes participate in the remote eval cache key.
+     * Only meaningful when remote evaluation is enabled. Pass null to use all attributes.
+     *
+     * @param array<string>|null $cacheKeyAttributes
+     * @return static
+     */
+    public function setCacheKeyAttributes(?array $cacheKeyAttributes): static
+    {
+        $this->cacheKeyAttributes = $cacheKeyAttributes;
+        return $this;
+    }
+
+    /**
+     * @param array<string>|null $cacheKeyAttributes
+     * @return static
+     */
+    public function withCacheKeyAttributes(?array $cacheKeyAttributes): static
+    {
+        $self = clone $this;
+        $self->setCacheKeyAttributes($cacheKeyAttributes);
+
+        return $self;
+    }
+
+    /**
+     * @return array<string>|null
+     */
+    public function getCacheKeyAttributes(): ?array
+    {
+        return $this->cacheKeyAttributes;
     }
 
     /**
@@ -787,6 +870,10 @@ class Growthbook implements LoggerAwareInterface
                         "feature" => $key,
                         "value" => $rule->force
                     ]);
+                    // Fire deferred experiment tracking events that were evaluated server-side (remote eval)
+                    if ($rule->tracks) {
+                        $this->fireRuleTracks($rule->tracks);
+                    }
                     $result = new FeatureResult($rule->force, "force", null, null, $rule->id);
                     $this->fireFeatureUsageCallback($key, $result);
                     return $result;
@@ -1108,6 +1195,63 @@ class Growthbook implements LoggerAwareInterface
         }
     }
 
+    /**
+     * Fire tracking callbacks for experiments that were evaluated server-side and
+     * attached to a force rule via its "tracks" array (remote evaluation).
+     *
+     * @param array<int, array{experiment?:array<string,mixed>,result?:array<string,mixed>}> $tracks
+     * @return void
+     */
+    private function fireRuleTracks(array $tracks): void
+    {
+        foreach ($tracks as $track) {
+            $expData = $track['experiment'] ?? null;
+            $resData = $track['result'] ?? null;
+
+            if (!is_array($expData) || !is_array($resData) || !isset($expData['key']) || !isset($expData['variations'])) {
+                $this->log(LogLevel::WARNING, "Skipping malformed track entry");
+                continue;
+            }
+
+            /** @var InlineExperiment<mixed> $exp */
+            $exp = new InlineExperiment($expData['key'], $expData['variations'], $expData);
+
+            $result = new ExperimentResult(
+                $exp,
+                (string)($resData['hashAttribute'] ?? 'id'),
+                (string)($resData['hashValue'] ?? ''),
+                (int)($resData['variationId'] ?? -1),
+                (bool)($resData['hashUsed'] ?? false),
+                $resData['featureId'] ?? null,
+                isset($resData['bucket']) ? (float)$resData['bucket'] : null,
+                (bool)($resData['stickyBucketUsed'] ?? false)
+            );
+
+            // Deduplicate identical tracking calls (same logic as runExperiment)
+            $dedupeKey = $result->hashAttribute . $result->hashValue . $exp->key . $result->variationId;
+            if (isset($this->tracks[$dedupeKey])) {
+                continue;
+            }
+            $this->tracks[$dedupeKey] = new ViewedExperiment($exp, $result);
+
+            if ($this->trackingCallback) {
+                try {
+                    call_user_func($this->trackingCallback, $exp, $result);
+                } catch (\Throwable $e) {
+                    if ($this->logger) {
+                        $this->log(LogLevel::ERROR, "Error calling the trackingCallback function", [
+                            "experiment" => $exp->key,
+                            "error" => $e
+                        ]);
+                    } else {
+                        throw $e;
+                    }
+                }
+            }
+            $this->pluginRegistry->onExperimentViewed($exp, $result, $this->attributes);
+        }
+    }
+
     public static function hash(string $seed, string $value, int $version): ?float
     {
         // New hashing algorithm
@@ -1376,6 +1520,13 @@ class Growthbook implements LoggerAwareInterface
             throw new Exception("Must specify a clientKey before initializing.");
         }
 
+        // Remote evaluation delegates feature evaluation to a self-hosted proxy/edge
+        if ($this->remoteEval) {
+            $this->fetchRemoteEval();
+            $this->initializePlugins();
+            return;
+        }
+
         $url = rtrim(empty($this->apiHost) ? self::DEFAULT_API_HOST : $this->apiHost, "/") . "/api/features/" . $this->clientKey;
         // Update when the cache format changes to prevent issues when updating the library version
         $cacheKey = md5($url . 'v2');
@@ -1519,6 +1670,252 @@ class Growthbook implements LoggerAwareInterface
     private function initializePlugins(): void
     {
         $this->pluginRegistry->initialize($this->clientKey);
+    }
+
+    /**
+     * Re-fetch remotely evaluated features when the evaluation context changes.
+     * No-op unless remote eval is enabled and the instance has already been initialized.
+     * Backed by the response cache, so repeated contexts do not trigger network calls.
+     *
+     * @return void
+     */
+    private function refreshForRemoteEval(): void
+    {
+        if (!$this->remoteEval || !$this->clientKey) {
+            return;
+        }
+        $this->fetchRemoteEval();
+    }
+
+    /**
+     * Validate that the current configuration is compatible with remote evaluation.
+     *
+     * @return void
+     * @throws Exception
+     */
+    private function validateRemoteEval(): void
+    {
+        if ($this->decryptionKey) {
+            throw new Exception("Encryption is not available for remoteEval");
+        }
+        if ($this->stickyBucketService) {
+            throw new Exception("stickyBucketService is not compatible with remoteEval; the proxy handles sticky bucketing server-side");
+        }
+
+        $host = empty($this->apiHost) ? self::DEFAULT_API_HOST : $this->apiHost;
+        $hostname = parse_url($host, PHP_URL_HOST);
+        if (is_string($hostname) && preg_match('/growthbook\.io$/i', $hostname)) {
+            throw new Exception("Cannot use remoteEval on GrowthBook Cloud; use a self-hosted proxy/edge");
+        }
+    }
+
+    /**
+     * Build the POST body sent to the remote eval endpoint.
+     *
+     * @return array{attributes:array<string,mixed>,forcedFeatures:array<array{0:string,1:mixed}>,forcedVariations:array<string,int>,url:string}
+     */
+    private function buildRemoteEvalPayload(): array
+    {
+        $forcedFeatures = [];
+        foreach ($this->forcedFeatures as $key => $value) {
+            $forcedFeatures[] = [$key, $value->value];
+        }
+
+        return [
+            "attributes" => $this->attributes,
+            "forcedFeatures" => $forcedFeatures,
+            "forcedVariations" => $this->forcedVariations,
+            "url" => $this->url,
+        ];
+    }
+
+    /**
+     * Compute the cache key for a remote eval response. The key includes the
+     * attributes (optionally narrowed by cacheKeyAttributes), forcedVariations and url.
+     * forcedFeatures are deliberately excluded - they are applied client-side and the
+     * proxy does not filter on them.
+     *
+     * @param string                                                                                                       $url
+     * @param array{attributes:array<string,mixed>,forcedFeatures:array<array{0:string,1:mixed}>,forcedVariations:array<string,int>,url:string} $payload
+     * @return string
+     */
+    private function getRemoteEvalCacheKey(string $url, array $payload): string
+    {
+        $attributes = $payload["attributes"];
+        if ($this->cacheKeyAttributes !== null) {
+            $ca = [];
+            foreach ($this->cacheKeyAttributes as $attr) {
+                $ca[$attr] = $attributes[$attr] ?? null;
+            }
+        } else {
+            $ca = $attributes;
+        }
+
+        $keyData = [
+            "ca" => $ca,
+            "fv" => $payload["forcedVariations"],
+            "url" => $payload["url"],
+        ];
+
+        // Sort keys recursively so the serialized key is canonical regardless of
+        // attribute/forcedVariation insertion order. Matches Python (sort_keys=True)
+        // and Java (TreeMap) - important because PHP caches are often shared across
+        // processes (e.g. Redis), where insertion order is not guaranteed.
+        self::ksortRecursive($keyData);
+
+        return md5($url . "||" . json_encode($keyData) . "v2");
+    }
+
+    /**
+     * Recursively sort an array by key (associative arrays only; lists are left as-is).
+     *
+     * @param array<mixed> $array
+     * @return void
+     */
+    private static function ksortRecursive(array &$array): void
+    {
+        foreach ($array as &$value) {
+            if (is_array($value)) {
+                self::ksortRecursive($value);
+            }
+        }
+        unset($value);
+
+        // Only reorder associative arrays; preserve the order of sequential lists
+        if ($array !== [] && array_keys($array) !== range(0, count($array) - 1)) {
+            ksort($array);
+        }
+    }
+
+    /**
+     * Apply a remote eval response (features + savedGroups) to the instance.
+     *
+     * @param array<string,mixed> $data
+     * @param string              $source Human readable source for logging
+     * @return void
+     */
+    private function applyRemoteEvalData(array $data, string $source): void
+    {
+        if (array_key_exists("features", $data) && is_array($data["features"])) {
+            $this->log(LogLevel::INFO, "Load remote eval features from $source", ["numFeatures" => count($data["features"])]);
+            $this->setFeatures($data["features"]);
+        }
+        if (array_key_exists("savedGroups", $data) && is_array($data["savedGroups"])) {
+            $this->setSavedGroups($data["savedGroups"]);
+        }
+    }
+
+    /**
+     * Fetch remotely evaluated features from a self-hosted proxy/edge via POST.
+     *
+     * @return void
+     * @throws ClientExceptionInterface
+     * @throws Exception
+     */
+    private function fetchRemoteEval(): void
+    {
+        $this->validateRemoteEval();
+
+        $url = rtrim(empty($this->apiHost) ? self::DEFAULT_API_HOST : $this->apiHost, "/") . "/api/eval/" . $this->clientKey;
+        $payload = $this->buildRemoteEvalPayload();
+        $cacheKey = $this->getRemoteEvalCacheKey($url, $payload);
+
+        // First try fetching from cache
+        $cachedData = null;
+        if ($this->cache) {
+            $cachedResponse = $this->cache->get($cacheKey);
+            if ($cachedResponse) {
+                $decoded = json_decode($cachedResponse, true);
+                if (is_array($decoded)) {
+                    $isFresh = isset($decoded['expiresAt']) && $decoded['expiresAt'] > time();
+                    if ($isFresh) {
+                        $this->applyRemoteEvalData($decoded, "cache");
+                        return;
+                    }
+                    $cachedData = $decoded;
+                }
+            }
+        }
+
+        if (!$this->httpClient || !$this->requestFactory) {
+            if ($cachedData !== null) {
+                $this->log(LogLevel::WARNING, "HTTP client not set, using stale cache as fallback", ["url" => $url]);
+                $this->applyRemoteEvalData($cachedData, "stale cache");
+            } else {
+                $this->log(LogLevel::WARNING, "HTTP client or request factory not set, unable to load remote eval features");
+            }
+            return;
+        }
+
+        try {
+            // attributes and forcedVariations must serialize as JSON objects ({}),
+            // not arrays ([]), even when empty - the eval endpoint rejects arrays.
+            // forcedFeatures is a list of [key, value] pairs and stays an array.
+            $wirePayload = [
+                "attributes" => (object) $payload["attributes"],
+                "forcedFeatures" => $payload["forcedFeatures"],
+                "forcedVariations" => (object) $payload["forcedVariations"],
+                "url" => $payload["url"],
+            ];
+            $body = json_encode($wirePayload) ?: "{}";
+            $req = $this->requestFactory->createRequest('POST', $url);
+            $req = $req->withHeader('User-Agent', 'growthbook-php/' . $this->sdkVersion());
+            $req = $req->withHeader('Content-Type', 'application/json');
+            \assert($req instanceof \Psr\Http\Message\RequestInterface);
+
+            $stream = $req->getBody();
+            $stream->write($body);
+            if ($stream->isSeekable()) {
+                $stream->rewind();
+            }
+
+            $res = $this->httpClient->sendRequest($req);
+            $statusCode = $res->getStatusCode();
+
+            if ($statusCode >= 400) {
+                $this->log(LogLevel::WARNING, "Remote eval request failed", ["url" => $url, "statusCode" => $statusCode]);
+                if ($cachedData !== null) {
+                    $this->applyRemoteEvalData($cachedData, "stale cache");
+                }
+                return;
+            }
+
+            $responseBody = $res->getBody()->getContents();
+            $parsed = json_decode($responseBody, true);
+            if (!is_array($parsed) || !array_key_exists("features", $parsed)) {
+                $this->log(LogLevel::WARNING, "Could not load remote eval features", ["url" => $url, "responseBody" => $responseBody]);
+                if ($cachedData !== null) {
+                    $this->applyRemoteEvalData($cachedData, "stale cache");
+                }
+                return;
+            }
+
+            $features = is_array($parsed["features"]) ? $parsed["features"] : [];
+            $savedGroups = (array_key_exists("savedGroups", $parsed) && is_array($parsed["savedGroups"])) ? $parsed["savedGroups"] : [];
+
+            $this->log(LogLevel::INFO, "Load remote eval features from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
+            $this->setFeatures($features);
+            $this->setSavedGroups($savedGroups);
+
+            if ($this->cache) {
+                $cacheData = [
+                    'features' => $features,
+                    'savedGroups' => $savedGroups,
+                    'expiresAt' => time() + $this->cacheTTL,
+                ];
+                $this->cache->set($cacheKey, json_encode($cacheData), $this->cacheTTL * 10);
+            }
+        } catch (\Throwable $e) {
+            $this->log(LogLevel::ERROR, "Failed to fetch remote eval features from API", [
+                "url" => $url,
+                "error" => $e->getMessage(),
+                "errorClass" => get_class($e),
+            ]);
+            if ($cachedData !== null) {
+                $this->log(LogLevel::WARNING, "Using stale cache as fallback", ["url" => $url]);
+                $this->applyRemoteEvalData($cachedData, "stale cache");
+            }
+        }
     }
 
     private static function sdkVersion(): string

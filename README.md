@@ -184,6 +184,48 @@ $savedGroups = json_decode($savedGroupsJSON, true);
 $growthbook = $growthbook->withSavedGroups($savedGroups);
 ```
 
+## Remote Evaluation
+
+With remote evaluation, feature flags are evaluated on a self-hosted GrowthBook proxy/edge instead of locally in the SDK. Instead of downloading the full feature definitions, the SDK sends the current evaluation context (attributes, forced variations, forced features and URL) to the proxy via a `POST` request, and the proxy returns only the already-evaluated features. This keeps feature definitions and targeting logic off the client.
+
+Enable it by setting `remoteEval` to `true`:
+
+```php
+$growthbook = new Growthbook\Growthbook([
+  'remoteEval' => true,
+  'attributes' => ['id' => 'user-123'],
+]);
+
+// Sends a POST to https://gb-proxy.example.com/api/eval/sdk-abc123
+$growthbook->initialize('sdk-abc123', 'https://gb-proxy.example.com');
+```
+
+### Requirements and constraints
+
+Remote evaluation requires a **self-hosted** GrowthBook proxy/edge and is **not** supported on GrowthBook Cloud. The following combinations throw an exception:
+
+- A GrowthBook Cloud host (`*.growthbook.io`) — you must point `$apiHost` at your own proxy/edge.
+- A `decryptionKey` — encryption is handled by the proxy, not the SDK.
+- A `stickyBucketService` — sticky bucketing is handled server-side.
+
+### Cache key attributes
+
+When a cache is configured, remote eval responses are cached per evaluation context. By default every attribute is part of the cache key. Use `cacheKeyAttributes` to restrict the key to a subset of attributes, so that changes to irrelevant attributes don't cause unnecessary requests:
+
+```php
+$growthbook = new Growthbook\Growthbook([
+  'remoteEval' => true,
+  'cacheKeyAttributes' => ['id'], // only `id` affects the cache key
+  'cache' => $cache,
+]);
+```
+
+> Note: forced features are intentionally excluded from the cache key (they are applied client-side and the proxy does not filter on them).
+
+### Re-evaluation when the context changes
+
+Because the proxy evaluates features for a specific context, the SDK automatically re-fetches when that context changes after `initialize`. Calling `setAttributes`, `setForcedVariations` or `setUrl` (or their `withX` equivalents) triggers a new request. Thanks to the cache key above, repeated contexts are served from cache without a network call.
+
 ## The Growthbook Class
 
 The `Growthbook` class has a number of properties. These can be set using a Fluent interface or can be passed into a constructor using an associative array. Every property also has a getter method if needed. Here's an example:

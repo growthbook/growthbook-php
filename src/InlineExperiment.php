@@ -97,10 +97,7 @@ class InlineExperiment
         $this->minBucketVersion = $options["minBucketVersion"] ?? null;
         $this->parentConditions = $options["parentConditions"] ?? null;
         $this->customFields = $options["customFields"] ?? null;
-        $this->fallbackAttribute = null;
-        if (!is_null($this->disableStickyBucketing)) {
-            $this->fallbackAttribute = $options["fallbackAttribute"] ?? null;
-        }
+        $this->fallbackAttribute = $options["fallbackAttribute"] ?? null;
     }
 
     /**

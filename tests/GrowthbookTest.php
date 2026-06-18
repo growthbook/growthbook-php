@@ -1634,4 +1634,50 @@ final class GrowthbookTest extends TestCase
             $this->assertCount(2, $range, 'FeatureRule ranges must round-trip as [start, end] arrays');
         }
     }
+
+    // ---------------------------------------------------------------------
+    // Sticky bucketing - fallbackAttribute vs disableStickyBucketing
+    // ---------------------------------------------------------------------
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function fallbackGuardFeature(bool $disableStickyBucketing): array
+    {
+        $rule = [
+            'key' => 'my-exp',
+            'hashAttribute' => 'id',          // missing from attributes -> empty primary
+            'fallbackAttribute' => 'deviceId', // present in attributes
+            'variations' => ['control', 'variation'],
+            'meta' => [['key' => '0'], ['key' => '1']],
+            'coverage' => 1,
+            'weights' => [0.5, 0.5],
+        ];
+        if ($disableStickyBucketing) {
+            $rule['disableStickyBucketing'] = true;
+        }
+        return ['my-feature' => ['defaultValue' => 'default', 'rules' => [$rule]]];
+    }
+
+    public function testFallbackUsedWhenStickyBucketingEnabled(): void
+    {
+        // Sticky enabled + empty primary 'id' -> hashing falls back to deviceId -> user is bucketed
+        $gb = Growthbook::create()
+            ->withStickyBucketing(new InMemoryStickyBucketService(), null)
+            ->withAttributes(['deviceId' => 'd123'])
+            ->withFeatures($this->fallbackGuardFeature(false));
+
+        $this->assertNotSame('default', $gb->getValue('my-feature', 'x'), 'fallback should be used when sticky bucketing is enabled');
+    }
+
+    public function testFallbackNotUsedWhenStickyBucketingDisabled(): void
+    {
+        // disableStickyBucketing=true -> fallback must NOT be used -> primary 'id' empty -> not in experiment -> default
+        $gb = Growthbook::create()
+            ->withStickyBucketing(new InMemoryStickyBucketService(), null)
+            ->withAttributes(['deviceId' => 'd123'])
+            ->withFeatures($this->fallbackGuardFeature(true));
+
+        $this->assertSame('default', $gb->getValue('my-feature', 'x'), 'fallback must not be used when disableStickyBucketing is true');
+    }
 }

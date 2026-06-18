@@ -9,10 +9,10 @@ class InMemoryStickyBucketService extends StickyBucketService
 
     /**
      * @param string $attributeName
-     * @param mixed $attributeValue
+     * @param string $attributeValue
      * @return array<string,mixed>|null
      */
-    public function getAssignments(string $attributeName, $attributeValue): ?array
+    public function getAssignments(string $attributeName, string $attributeValue): ?array
     {
         return $this->docs[$this->getKey($attributeName, $attributeValue)] ?? null;
     }

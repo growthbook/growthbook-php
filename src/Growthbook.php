@@ -850,12 +850,13 @@ class Growthbook implements LoggerAwareInterface
                     }
                 }
 
+                $ruleFallback = ($this->stickyBucketService && !$rule->disableStickyBucketing) ? $rule->fallbackAttribute : null;
                 if (isset($rule->force)) {
                     if (
                         !$this->isIncludedInRollout(
                             $rule->seed ?? $key,
                             $rule->hashAttribute,
-                            $rule->fallbackAttribute,
+                            $ruleFallback,
                             $rule->range,
                             $rule->coverage,
                             $rule->hashVersion
@@ -948,7 +949,8 @@ class Growthbook implements LoggerAwareInterface
             return new ExperimentResult($exp, "id", "", -1, false, $featureId);
         }
 
-        list($hashAttribute, $hashValue) = $this->getHashValue($exp->hashAttribute, $exp->fallbackAttribute);
+        $fallback = ($this->stickyBucketService && !$exp->disableStickyBucketing) ? $exp->fallbackAttribute : null;
+        list($hashAttribute, $hashValue) = $this->getHashValue($exp->hashAttribute, $fallback);
         // 3. Forced via querystring
         if ($this->url) {
             $qsOverride = static::getQueryStringOverride($exp->key, $this->url, count($exp->variations));
@@ -1998,6 +2000,7 @@ class Growthbook implements LoggerAwareInterface
         $bucketVersion = $bucketVersion ?? 0;
         $minBucketVersion = $minBucketVersion ?? 0;
         $meta = $meta ?? [];
+        $hashAttribute = $hashAttribute ?: "id";
         $id = $this->getStickyBucketExperimentKey($key, $bucketVersion);
         $assignments = $this->getStickyBucketAssignments($hashAttribute, $fallbackAttribute);
 

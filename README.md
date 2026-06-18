@@ -395,7 +395,22 @@ By default GrowthBook does not persist assigned experiment variations for a user
 
 Sticky Bucketing is a solution to these issues. You can provide a Sticky Bucket Service to the GrowthBook instance to persist previously seen variations and ensure that the user experience remains consistent for your users.
 
-A sample `InMemoryStickyBucketService` implementation is provided for reference, but in production you will definitely want to implement your own version using a database, cookies, or similar for persistence.
+A sample `InMemoryStickyBucketService` implementation is provided for reference. Note that it only persists within a single request, so it is not suitable for production on its own.
+
+For production, the SDK ships a `Psr16StickyBucketService` that persists assignments in any PSR-16 (SimpleCache) backend you already use — Redis, Memcached, APCu, filesystem, etc. — without adding a dependency on a specific client:
+
+```php
+// $cache is any \Psr\SimpleCache\CacheInterface implementation
+$service = new Growthbook\Psr16StickyBucketService($cache);
+
+// Optional: TTL in seconds (null = the cache's default), and a key prefix
+$service = new Growthbook\Psr16StickyBucketService($cache, 15552000, 'gbStickyBuckets_');
+
+$growthbook = Growthbook\Growthbook::create()
+  ->withStickyBucketing($service);
+```
+
+Alternatively you can implement your own `StickyBucketService` using a database, cookies, or similar.
 
 Sticky Bucket documents contain three fields
 

@@ -1680,4 +1680,45 @@ final class GrowthbookTest extends TestCase
 
         $this->assertSame('default', $gb->getValue('my-feature', 'x'), 'fallback must not be used when disableStickyBucketing is true');
     }
+
+    /**
+     * Regression guard for the bug reported in growthbook-swift #125: when multiple
+     * experiments are evaluated, the sticky bucket assignment doc must ACCUMULATE all
+     * assignments rather than being reset to a single one on each evaluation.
+     */
+    public function testStickyBucketAccumulatesAcrossMultipleExperiments(): void
+    {
+        $service = new InMemoryStickyBucketService();
+        $features = [
+            'feat-a' => ['defaultValue' => 'a0', 'rules' => [[
+                'key' => 'exp-a',
+                'variations' => ['a0', 'a1'],
+                'meta' => [['key' => '0'], ['key' => '1']],
+                'coverage' => 1,
+                'weights' => [0.5, 0.5],
+            ]]],
+            'feat-b' => ['defaultValue' => 'b0', 'rules' => [[
+                'key' => 'exp-b',
+                'variations' => ['b0', 'b1'],
+                'meta' => [['key' => '0'], ['key' => '1']],
+                'coverage' => 1,
+                'weights' => [0.5, 0.5],
+            ]]],
+        ];
+
+        $gb = Growthbook::create()
+            ->withStickyBucketing($service, null)
+            ->withFeatures($features)
+            ->withAttributes(['id' => 'user-1']);
+
+        $gb->getFeature('feat-a');
+        $gb->getFeature('feat-b');
+
+        // A single doc for id||user-1 must hold BOTH experiment assignments
+        $doc = $service->getAssignments('id', 'user-1');
+        $this->assertNotNull($doc);
+        assert(is_array($doc));
+        $this->assertArrayHasKey('exp-a__0', $doc['assignments'], 'first experiment assignment must persist');
+        $this->assertArrayHasKey('exp-b__0', $doc['assignments'], 'second experiment assignment must persist');
+    }
 }

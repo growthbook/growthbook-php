@@ -81,7 +81,7 @@ By default, there is no caching enabled. You can enable it by passing any PSR16-
 // Any psr-16 library will work
 use Cache\Adapter\Apcu\ApcuCachePool;
 
-$cache = new ApcuCachePool()
+$cache = new ApcuCachePool();
 
 $growthbook = Growthbook\Growthbook::create()
   ->withCache($cache);
@@ -403,7 +403,7 @@ mixpanel.track("Experiment Viewed", <?=json_encode([
 
 GrowthBook can output log messages to help you debug your feature flags and experiments.
 
-We support any PSR-3 comaptible logger. We implement a fluent interface (`withLogger`) as well as the standard LoggerAware interface (`setLogger`).
+We support any PSR-3 compatible logger. We implement a fluent interface (`withLogger`) as well as the standard LoggerAware interface (`setLogger`).
 
 ```php
 // Fluent interface
@@ -430,6 +430,7 @@ In addition, you can use `$growthbook->getFeature("feature-key")` to get back a 
 - **source** - Why the value was assigned to the user. One of `unknownFeature`, `defaultValue`, `force`, or `experiment`
 - **experiment** - Information about the experiment (if any) which was used to assign the value to the user
 - **experimentResult** - The result of the experiment (if any) which was used to assign the value to the user
+- **ruleId** - The identifier of the feature rule (if any) that assigned the value (or `null`)
 
 ## Sticky Bucketing
 
@@ -449,7 +450,7 @@ $service = new Growthbook\Psr16StickyBucketService($cache);
 $service = new Growthbook\Psr16StickyBucketService($cache, 15552000, 'gbStickyBuckets_');
 
 $growthbook = Growthbook\Growthbook::create()
-  ->withStickyBucketing($service);
+  ->withStickyBucketing($service, null);
 ```
 
 Alternatively you can implement your own `StickyBucketService` using a database, cookies, or similar.
@@ -467,26 +468,26 @@ Here's an example implementation using a theoretical `db` object:
 ```php
 class InMemoryStickyBucketService extends StickyBucketService
 {
-    /** @var array<string, StickyAssignmentDocument>  */
-    public array $docs = [];
+    /** @var array<string, array>  */
+    public $docs = [];
 
     /**
      * @param string $attributeName
-     * @param mixed $attributeValue
-     * @return StickyAssignmentDocument|null
+     * @param string $attributeValue
+     * @return array<string,mixed>|null
      */
-    public function getAssignments(string $attributeName, $attributeValue): ?StickyAssignmentDocument
+    public function getAssignments(string $attributeName, string $attributeValue): ?array
     {
         return $this->docs[$this->getKey($attributeName, $attributeValue)] ?? null;
     }
 
     /**
-     * @param StickyAssignmentDocument $doc
+     * @param array<string,mixed> $doc
      * @return void
      */
-    public function saveAssignments(StickyAssignmentDocument $doc): void
+    public function saveAssignments(array $doc): void
     {
-        $this->docs[$this->getKey($doc->getAttributeName(), $doc->getAttributeValue())] = $doc;
+        $this->docs[$this->getKey($doc['attributeName'], $doc['attributeValue'])] = $doc;
     }
 
     /**
@@ -500,7 +501,7 @@ class InMemoryStickyBucketService extends StickyBucketService
 
 // Fluent interface
 $growthbook = Growthbook\Growthbook::create()
-  ->withStickyBucketing(new InMemoryStickyBucketService());
+  ->withStickyBucketing(new InMemoryStickyBucketService(), null);
 
 // Using the constructor
 $growthbook = new Growthbook([

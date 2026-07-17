@@ -358,8 +358,18 @@ class Condition
         }
     }
 
-    public static function parseVersionString(string $version): string
+    /**
+     * @param mixed $version
+     * @return string
+     */
+    public static function parseVersionString($version): string
     {
+        if (is_int($version) || is_float($version)) {
+            $version = (string) $version;
+        }
+        if (!$version || !is_string($version)) {
+            $version = "0";
+        }
         // Remove build info and leading `v` if any
         // Split version into parts (both core version numbers and pre-release tags)
         // "v1.2.3-rc.1+build123" -> ["1","2","3","rc","1"]

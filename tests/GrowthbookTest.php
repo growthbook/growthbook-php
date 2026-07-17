@@ -114,6 +114,97 @@ final class GrowthbookTest extends TestCase
         return $this->getCases("evalCondition");
     }
 
+    /**
+     * Regression for issue #69: version operators must not throw a TypeError
+     * when the targeted attribute is missing (null). A missing attribute is
+     * normalised to "0" (matching the reference TypeScript SDK), so evaluation
+     * proceeds against "0" rather than crashing. Notably "$vgte" — the operator
+     * from the issue — evaluates to false, so the rule is skipped and the
+     * feature falls back to its default value.
+     *
+     * @dataProvider versionOperatorMissingAttributeProvider
+     * @param array<string,mixed> $condition
+     */
+    public function testVersionOperatorWithMissingAttribute(array $condition, bool $expected): void
+    {
+        // Attribute "appVersion" is intentionally absent from the attributes.
+        $this->assertSame($expected, Condition::evalCondition([], $condition, []));
+    }
+
+    /**
+     * @return array<string,array{0:array<string,mixed>,1:bool}>
+     */
+    public function versionOperatorMissingAttributeProvider(): array
+    {
+        // Missing attribute -> "0"; expected result of comparing "0" to "1.2.3".
+        $ops = [
+            '$veq'  => false,
+            '$vne'  => true,
+            '$vgt'  => false,
+            '$vgte' => false,
+            '$vlt'  => true,
+            '$vlte' => true,
+        ];
+        $cases = [];
+        foreach ($ops as $op => $expected) {
+            $cases[$op] = [['appVersion' => [$op => '1.2.3']], $expected];
+        }
+
+        return $cases;
+    }
+
+    /**
+     * parseVersionString must accept non-string input without throwing,
+     * mirroring the reference TypeScript SDK's paddedVersionString.
+     *
+     * @dataProvider parseVersionStringCoercionProvider
+     * @param mixed $input
+     */
+    public function testParseVersionStringCoercion($input, string $expected): void
+    {
+        $this->assertSame($expected, Condition::parseVersionString($input));
+    }
+
+    /**
+     * @return array<string,array{0:mixed,1:string}>
+     */
+    public function parseVersionStringCoercionProvider(): array
+    {
+        // null / empty / falsy inputs normalise to "0"; numbers stringify first.
+        $zero = Condition::parseVersionString('0');
+
+        return [
+            'null'         => [null, $zero],
+            'empty string' => ['', $zero],
+            'false'        => [false, $zero],
+            'int'          => [123, Condition::parseVersionString('123')],
+            'float'        => [1.5, Condition::parseVersionString('1.5')],
+        ];
+    }
+
+    /**
+     * End-to-end regression for issue #69: a feature whose rule targets a
+     * missing version attribute must fall back to the default value rather
+     * than throwing.
+     */
+    public function testFeatureWithVersionRuleAndMissingAttribute(): void
+    {
+        $gb = Growthbook::create()
+            ->withAttributes(['id' => 'user-123']) // no appVersion
+            ->withFeatures([
+                'appVersion-feature-test' => [
+                    'defaultValue' => 1,
+                    'rules' => [
+                        [
+                            'condition' => ['appVersion' => ['$vgte' => '1.2.3']],
+                            'force' => 2,
+                        ],
+                    ],
+                ],
+            ]);
+
+        $this->assertSame(1, $gb->getValue('appVersion-feature-test', 0));
+    }
 
     /**
      * @dataProvider getQueryStringOverrideProvider

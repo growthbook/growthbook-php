@@ -2418,14 +2418,22 @@ final class GrowthbookTest extends TestCase
 
     public function testStickyBucketAttributesDerivedFromContextualBanditRules(): void
     {
-        $gb = Growthbook::create()
-            ->withFeatures($this->banditFeatures())
-            ->withAttributes(['id' => 'user-1']);
+        $requested = [];
+        $service = $this->createMock(\Growthbook\StickyBucketService::class);
+        $service->method('getAllAssignments')->willReturnCallback(function (array $attributes) use (&$requested) {
+            $requested = $attributes;
+            return [];
+        });
 
-        $method = new \ReflectionMethod($gb, 'deriveStickyBucketIdentifierAttributes');
+        // Bandit rules must contribute their hash attribute to the derived sticky bucket
+        // attributes even though `variations` is unset.
+        new Growthbook([
+            'stickyBucketService' => $service,
+            'features' => $this->banditFeatures(),
+            'attributes' => ['id' => 'user-1'],
+        ]);
 
-        // Bandit rules must contribute their hash attribute even though `variations` is unset
-        $this->assertSame(['id'], array_values((array) $method->invoke($gb)));
+        $this->assertSame(['id' => 'user-1'], $requested);
     }
 
     public function testSetContextualBanditsAcceptsDefinitionInstances(): void

@@ -432,6 +432,55 @@ In addition, you can use `$growthbook->getFeature("feature-key")` to get back a 
 - **experimentResult** - The result of the experiment (if any) which was used to assign the value to the user
 - **ruleId** - The identifier of the feature rule (if any) that assigned the value (or `null`)
 
+## Contextual Bandits
+
+A contextual bandit reallocates experiment traffic toward the best-performing variation per user segment. All the optimization happens on the GrowthBook backend - the SDK only consumes the ready weights.
+
+Definitions arrive with the feature payload under `contextualBandits` (or `encryptedContextualBandits`), and a feature rule points at one through `contextualBanditRef`:
+
+```json
+{
+  "features": {
+    "cta-color": {
+      "defaultValue": "blue",
+      "rules": [
+        {
+          "key": "cta-color-bandit",
+          "contextualBanditRef": "cb-cta",
+          "contextualVariations": ["blue", "green"],
+          "weights": [0.5, 0.5]
+        }
+      ]
+    }
+  },
+  "contextualBandits": {
+    "cb-cta": {
+      "banditVersion": 7,
+      "contexts": [
+        { "leafId": 1, "condition": { "plan": "enterprise" }, "weights": [0.8, 0.2] },
+        { "leafId": 2, "condition": {}, "weights": [0.3, 0.7] }
+      ]
+    }
+  }
+}
+```
+
+Evaluation walks the leaves top-to-bottom, takes the first whose `condition` matches the user's attributes, applies its `weights` to the experiment, and buckets the user with the normal hashing mechanism. Nothing extra needs to be enabled - `initialize()` picks the definitions up automatically. When the payload is fetched elsewhere, pass them in directly:
+
+```php
+$growthbook->setContextualBandits($contextualBandits); // or ->withContextualBandits(...)
+```
+
+Bandit rules carry their variations under `contextualVariations` rather than `variations`, which is how SDKs without bandit support skip them by design.
+
+For a real exposure (the user was hash-bucketed into the experiment) the `experimentResult` reports which segment produced the weights:
+
+- **leafId** - The matched leaf, or `-1` when the definition was found but no leaf matched
+- **variationWeights** - The weights actually applied to this user
+- **banditVersion** - Version of the backend-computed weights, when the definition carries one
+
+Forced variations, QA mode and users filtered out of the experiment report none of these fields. If `contextualBanditRef` points at a definition that is not in the payload, the rule runs with its own (marginal) weights and reports no bandit metadata.
+
 ## Sticky Bucketing
 
 By default GrowthBook does not persist assigned experiment variations for a user. We rely on deterministic hashing to ensure that the same user attributes always map to the same experiment variation. However, there are cases where this isn't good enough. For example, if you change targeting conditions in the middle of an experiment, users may stop being shown a variation even if they were previously bucketed into it.

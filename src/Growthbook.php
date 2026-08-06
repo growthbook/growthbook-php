@@ -25,6 +25,8 @@ class Growthbook implements LoggerAwareInterface
     private $attributes = [];
     /** @var array<string,array<string,mixed>> */
     private $savedGroups = [];
+    /** @var array<string,ContextualBanditDefinition> */
+    private $contextualBandits = [];
     /** @var Feature<mixed>[] */
     private $features = [];
     /** @var array<string, FeatureResult<mixed>> */
@@ -110,7 +112,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[],clientKey?:string,remoteEval?:bool,cacheKeyAttributes?:array<string>} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[],clientKey?:string,remoteEval?:bool,cacheKeyAttributes?:array<string>,contextualBandits?:array<string,mixed>} $options
      */
     public function __construct(array $options = [])
     {
@@ -133,6 +135,7 @@ class Growthbook implements LoggerAwareInterface
             "stickyBucketIdentifierAttributes",
             "savedGroups",
             "encryptedSavedGroups",
+            "contextualBandits",
             "apiTimeout",
             "apiConnectTimeout",
             "plugins",
@@ -186,6 +189,9 @@ class Growthbook implements LoggerAwareInterface
         }
         if (array_key_exists("clientKey", $options)) {
             $this->setClientKey($options["clientKey"]);
+        }
+        if (array_key_exists("contextualBandits", $options)) {
+            $this->setContextualBandits($options["contextualBandits"]);
         }
         if (array_key_exists("plugins", $options)) {
             foreach ($options["plugins"] as $plugin) {
@@ -261,6 +267,49 @@ class Growthbook implements LoggerAwareInterface
         $self->setSavedGroups($savedGroups);
 
         return $self;
+    }
+
+    /**
+     * Replace the contextual bandit definitions that feature rules resolve their
+     * `contextualBanditRef` against. Definitions are read-only inputs computed by the
+     * GrowthBook backend and normally arrive with the feature payload; this setter exists for
+     * tests and for consumers that fetch the payload themselves.
+     *
+     * @param array<string,mixed> $contextualBandits Keyed by bandit ref
+     * @return static
+     */
+    public function setContextualBandits(array $contextualBandits): static
+    {
+        $this->contextualBandits = [];
+        foreach ($contextualBandits as $ref => $definition) {
+            if ($definition instanceof ContextualBanditDefinition) {
+                $this->contextualBandits[$ref] = $definition;
+            } elseif (is_array($definition)) {
+                $this->contextualBandits[$ref] = new ContextualBanditDefinition($definition);
+            }
+        }
+
+        return $this;
+    }
+
+    /**
+     * @param array<string,mixed> $contextualBandits
+     * @return static
+     */
+    public function withContextualBandits(array $contextualBandits): static
+    {
+        $self = clone $this;
+        $self->setContextualBandits($contextualBandits);
+
+        return $self;
+    }
+
+    /**
+     * @return array<string,ContextualBanditDefinition>
+     */
+    public function getContextualBandits(): array
+    {
+        return $this->contextualBandits;
     }
 
     /**
@@ -992,7 +1041,16 @@ class Growthbook implements LoggerAwareInterface
                     ]);
                     continue;
                 }
+                if ($rule->contextualBanditRef) {
+                    $this->applyContextualBandit($exp, $rule->contextualBanditRef, $key);
+                }
                 $result = $this->runExperiment($exp, $key);
+                // The weights stay applied, but the routing metadata describes an exposure -
+                // drop it when the user was not really bucketed into the experiment (forced,
+                // QA mode, filtered out, ...).
+                if ($exp->contextualBandit && !($result->hashUsed && $result->inExperiment)) {
+                    $exp->contextualBandit = null;
+                }
                 if (!$result->inExperiment) {
                     $this->log(LogLevel::DEBUG, "Skip rule because user not included in experiment", [
                         "feature" => $key
@@ -1017,6 +1075,64 @@ class Growthbook implements LoggerAwareInterface
         $result = new FeatureResult($feature->defaultValue ?? null, "defaultValue");
         $this->fireFeatureUsageCallback($key, $result);
         return $result;
+    }
+
+    /**
+     * Apply a contextual bandit's backend-computed weights to an experiment before bucketing.
+     *
+     * The first leaf whose condition matches the user's attributes wins and its weights replace
+     * the experiment's own. When the definition is missing the experiment is left untouched
+     * (aggregate weights, no bandit metadata); when it exists but no leaf matches, the fallback
+     * leaf -1 is recorded against the experiment's own or equal weights.
+     *
+     * @template T
+     * @param InlineExperiment<T> $exp
+     * @param string              $contextualBanditRef
+     * @param string              $featureKey
+     * @return void
+     */
+    private function applyContextualBandit(InlineExperiment $exp, string $contextualBanditRef, string $featureKey): void
+    {
+        $definition = $this->contextualBandits[$contextualBanditRef] ?? null;
+        if (!$definition) {
+            $this->log(LogLevel::DEBUG, "Contextual bandit ref not found in payload, using aggregate weights", [
+                "feature" => $featureKey,
+                "contextualBanditRef" => $contextualBanditRef
+            ]);
+            return;
+        }
+
+        $leaf = null;
+        try {
+            foreach ($definition->contexts as $context) {
+                if (Condition::evalCondition($this->attributes, $context->condition ?? [], $this->savedGroups)) {
+                    $leaf = $context;
+                    break;
+                }
+            }
+        } catch (\Throwable $e) {
+            $this->log(LogLevel::WARNING, "Contextual bandit leaf selection threw, using fallback weights", [
+                "feature" => $featureKey,
+                "contextualBanditRef" => $contextualBanditRef,
+                "error" => $e->getMessage()
+            ]);
+        }
+
+        if ($leaf && $leaf->weights !== null) {
+            $exp->weights = $leaf->weights;
+            $exp->contextualBandit = new ContextualBandit($leaf->leafId, $leaf->weights, $definition->banditVersion);
+            return;
+        }
+
+        $this->log(LogLevel::DEBUG, "Contextual bandit: no matching leaf, using fallback weights", [
+            "feature" => $featureKey,
+            "contextualBanditRef" => $contextualBanditRef
+        ]);
+        $exp->contextualBandit = new ContextualBandit(
+            ContextualBandit::FALLBACK_LEAF_ID,
+            $exp->weights ?? static::getEqualWeights(count($exp->variations)),
+            $definition->banditVersion
+        );
     }
 
     /**
@@ -1639,8 +1755,10 @@ class Growthbook implements LoggerAwareInterface
         }
 
         $url = rtrim(empty($this->apiHost) ? self::DEFAULT_API_HOST : $this->apiHost, "/") . "/api/features/" . $this->clientKey;
-        // Update when the cache format changes to prevent issues when updating the library version
-        $cacheKey = md5($url . 'v2');
+        // Update when the cache format changes to prevent issues when updating the library version.
+        // v3 adds contextualBandits to the cached payload - a v2 entry would otherwise keep bandit
+        // rules on fallback weights until it expired.
+        $cacheKey = md5($url . 'v3');
 
         // First try fetching from cache
         $cachedData = null;
@@ -1659,6 +1777,7 @@ class Growthbook implements LoggerAwareInterface
                             $this->log(LogLevel::INFO, "Load saved groups from cache", ["url" => $url, "numGroups" => count($decoded['savedGroups'])]);
                             $this->setSavedGroups($decoded['savedGroups']);
                         }
+                        $this->applyContextualBanditsFromPayload($decoded);
                         $this->initializePlugins();
                         return;
                     }
@@ -1676,6 +1795,7 @@ class Growthbook implements LoggerAwareInterface
                 if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
                     $this->setSavedGroups($cachedData['savedGroups']);
                 }
+                $this->applyContextualBanditsFromPayload($cachedData);
             } else {
                 $this->log(LogLevel::WARNING, "HTTP client or request factory not set, unable to load features from API");
             }
@@ -1711,6 +1831,7 @@ class Growthbook implements LoggerAwareInterface
                 if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
                     $this->setSavedGroups($cachedData['savedGroups']);
                 }
+                $this->applyContextualBanditsFromPayload($cachedData);
                 // A warm cache answering 304 is the common path, not an error one: returning
                 // without this left the plugins unkeyed and dropping every event
                 $this->initializePlugins();
@@ -1737,6 +1858,13 @@ class Growthbook implements LoggerAwareInterface
                 $savedGroups = [];
             }
 
+            $contextualBandits = array_key_exists("encryptedContextualBandits", $parsed)
+                ? json_decode($this->decrypt($parsed["encryptedContextualBandits"]), true)
+                : (array_key_exists("contextualBandits", $parsed) ? $parsed["contextualBandits"] : []);
+            if (!is_array($contextualBandits)) {
+                $contextualBandits = [];
+            }
+
             // Store ETag for next conditional request
             $etag = $this->extractETagFromResponse($res);
             if ($etag !== null) {
@@ -1747,11 +1875,13 @@ class Growthbook implements LoggerAwareInterface
             $this->log(LogLevel::INFO, "Load features and saved groups from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
             $this->setFeatures($features);
             $this->setSavedGroups($savedGroups);
+            $this->setContextualBandits($contextualBandits);
 
             if ($this->cache) {
                 $cacheData = [
                     'features' => $features,
                     'savedGroups' => $savedGroups,
+                    'contextualBandits' => $contextualBandits,
                     'expiresAt' => time() + $this->cacheTTL
                 ];
                 $this->cache->set($cacheKey, json_encode($cacheData), $this->cacheTTL * 10);
@@ -1776,6 +1906,7 @@ class Growthbook implements LoggerAwareInterface
                 if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
                     $this->setSavedGroups($cachedData['savedGroups']);
                 }
+                $this->applyContextualBanditsFromPayload($cachedData);
             }
         }
 
@@ -1785,6 +1916,21 @@ class Growthbook implements LoggerAwareInterface
     private function initializePlugins(): void
     {
         $this->pluginRegistry->initialize($this->clientKey);
+    }
+
+    /**
+     * Apply the contextual bandit definitions carried by a feature payload or cache entry.
+     * A payload without the key leaves the current definitions untouched, matching how the
+     * reference TypeScript SDK applies a payload.
+     *
+     * @param array<string,mixed> $data
+     * @return void
+     */
+    private function applyContextualBanditsFromPayload(array $data): void
+    {
+        if (array_key_exists("contextualBandits", $data) && is_array($data["contextualBandits"])) {
+            $this->setContextualBandits($data["contextualBandits"]);
+        }
     }
 
     /**
@@ -1878,7 +2024,8 @@ class Growthbook implements LoggerAwareInterface
         // processes (e.g. Redis), where insertion order is not guaranteed.
         self::ksortRecursive($keyData);
 
-        return md5($url . "||" . json_encode($keyData) . "v2");
+        // v3: the cached payload gained contextualBandits (see the initialize() cache key)
+        return md5($url . "||" . json_encode($keyData) . "v3");
     }
 
     /**
@@ -1918,6 +2065,7 @@ class Growthbook implements LoggerAwareInterface
         if (array_key_exists("savedGroups", $data) && is_array($data["savedGroups"])) {
             $this->setSavedGroups($data["savedGroups"]);
         }
+        $this->applyContextualBanditsFromPayload($data);
     }
 
     /**
@@ -2007,15 +2155,18 @@ class Growthbook implements LoggerAwareInterface
 
             $features = is_array($parsed["features"]) ? $parsed["features"] : [];
             $savedGroups = (array_key_exists("savedGroups", $parsed) && is_array($parsed["savedGroups"])) ? $parsed["savedGroups"] : [];
+            $contextualBandits = (array_key_exists("contextualBandits", $parsed) && is_array($parsed["contextualBandits"])) ? $parsed["contextualBandits"] : [];
 
             $this->log(LogLevel::INFO, "Load remote eval features from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
             $this->setFeatures($features);
             $this->setSavedGroups($savedGroups);
+            $this->setContextualBandits($contextualBandits);
 
             if ($this->cache) {
                 $cacheData = [
                     'features' => $features,
                     'savedGroups' => $savedGroups,
+                    'contextualBandits' => $contextualBandits,
                     'expiresAt' => time() + $this->cacheTTL,
                 ];
                 $this->cache->set($cacheKey, json_encode($cacheData), $this->cacheTTL * 10);
@@ -2279,7 +2430,8 @@ class Growthbook implements LoggerAwareInterface
 
         foreach ($this->features as $key => $feature) {
             foreach ($feature->rules as $rule) {
-                if (!empty($rule->variations)) {
+                // Contextual bandit rules carry their variations under `contextualVariations`
+                if (!empty($rule->variations) || !empty($rule->contextualVariations)) {
                     $attributes[] = $rule->hashAttribute ?? "id";
                     if (!empty($rule->fallbackAttribute)) {
                         $attributes[] = $rule->fallbackAttribute;

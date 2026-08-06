@@ -62,7 +62,22 @@ class FeatureRule
     public $tracks;
 
     /**
-     * @param array{id?:string,condition:?array<string,mixed>,coverage:?float,force:?T,variations:?T[],key:?string,weights:?float[],namespace:?array{0:string,1:float,2:float},hashAttribute:?string,fallbackAttribute:?string,filters?:array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[],seed?:string,hashVersion?:int,range?:array{0:float,1:float},meta?:array{key?:string,name?:string,passthrough?:bool}[],ranges?:array{0:float,1:float}[],name?:string,phase?:string,disableStickyBucketing:?bool,bucketVersion:?int,minBucketVersion:?int,parentConditions:?array<string,mixed>,customFields:?array<string,mixed>,tracks?:array<int, array{experiment?:array<string,mixed>,result?:array<string,mixed>}>} $rule
+     * Variations of a contextual bandit rule. Bandit rules ship their variations here instead
+     * of in `variations` so SDKs without bandit support skip the rule by design.
+     *
+     * @var null|T[]
+     */
+    public $contextualVariations;
+
+    /**
+     * Key of the `contextualBandits` definition that supplies this rule's variation weights.
+     *
+     * @var null|string
+     */
+    public $contextualBanditRef;
+
+    /**
+     * @param array{id?:string,condition:?array<string,mixed>,coverage:?float,force:?T,variations:?T[],key:?string,weights:?float[],namespace:?array{0:string,1:float,2:float},hashAttribute:?string,fallbackAttribute:?string,filters?:array{seed:string,ranges:array{0:float,1:float}[],hashVersion?:int,attribute?:string}[],seed?:string,hashVersion?:int,range?:array{0:float,1:float},meta?:array{key?:string,name?:string,passthrough?:bool}[],ranges?:array{0:float,1:float}[],name?:string,phase?:string,disableStickyBucketing:?bool,bucketVersion:?int,minBucketVersion:?int,parentConditions:?array<string,mixed>,customFields:?array<string,mixed>,tracks?:array<int, array{experiment?:array<string,mixed>,result?:array<string,mixed>}>,contextualVariations?:T[],contextualBanditRef?:string} $rule
      */
     public function __construct(array $rule)
     {
@@ -138,6 +153,12 @@ class FeatureRule
         if (array_key_exists("tracks", $rule)) {
             $this->tracks = $rule["tracks"];
         }
+        if (array_key_exists("contextualVariations", $rule)) {
+            $this->contextualVariations = $rule["contextualVariations"];
+        }
+        if (array_key_exists("contextualBanditRef", $rule)) {
+            $this->contextualBanditRef = $rule["contextualBanditRef"];
+        }
     }
 
     /**
@@ -146,11 +167,14 @@ class FeatureRule
      */
     public function toExperiment(string $featureKey): ?InlineExperiment
     {
-        if (!isset($this->variations)) {
+        // Contextual bandit rules carry their variations under `contextualVariations` so older
+        // SDKs skip them; read either field here.
+        $variations = $this->contextualVariations ?? $this->variations;
+        if (!isset($variations)) {
             return null;
         }
 
-        $exp = new InlineExperiment($this->key ?? $featureKey, $this->variations);
+        $exp = new InlineExperiment($this->key ?? $featureKey, $variations);
 
         if (isset($this->coverage)) {
             $exp->coverage = $this->coverage;

@@ -249,6 +249,15 @@ print_r($growthbook->getAttributes());
 
 Note: you can also use the fluent methods (e.g. `withFeatures`) at any point to update properties.
 
+The fluent methods return a copy and leave the original untouched, so `withAttributes` is also how you get a per-user/per-request handle from a shared instance - the equivalent of the JS SDK's `createScopedInstance`. Evaluation methods never take a user context, they read the instance they are called on:
+
+```php
+$scoped = $growthbook->withAttributes(['id' => $userId]);
+$scoped->isOn('my-feature');
+```
+
+Copies share the features, cache and plugins of the original, so plugin tracking keeps batching across handles and the plugins are closed only once the last handle is gone. `getViewedExperiments()` is per handle though: a copy starts from what the original had seen when the copy was made and records its own experiments after that, so read it from the handle you evaluated on.
+
 ### Attributes
 
 You can specify attributes about the current user and request. These are used for two things:

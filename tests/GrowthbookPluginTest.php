@@ -84,6 +84,54 @@ final class GrowthbookPluginIntegrationTest extends TestCase
         $this->assertTrue($plugin->closeCalled);
     }
 
+    public function testScopedCopyDoesNotClosePluginsOfTheOriginal(): void
+    {
+        $plugin = new MockPlugin();
+        $gb = new Growthbook([
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+
+        // A per-request handle going out of scope must not shut down the plugins the
+        // original still uses - a closed plugin never flushes again.
+        $scoped = $gb->withAttributes(['id' => 'user-2']);
+        $scoped->isOn('my-feature');
+        unset($scoped);
+
+        $this->assertFalse($plugin->closeCalled);
+
+        $before = $plugin->featureCallCount;
+        $gb->isOn('my-feature');
+        $this->assertSame($before + 1, $plugin->featureCallCount, 'the original must keep dispatching to plugins');
+
+        unset($gb);
+        $this->assertTrue($plugin->closeCalled);
+    }
+
+    public function testPluginsStayOpenWhenTheOriginalIsDestroyedFirst(): void
+    {
+        $plugin = new MockPlugin();
+        $gb = new Growthbook([
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+
+        // Reassigning over the original (`$gb = $gb->withAttributes(...)`) leaves the copy as
+        // the only owner; the plugins belong to it now.
+        $scoped = $gb->withAttributes(['id' => 'user-2']);
+        unset($gb);
+
+        $this->assertFalse($plugin->closeCalled);
+
+        $scoped->isOn('my-feature');
+        $this->assertSame(1, $plugin->featureCallCount);
+
+        unset($scoped);
+        $this->assertTrue($plugin->closeCalled);
+    }
+
     public function testPluginAddedViaConstructorOption(): void
     {
         $plugin = new MockPlugin();

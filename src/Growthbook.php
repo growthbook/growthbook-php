@@ -196,9 +196,19 @@ class Growthbook implements LoggerAwareInterface
         }
     }
 
+    /**
+     * The fluent `withX()` methods hand out copies of this instance (per-request or per-user
+     * handles), and a PHP clone is shallow: the copy shares this instance's plugin registry.
+     * Register the copy as an owner so the plugins are only closed once every handle is gone.
+     */
+    public function __clone()
+    {
+        $this->pluginRegistry->retain();
+    }
+
     public function __destruct()
     {
-        $this->pluginRegistry->close();
+        $this->pluginRegistry->release();
     }
 
     /**

@@ -17,6 +17,15 @@ final class PluginRegistry
     private ?LoggerInterface $logger;
 
     /**
+     * Number of Growthbook instances sharing this registry. A registry is shared by every copy
+     * made with the fluent `withX()` methods (PHP clones are shallow), so plugins must stay open
+     * until the last of those copies is gone - see [retain] / [release].
+     *
+     * @var int
+     */
+    private int $refCount = 1;
+
+    /**
      * @param Plugin[]             $plugins
      * @param LoggerInterface|null $logger
      */
@@ -24,6 +33,28 @@ final class PluginRegistry
     {
         $this->plugins = $plugins;
         $this->logger  = $logger;
+    }
+
+    /**
+     * Register another Growthbook instance as an owner of this registry.
+     */
+    public function retain(): void
+    {
+        $this->refCount++;
+    }
+
+    /**
+     * Drop an owner and close the plugins once the last one is gone. Closing on the first owner
+     * to be destroyed would shut the plugins down for every remaining copy - a scoped instance
+     * built with `withAttributes()` going out of scope would silently stop the original's
+     * tracking, because a closed plugin never flushes again.
+     */
+    public function release(): void
+    {
+        $this->refCount--;
+        if ($this->refCount <= 0) {
+            $this->close();
+        }
     }
 
     public function setLogger(?LoggerInterface $logger): void

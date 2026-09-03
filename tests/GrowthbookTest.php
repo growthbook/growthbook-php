@@ -2123,4 +2123,183 @@ final class GrowthbookTest extends TestCase
 
         $this->assertTrue($gb->isOn('my-feature'));
     }
+
+    /**
+     * Mock HTTP client + request factory that record every header set on the outgoing request.
+     *
+     * @param string                   $responseBody
+     * @param array<string,string>|null $captured Filled by reference with header name => value
+     * @param string|null              $etag     ETag returned by the response, if any
+     * @return array{0:\Psr\Http\Client\ClientInterface,1:\Psr\Http\Message\RequestFactoryInterface}
+     */
+    private function makeHeaderCapturingHttp(string $responseBody, &$captured, ?string $etag = null): array
+    {
+        $captured = [];
+
+        $request = $this->createMock(\Psr\Http\Message\RequestInterface::class);
+        $request->method('withHeader')->willReturnCallback(function ($name, $value) use (&$captured, $request) {
+            $captured[$name] = $value;
+            return $request;
+        });
+        $request->method('getBody')->willReturn($this->createMock(\Psr\Http\Message\StreamInterface::class));
+
+        $factory = $this->createMock(\Psr\Http\Message\RequestFactoryInterface::class);
+        $factory->method('createRequest')->willReturn($request);
+
+        $stream = $this->createMock(\Psr\Http\Message\StreamInterface::class);
+        $stream->method('getContents')->willReturn($responseBody);
+
+        $response = $this->createMock(\Psr\Http\Message\ResponseInterface::class);
+        $response->method('getStatusCode')->willReturn(200);
+        $response->method('getBody')->willReturn($stream);
+        $response->method('hasHeader')->willReturnCallback(fn ($name) => $etag !== null && strtolower($name) === 'etag');
+        $response->method('getHeader')->willReturn($etag !== null ? [$etag] : []);
+
+        $client = $this->createMock(\Psr\Http\Client\ClientInterface::class);
+        $client->method('sendRequest')->willReturn($response);
+
+        return [$client, $factory];
+    }
+
+    public function testApiHostRequestHeadersSentOnFeaturesRequest(): void
+    {
+        [$client, $factory] = $this->makeHeaderCapturingHttp(
+            (string) json_encode(['features' => ['my-feature' => ['defaultValue' => true]]]),
+            $captured
+        );
+
+        $gb = new Growthbook([
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'apiHostRequestHeaders' => ['Authorization' => 'Bearer gateway-token', 'X-Tenant' => 'acme'],
+        ]);
+        $gb->initialize('sdk-test', 'https://gb.internal.example.com');
+
+        $this->assertSame('Bearer gateway-token', $captured['Authorization']);
+        $this->assertSame('acme', $captured['X-Tenant']);
+        // SDK-managed headers are still applied
+        $this->assertStringStartsWith('growthbook-php/', $captured['User-Agent']);
+        $this->assertTrue($gb->isOn('my-feature'));
+    }
+
+    public function testApiHostRequestHeadersSentOnRemoteEvalRequest(): void
+    {
+        [$client, $factory] = $this->makeHeaderCapturingHttp(
+            (string) json_encode(['features' => ['my-feature' => ['defaultValue' => true]]]),
+            $captured
+        );
+
+        $gb = new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'apiHostRequestHeaders' => ['Authorization' => 'Bearer gateway-token'],
+        ]);
+        $gb->initialize('sdk-test', 'https://gb-proxy.example.com');
+
+        $this->assertSame('Bearer gateway-token', $captured['Authorization']);
+        $this->assertSame('application/json', $captured['Content-Type']);
+    }
+
+    public function testApiHostRequestHeadersLeaveEtagFlowIntact(): void
+    {
+        $cachedData = [
+            'features' => ['my-feature' => ['defaultValue' => true]],
+            'savedGroups' => [],
+            'expiresAt' => time() - 10, // stale, so a conditional request is made
+        ];
+        $cache = $this->createMock(\Psr\SimpleCache\CacheInterface::class);
+        $cache->method('get')->willReturn(json_encode($cachedData));
+
+        [$client, $factory] = $this->makeHeaderCapturingHttp(
+            (string) json_encode(['features' => []]),
+            $captured,
+            '"etag-1"'
+        );
+
+        $gb = new Growthbook([
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'cache' => $cache,
+            'apiHostRequestHeaders' => ['Authorization' => 'Bearer gateway-token'],
+        ]);
+        // First call stores the ETag, second sends it back alongside the custom headers
+        $gb->initialize('sdk-test');
+        $gb->initialize('sdk-test');
+
+        $this->assertSame('"etag-1"', $captured['If-None-Match']);
+        $this->assertSame('Bearer gateway-token', $captured['Authorization']);
+    }
+
+    /**
+     * @dataProvider reservedRequestHeaderProvider
+     */
+    public function testReservedRequestHeadersAreRejected(string $name): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('managed by the SDK');
+
+        Growthbook::create()->withApiHostRequestHeaders([$name => 'whatever']);
+    }
+
+    /**
+     * @return array<int,array{0:string}>
+     */
+    public function reservedRequestHeaderProvider(): array
+    {
+        // Matching is case-insensitive
+        return [['User-Agent'], ['user-agent'], ['If-None-Match'], ['if-none-match'], ['Content-Type'], ['CONTENT-TYPE']];
+    }
+
+    public function testRequestHeaderValueWithCrlfIsRejected(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        Growthbook::create()->withApiHostRequestHeaders(['X-Test' => "value\r\nX-Injected: yes"]);
+    }
+
+    public function testInvalidRequestHeaderNameIsRejected(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        Growthbook::create()->withApiHostRequestHeaders(['Not A Token' => 'value']);
+    }
+
+    public function testNumericRequestHeaderValueIsAccepted(): void
+    {
+        $gb = Growthbook::create()->withApiHostRequestHeaders(['X-Tenant-Id' => 42]);
+
+        $this->assertSame(['X-Tenant-Id' => '42'], $gb->getApiHostRequestHeaders());
+    }
+
+    public function testRequestHeaderValuesAreNeverLogged(): void
+    {
+        $records = [];
+        $logger = $this->createMock(\Psr\Log\LoggerInterface::class);
+        $logger->method('log')->willReturnCallback(function ($level, $message, $context = []) use (&$records) {
+            $records[] = $message . ' ' . (string) json_encode($context);
+        });
+
+        [$client, $factory] = $this->makeHeaderCapturingHttp((string) json_encode(['features' => []]), $captured);
+
+        $gb = new Growthbook([
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'logger' => $logger,
+            'apiHostRequestHeaders' => ['Authorization' => 'Bearer super-secret-token'],
+        ]);
+        $gb->initialize('sdk-test');
+
+        $this->assertNotEmpty($records, 'expected the SDK to log something during initialize');
+        $this->assertStringNotContainsString('super-secret-token', implode("\n", $records));
+    }
+
+    public function testWithApiHostRequestHeadersDoesNotMutateOriginal(): void
+    {
+        $gb = Growthbook::create();
+        $copy = $gb->withApiHostRequestHeaders(['X-Tenant' => 'acme']);
+
+        $this->assertSame([], $gb->getApiHostRequestHeaders());
+        $this->assertSame(['X-Tenant' => 'acme'], $copy->getApiHostRequestHeaders());
+    }
 }

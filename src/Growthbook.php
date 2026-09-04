@@ -785,6 +785,9 @@ class Growthbook implements LoggerAwareInterface
     {
         foreach ($this->apiHostRequestHeaders as $name => $value) {
             $request = $request->withHeader($name, $value);
+            // psr/http-message 1.0 types withHeader() as returning MessageInterface, so narrow it
+            // back the same way the request builders in this file do.
+            \assert($request instanceof \Psr\Http\Message\RequestInterface);
         }
 
         return $request;

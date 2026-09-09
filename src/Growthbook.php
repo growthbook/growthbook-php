@@ -118,6 +118,18 @@ class Growthbook implements LoggerAwareInterface
     /** @var array<string>|null */
     private $cacheKeyAttributes = null;
 
+    /** @var array<int,callable> */
+    private $featureRefreshListeners = [];
+
+    /** The payload was fetched from the API host. */
+    public const REFRESH_SOURCE_NETWORK = "network";
+    /** The payload came from a fresh cache entry, no request was made. */
+    public const REFRESH_SOURCE_CACHE = "cache";
+    /** The request failed (or no HTTP client is configured) and an expired cache entry was reused. */
+    public const REFRESH_SOURCE_STALE_CACHE = "stale-cache";
+    /** The API answered 304 and the cached payload was reused. */
+    public const REFRESH_SOURCE_NOT_MODIFIED = "not-modified";
+
     /**
      * @param array<string, mixed> $options
      * @return static
@@ -697,6 +709,82 @@ class Growthbook implements LoggerAwareInterface
     public function getCacheKeyAttributes(): ?array
     {
         return $this->cacheKeyAttributes;
+    }
+
+    /**
+     * Register a listener invoked whenever the SDK applies a feature payload to this instance -
+     * that is, from `initialize()` and from the remote evaluation refetch that a change of
+     * attributes, forced variations or url triggers.
+     *
+     * The listener receives the applied payload (`features`, `savedGroups`) and where it came
+     * from: one of `network`, `cache`, `stale-cache` or `not-modified`. It runs after the payload
+     * has been applied, so evaluating a feature from inside a listener already sees the new
+     * definitions. A listener that throws is logged and skipped - it can never break a load.
+     *
+     * This SDK never refreshes features on its own: there is no polling, no streaming and no
+     * background worker, so a listener only ever fires inside a call the application made. Its
+     * value is knowing *which* payload was applied and from where - most of all in remote
+     * evaluation mode, where a simple `setAttributes()` can hit the network and silently fall
+     * back to a stale cache. Payloads the application supplies itself through `setFeatures()` /
+     * `withFeatures()` are not reported, since the caller already has them.
+     *
+     * @param callable(array<string,mixed>,string):void $listener
+     * @return callable():void Unregisters the listener
+     */
+    public function addFeatureRefreshListener(callable $listener): callable
+    {
+        $this->featureRefreshListeners[] = $listener;
+
+        return function () use ($listener): void {
+            $this->removeFeatureRefreshListener($listener);
+        };
+    }
+
+    /**
+     * Remove a previously registered listener. Removing one that was never added is a no-op.
+     *
+     * @param callable $listener
+     * @return void
+     */
+    public function removeFeatureRefreshListener(callable $listener): void
+    {
+        foreach ($this->featureRefreshListeners as $i => $registered) {
+            if ($registered === $listener) {
+                unset($this->featureRefreshListeners[$i]);
+            }
+        }
+    }
+
+    /**
+     * @return array<int,callable>
+     */
+    public function getFeatureRefreshListeners(): array
+    {
+        return array_values($this->featureRefreshListeners);
+    }
+
+    /**
+     * Notify listeners that a payload was applied. Called after the payload is in place, so a
+     * listener that evaluates a feature sees the new definitions.
+     *
+     * @param array<string,mixed> $payload
+     * @param string              $source One of the REFRESH_SOURCE_* constants
+     * @return void
+     */
+    private function notifyFeatureRefresh(array $payload, string $source): void
+    {
+        foreach ($this->featureRefreshListeners as $listener) {
+            try {
+                $listener($payload, $source);
+            } catch (\Throwable $e) {
+                // A broken listener must not take the feature load down with it.
+                $this->log(LogLevel::ERROR, "Feature refresh listener threw", [
+                    "source" => $source,
+                    "error" => $e->getMessage(),
+                    "errorClass" => get_class($e),
+                ]);
+            }
+        }
     }
 
     /**
@@ -1736,6 +1824,7 @@ class Growthbook implements LoggerAwareInterface
                             $this->log(LogLevel::INFO, "Load saved groups from cache", ["url" => $url, "numGroups" => count($decoded['savedGroups'])]);
                             $this->setSavedGroups($decoded['savedGroups']);
                         }
+                        $this->notifyFeatureRefresh($decoded, self::REFRESH_SOURCE_CACHE);
                         $this->initializePlugins();
                         return;
                     }
@@ -1753,6 +1842,7 @@ class Growthbook implements LoggerAwareInterface
                 if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
                     $this->setSavedGroups($cachedData['savedGroups']);
                 }
+                $this->notifyFeatureRefresh($cachedData, self::REFRESH_SOURCE_STALE_CACHE);
             } else {
                 $this->log(LogLevel::WARNING, "HTTP client or request factory not set, unable to load features from API");
             }
@@ -1788,6 +1878,7 @@ class Growthbook implements LoggerAwareInterface
                 if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
                     $this->setSavedGroups($cachedData['savedGroups']);
                 }
+                $this->notifyFeatureRefresh($cachedData, self::REFRESH_SOURCE_NOT_MODIFIED);
                 // A warm cache answering 304 is the common path, not an error one: returning
                 // without this left the plugins unkeyed and dropping every event
                 $this->initializePlugins();
@@ -1824,6 +1915,10 @@ class Growthbook implements LoggerAwareInterface
             $this->log(LogLevel::INFO, "Load features and saved groups from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
             $this->setFeatures($features);
             $this->setSavedGroups($savedGroups);
+            $this->notifyFeatureRefresh(
+                ['features' => $features, 'savedGroups' => $savedGroups],
+                self::REFRESH_SOURCE_NETWORK
+            );
 
             if ($this->cache) {
                 $cacheData = [
@@ -1853,6 +1948,7 @@ class Growthbook implements LoggerAwareInterface
                 if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
                     $this->setSavedGroups($cachedData['savedGroups']);
                 }
+                $this->notifyFeatureRefresh($cachedData, self::REFRESH_SOURCE_STALE_CACHE);
             }
         }
 
@@ -1984,18 +2080,20 @@ class Growthbook implements LoggerAwareInterface
      * Apply a remote eval response (features + savedGroups) to the instance.
      *
      * @param array<string,mixed> $data
-     * @param string              $source Human readable source for logging
+     * @param string              $source One of the REFRESH_SOURCE_* constants
      * @return void
      */
     private function applyRemoteEvalData(array $data, string $source): void
     {
         if (array_key_exists("features", $data) && is_array($data["features"])) {
-            $this->log(LogLevel::INFO, "Load remote eval features from $source", ["numFeatures" => count($data["features"])]);
+            // Log the source in words, the constants are dashed for the listener API
+            $this->log(LogLevel::INFO, "Load remote eval features from " . str_replace("-", " ", $source), ["numFeatures" => count($data["features"])]);
             $this->setFeatures($data["features"]);
         }
         if (array_key_exists("savedGroups", $data) && is_array($data["savedGroups"])) {
             $this->setSavedGroups($data["savedGroups"]);
         }
+        $this->notifyFeatureRefresh($data, $source);
     }
 
     /**
@@ -2022,7 +2120,7 @@ class Growthbook implements LoggerAwareInterface
                 if (is_array($decoded)) {
                     $isFresh = isset($decoded['expiresAt']) && $decoded['expiresAt'] > time();
                     if ($isFresh) {
-                        $this->applyRemoteEvalData($decoded, "cache");
+                        $this->applyRemoteEvalData($decoded, self::REFRESH_SOURCE_CACHE);
                         return;
                     }
                     $cachedData = $decoded;
@@ -2033,7 +2131,7 @@ class Growthbook implements LoggerAwareInterface
         if (!$this->httpClient || !$this->requestFactory) {
             if ($cachedData !== null) {
                 $this->log(LogLevel::WARNING, "HTTP client not set, using stale cache as fallback", ["url" => $url]);
-                $this->applyRemoteEvalData($cachedData, "stale cache");
+                $this->applyRemoteEvalData($cachedData, self::REFRESH_SOURCE_STALE_CACHE);
             } else {
                 $this->log(LogLevel::WARNING, "HTTP client or request factory not set, unable to load remote eval features");
             }
@@ -2068,7 +2166,7 @@ class Growthbook implements LoggerAwareInterface
             if ($statusCode >= 400) {
                 $this->log(LogLevel::WARNING, "Remote eval request failed", ["url" => $url, "statusCode" => $statusCode]);
                 if ($cachedData !== null) {
-                    $this->applyRemoteEvalData($cachedData, "stale cache");
+                    $this->applyRemoteEvalData($cachedData, self::REFRESH_SOURCE_STALE_CACHE);
                 }
                 return;
             }
@@ -2078,7 +2176,7 @@ class Growthbook implements LoggerAwareInterface
             if (!is_array($parsed) || !array_key_exists("features", $parsed)) {
                 $this->log(LogLevel::WARNING, "Could not load remote eval features", ["url" => $url, "responseBody" => $responseBody]);
                 if ($cachedData !== null) {
-                    $this->applyRemoteEvalData($cachedData, "stale cache");
+                    $this->applyRemoteEvalData($cachedData, self::REFRESH_SOURCE_STALE_CACHE);
                 }
                 return;
             }
@@ -2089,6 +2187,10 @@ class Growthbook implements LoggerAwareInterface
             $this->log(LogLevel::INFO, "Load remote eval features from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
             $this->setFeatures($features);
             $this->setSavedGroups($savedGroups);
+            $this->notifyFeatureRefresh(
+                ['features' => $features, 'savedGroups' => $savedGroups],
+                self::REFRESH_SOURCE_NETWORK
+            );
 
             if ($this->cache) {
                 $cacheData = [
@@ -2106,7 +2208,7 @@ class Growthbook implements LoggerAwareInterface
             ]);
             if ($cachedData !== null) {
                 $this->log(LogLevel::WARNING, "Using stale cache as fallback", ["url" => $url]);
-                $this->applyRemoteEvalData($cachedData, "stale cache");
+                $this->applyRemoteEvalData($cachedData, self::REFRESH_SOURCE_STALE_CACHE);
             }
         }
     }

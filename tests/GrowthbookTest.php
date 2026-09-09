@@ -2123,4 +2123,252 @@ final class GrowthbookTest extends TestCase
 
         $this->assertTrue($gb->isOn('my-feature'));
     }
+
+    /**
+     * Mock HTTP client + request factory returning a fixed features API response. Pass a
+     * \Throwable as $response to make the client fail instead.
+     *
+     * @param string|\Throwable $response
+     * @param int               $statusCode
+     * @return array{0:\Psr\Http\Client\ClientInterface,1:\Psr\Http\Message\RequestFactoryInterface}
+     */
+    private function makeFeaturesHttp($response, int $statusCode = 200): array
+    {
+        $request = $this->createMock(\Psr\Http\Message\RequestInterface::class);
+        $request->method('withHeader')->willReturnSelf();
+        $request->method('getBody')->willReturn($this->createMock(\Psr\Http\Message\StreamInterface::class));
+
+        $factory = $this->createMock(\Psr\Http\Message\RequestFactoryInterface::class);
+        $factory->method('createRequest')->willReturn($request);
+
+        $client = $this->createMock(\Psr\Http\Client\ClientInterface::class);
+        if ($response instanceof \Throwable) {
+            $client->method('sendRequest')->willThrowException($response);
+        } else {
+            $stream = $this->createMock(\Psr\Http\Message\StreamInterface::class);
+            $stream->method('getContents')->willReturn($response);
+
+            $httpResponse = $this->createMock(\Psr\Http\Message\ResponseInterface::class);
+            $httpResponse->method('getStatusCode')->willReturn($statusCode);
+            $httpResponse->method('getBody')->willReturn($stream);
+            $httpResponse->method('hasHeader')->willReturn(false);
+
+            $client->method('sendRequest')->willReturn($httpResponse);
+        }
+
+        return [$client, $factory];
+    }
+
+    /**
+     * Cache mock serving one fixed entry.
+     *
+     * @param array<string,mixed> $entry
+     * @return \Psr\SimpleCache\CacheInterface
+     */
+    private function makeCacheServing(array $entry): \Psr\SimpleCache\CacheInterface
+    {
+        $cache = $this->createMock(\Psr\SimpleCache\CacheInterface::class);
+        $cache->method('get')->willReturn(json_encode($entry));
+
+        return $cache;
+    }
+
+    /**
+     * Collects (payload, source) pairs from a feature refresh listener.
+     *
+     * @param array<int,array{0:array<string,mixed>,1:string}> $events
+     * @return callable
+     */
+    private function recordingListener(array &$events): callable
+    {
+        return function (array $payload, string $source) use (&$events): void {
+            $events[] = [$payload, $source];
+        };
+    }
+
+    public function testFeatureRefreshListenerFiresForNetworkLoad(): void
+    {
+        [$client, $factory] = $this->makeFeaturesHttp((string) json_encode([
+            'features' => ['my-feature' => ['defaultValue' => true]],
+            'savedGroups' => ['group-a' => [1, 2]],
+        ]));
+
+        $events = [];
+        $gb = new Growthbook(['httpClient' => $client, 'requestFactory' => $factory]);
+        $gb->addFeatureRefreshListener($this->recordingListener($events));
+        $gb->initialize('sdk-test');
+
+        $this->assertCount(1, $events);
+        $this->assertSame(Growthbook::REFRESH_SOURCE_NETWORK, $events[0][1]);
+        $this->assertArrayHasKey('my-feature', $events[0][0]['features']);
+        $this->assertSame(['group-a' => [1, 2]], $events[0][0]['savedGroups']);
+    }
+
+    public function testFeatureRefreshListenerFiresForFreshCache(): void
+    {
+        $cache = $this->makeCacheServing([
+            'features' => ['my-feature' => ['defaultValue' => true]],
+            'savedGroups' => [],
+            'expiresAt' => time() + 60,
+        ]);
+
+        $events = [];
+        $gb = new Growthbook(['cache' => $cache]);
+        $gb->addFeatureRefreshListener($this->recordingListener($events));
+        $gb->initialize('sdk-test');
+
+        $this->assertCount(1, $events);
+        $this->assertSame(Growthbook::REFRESH_SOURCE_CACHE, $events[0][1]);
+    }
+
+    public function testFeatureRefreshListenerFiresForNotModified(): void
+    {
+        $cache = $this->makeCacheServing([
+            'features' => ['my-feature' => ['defaultValue' => true]],
+            'savedGroups' => [],
+            'expiresAt' => time() - 10, // stale, so the SDK revalidates
+        ]);
+        [$client, $factory] = $this->makeFeaturesHttp('', 304);
+
+        $events = [];
+        $gb = new Growthbook(['cache' => $cache, 'httpClient' => $client, 'requestFactory' => $factory]);
+        $gb->addFeatureRefreshListener($this->recordingListener($events));
+        $gb->initialize('sdk-test');
+
+        $this->assertCount(1, $events);
+        $this->assertSame(Growthbook::REFRESH_SOURCE_NOT_MODIFIED, $events[0][1]);
+    }
+
+    public function testFeatureRefreshListenerFiresForStaleCacheFallback(): void
+    {
+        $cache = $this->makeCacheServing([
+            'features' => ['my-feature' => ['defaultValue' => true]],
+            'savedGroups' => [],
+            'expiresAt' => time() - 10,
+        ]);
+        [$client, $factory] = $this->makeFeaturesHttp(new \RuntimeException('network down'));
+
+        $events = [];
+        $gb = new Growthbook(['cache' => $cache, 'httpClient' => $client, 'requestFactory' => $factory]);
+        $gb->addFeatureRefreshListener($this->recordingListener($events));
+        $gb->initialize('sdk-test');
+
+        $this->assertCount(1, $events);
+        $this->assertSame(Growthbook::REFRESH_SOURCE_STALE_CACHE, $events[0][1]);
+        // The stale payload really was applied
+        $this->assertTrue($gb->isOn('my-feature'));
+    }
+
+    public function testFeatureRefreshListenerFiresForRemoteEval(): void
+    {
+        $response = (string) json_encode(['features' => ['my-feature' => ['defaultValue' => true]], 'savedGroups' => []]);
+        [$client, $factory] = $this->makeRemoteEvalHttp($response, 200, $captured);
+
+        $events = [];
+        $gb = new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'attributes' => ['id' => 'user-1'],
+        ]);
+        $gb->addFeatureRefreshListener($this->recordingListener($events));
+        $gb->initialize('sdk-test', 'https://proxy.example.com');
+
+        $this->assertCount(1, $events);
+        $this->assertSame(Growthbook::REFRESH_SOURCE_NETWORK, $events[0][1]);
+
+        // The point of the listener in this SDK: a plain setAttributes() re-evaluates remotely,
+        // and the application gets told which payload replaced the previous one.
+        $gb->setAttributes(['id' => 'user-2']);
+
+        $this->assertCount(2, $events);
+        $this->assertSame(Growthbook::REFRESH_SOURCE_NETWORK, $events[1][1]);
+        $this->assertSame(2, $captured['sendCount']);
+    }
+
+    public function testFeatureRefreshListenerIsNotCalledForApplicationSuppliedFeatures(): void
+    {
+        $events = [];
+        $gb = Growthbook::create();
+        $gb->addFeatureRefreshListener($this->recordingListener($events));
+
+        $gb->setFeatures(['my-feature' => ['defaultValue' => true]]);
+
+        $this->assertSame([], $events);
+    }
+
+    public function testFeatureRefreshListenerSeesTheAppliedPayload(): void
+    {
+        [$client, $factory] = $this->makeFeaturesHttp((string) json_encode([
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]));
+
+        $seen = null;
+        $gb = new Growthbook(['httpClient' => $client, 'requestFactory' => $factory]);
+        $gb->addFeatureRefreshListener(function () use (&$seen, &$gb): void {
+            // Listeners run after the payload is applied, so evaluation is already up to date
+            $seen = $gb->isOn('my-feature');
+        });
+        $gb->initialize('sdk-test');
+
+        $this->assertTrue($seen);
+    }
+
+    public function testFeatureRefreshListenerUnsubscribes(): void
+    {
+        [$client, $factory] = $this->makeFeaturesHttp((string) json_encode(['features' => []]));
+
+        $events = [];
+        $gb = new Growthbook(['httpClient' => $client, 'requestFactory' => $factory]);
+        $unsubscribe = $gb->addFeatureRefreshListener($this->recordingListener($events));
+        $gb->initialize('sdk-test');
+        $this->assertCount(1, $events);
+
+        $unsubscribe();
+        $this->assertSame([], $gb->getFeatureRefreshListeners());
+
+        $gb->initialize('sdk-test');
+        $this->assertCount(1, $events, 'listener must not fire after unsubscribing');
+    }
+
+    public function testRemoveFeatureRefreshListener(): void
+    {
+        $listener = function (): void {
+        };
+        $gb = Growthbook::create();
+        $gb->addFeatureRefreshListener($listener);
+        $this->assertCount(1, $gb->getFeatureRefreshListeners());
+
+        $gb->removeFeatureRefreshListener($listener);
+        $this->assertSame([], $gb->getFeatureRefreshListeners());
+
+        // Removing an unregistered listener is a no-op
+        $gb->removeFeatureRefreshListener($listener);
+        $this->assertSame([], $gb->getFeatureRefreshListeners());
+    }
+
+    public function testThrowingFeatureRefreshListenerIsLoggedAndDoesNotBreakLoading(): void
+    {
+        [$client, $factory] = $this->makeFeaturesHttp((string) json_encode([
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]));
+
+        $records = [];
+        $logger = $this->createMock(\Psr\Log\LoggerInterface::class);
+        $logger->method('log')->willReturnCallback(function ($level, $message) use (&$records): void {
+            $records[] = $message;
+        });
+
+        $events = [];
+        $gb = new Growthbook(['httpClient' => $client, 'requestFactory' => $factory, 'logger' => $logger]);
+        $gb->addFeatureRefreshListener(function (): void {
+            throw new \RuntimeException('listener blew up');
+        });
+        $gb->addFeatureRefreshListener($this->recordingListener($events));
+        $gb->initialize('sdk-test');
+
+        $this->assertContains('Feature refresh listener threw', $records);
+        $this->assertCount(1, $events, 'a broken listener must not stop the others');
+        $this->assertTrue($gb->isOn('my-feature'), 'the payload must still be applied');
+    }
 }

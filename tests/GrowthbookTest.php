@@ -109,6 +109,29 @@ final class InMemoryTestCache implements \Psr\SimpleCache\CacheInterface
     {
         return $this->get($key) !== null;
     }
+
+    /**
+     * @return array<int,string>
+     */
+    public function keys(): array
+    {
+        return array_keys($this->store);
+    }
+
+    /**
+     * Rewrite every cached payload so the SDK considers it expired, without touching the
+     * SDK-internal cache key format.
+     */
+    public function expirePayloads(): void
+    {
+        foreach ($this->store as $key => $entry) {
+            $decoded = is_string($entry['value']) ? json_decode($entry['value'], true) : null;
+            if (is_array($decoded) && array_key_exists('expiresAt', $decoded)) {
+                $decoded['expiresAt'] = time() - 10;
+                $this->set($key, (string) json_encode($decoded), 600);
+            }
+        }
+    }
 }
 
 final class GrowthbookTest extends TestCase
@@ -2361,17 +2384,22 @@ final class GrowthbookTest extends TestCase
     public function testRemoteEvalFailureBackoffSkipsRepeatedRequests(): void
     {
         $cache = new InMemoryTestCache();
-        $url = "https://proxy.example.com/api/eval/sdk-test";
-        // Seed a stale entry for this exact payload (no attributes, no url)
-        $gbForKey = new Growthbook(['remoteEval' => true, 'cache' => $cache, 'url' => '']);
-        $keyMethod = new \ReflectionMethod($gbForKey, 'getRemoteEvalCacheKey');
-        $payloadMethod = new \ReflectionMethod($gbForKey, 'buildRemoteEvalPayload');
-        $cacheKey = $keyMethod->invoke($gbForKey, $url, $payloadMethod->invoke($gbForKey));
-        $cache->set((string) $cacheKey, (string) json_encode([
-            'features' => ['my-feature' => ['defaultValue' => true]],
-            'savedGroups' => [],
-            'expiresAt' => time() - 10,
-        ]), 600);
+
+        // Populate the eval cache through the SDK itself, then age the entry, so the test never
+        // has to know how the remote-eval cache key is built
+        [$working, $workingFactory] = $this->makeCountingHttp(
+            (string) json_encode(['features' => ['my-feature' => ['defaultValue' => true]], 'savedGroups' => []]),
+            $okRequests
+        );
+        (new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $working,
+            'requestFactory' => $workingFactory,
+            'cache' => $cache,
+            'url' => '',
+        ]))->initialize('sdk-test', 'https://proxy.example.com');
+        $this->assertSame(1, $okRequests);
+        $cache->expirePayloads();
 
         [$client, $factory] = $this->makeCountingHttp(new \RuntimeException('proxy down'), $requests);
         $options = [

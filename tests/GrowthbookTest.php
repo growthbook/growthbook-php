@@ -2329,6 +2329,20 @@ final class GrowthbookTest extends TestCase
         $this->assertSame(2, $requests, 'the SDK must retry after the backoff expires');
     }
 
+    public function testFailedFetchWithoutCachedDataDoesNotArmTheBackoff(): void
+    {
+        // Nothing cached to fall back on: backing off would leave the SDK with no features at
+        // all, so it has to keep trying.
+        $cache = new InMemoryTestCache();
+        [$client, $factory] = $this->makeCountingHttp(new \RuntimeException('api down'), $requests);
+
+        $options = ['httpClient' => $client, 'requestFactory' => $factory, 'cache' => $cache];
+        (new Growthbook($options))->initialize('sdk-test');
+        (new Growthbook($options))->initialize('sdk-test');
+
+        $this->assertSame(2, $requests);
+    }
+
     public function testApiFailureBackoffCanBeDisabled(): void
     {
         $cache = new InMemoryTestCache();

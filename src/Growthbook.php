@@ -821,12 +821,17 @@ class Growthbook implements LoggerAwareInterface
     /**
      * Remember that a fetch failed, so the next requests serve the cached payload directly.
      *
-     * @param string $url
+     * Only recorded when there is a cached payload to fall back to: backing off without one
+     * would leave the SDK with no features at all for the length of the window, which is worse
+     * than paying the timeout again.
+     *
+     * @param string                   $url
+     * @param array<string,mixed>|null $cachedData
      * @return void
      */
-    private function recordFetchFailure(string $url): void
+    private function recordFetchFailure(string $url, ?array $cachedData): void
     {
-        if (!$this->cache || $this->apiFailureRetryDelay <= 0) {
+        if (!$this->cache || $this->apiFailureRetryDelay <= 0 || $cachedData === null) {
             return;
         }
         try {
@@ -2003,11 +2008,7 @@ class Growthbook implements LoggerAwareInterface
             $parsed = json_decode($body, true);
             if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
                 $this->log(LogLevel::WARNING, "Could not load features", ["url" => $url, "responseBody" => $body]);
-                // A 304 without a cached payload to refresh is odd but not an API failure -
-                // backing off there would stop us asking again for no reason.
-                if ($statusCode !== 304) {
-                    $this->recordFetchFailure($url);
-                }
+                $this->recordFetchFailure($url, $cachedData);
                 $this->initializePlugins();
                 return;
             }
@@ -2056,7 +2057,7 @@ class Growthbook implements LoggerAwareInterface
                 "error" => $e->getMessage(),
                 "errorClass" => get_class($e)
             ]);
-            $this->recordFetchFailure($url);
+            $this->recordFetchFailure($url, $cachedData);
             if ($cachedData !== null) {
                 $this->log(LogLevel::WARNING, "Using stale cache as fallback", ["url" => $url]);
                 if (array_key_exists("features", $cachedData) && is_array($cachedData['features'])) {
@@ -2289,7 +2290,7 @@ class Growthbook implements LoggerAwareInterface
 
             if ($statusCode >= 400) {
                 $this->log(LogLevel::WARNING, "Remote eval request failed", ["url" => $url, "statusCode" => $statusCode]);
-                $this->recordFetchFailure($url);
+                $this->recordFetchFailure($url, $cachedData);
                 if ($cachedData !== null) {
                     $this->applyRemoteEvalData($cachedData, "stale cache");
                 }
@@ -2300,7 +2301,7 @@ class Growthbook implements LoggerAwareInterface
             $parsed = json_decode($responseBody, true);
             if (!is_array($parsed) || !array_key_exists("features", $parsed)) {
                 $this->log(LogLevel::WARNING, "Could not load remote eval features", ["url" => $url, "responseBody" => $responseBody]);
-                $this->recordFetchFailure($url);
+                $this->recordFetchFailure($url, $cachedData);
                 if ($cachedData !== null) {
                     $this->applyRemoteEvalData($cachedData, "stale cache");
                 }
@@ -2329,7 +2330,7 @@ class Growthbook implements LoggerAwareInterface
                 "error" => $e->getMessage(),
                 "errorClass" => get_class($e),
             ]);
-            $this->recordFetchFailure($url);
+            $this->recordFetchFailure($url, $cachedData);
             if ($cachedData !== null) {
                 $this->log(LogLevel::WARNING, "Using stale cache as fallback", ["url" => $url]);
                 $this->applyRemoteEvalData($cachedData, "stale cache");

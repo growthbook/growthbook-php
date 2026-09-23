@@ -119,6 +119,22 @@ class Growthbook implements LoggerAwareInterface
     private $cacheKeyAttributes = null;
 
     /**
+     * Seconds to skip the API for after a failed fetch. 0 disables the backoff.
+     *
+     * @var int
+     */
+    private $apiFailureRetryDelay = 10;
+
+    /**
+     * Fraction of the cache TTL over which a cache entry may be revalidated early, to spread
+     * revalidation instead of having every concurrent request revalidate at the same instant.
+     * 0 disables early revalidation.
+     *
+     * @var float
+     */
+    private $cacheEarlyRevalidation = 0.1;
+
+    /**
      * @param array<string, mixed> $options
      * @return static
      * @phpstan-return static
@@ -130,7 +146,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[],clientKey?:string,remoteEval?:bool,cacheKeyAttributes?:array<string>} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[],clientKey?:string,remoteEval?:bool,cacheKeyAttributes?:array<string>,apiFailureRetryDelay?:int,cacheEarlyRevalidation?:float} $options
      */
     public function __construct(array $options = [])
     {
@@ -159,7 +175,9 @@ class Growthbook implements LoggerAwareInterface
             "clientKey",
             "etagCacheSize",
             "remoteEval",
-            "cacheKeyAttributes"
+            "cacheKeyAttributes",
+            "apiFailureRetryDelay",
+            "cacheEarlyRevalidation"
         ];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
@@ -214,6 +232,12 @@ class Growthbook implements LoggerAwareInterface
         }
         if (array_key_exists("cacheKeyAttributes", $options)) {
             $this->setCacheKeyAttributes($options["cacheKeyAttributes"]);
+        }
+        if (array_key_exists("apiFailureRetryDelay", $options)) {
+            $this->setApiFailureRetryDelay((int) $options["apiFailureRetryDelay"]);
+        }
+        if (array_key_exists("cacheEarlyRevalidation", $options)) {
+            $this->setCacheEarlyRevalidation((float) $options["cacheEarlyRevalidation"]);
         }
         if (array_key_exists("remoteEval", $options)) {
             $this->setRemoteEval($options["remoteEval"]);
@@ -697,6 +721,169 @@ class Growthbook implements LoggerAwareInterface
     public function getCacheKeyAttributes(): ?array
     {
         return $this->cacheKeyAttributes;
+    }
+
+    /**
+     * How long (in seconds) to stop calling the API after a failed fetch, while an expired cache
+     * entry is available to serve instead. Without it an outage costs every single request the
+     * full API timeout before it falls back to that same cached payload.
+     *
+     * Pass 0 to always retry. Requires a cache - with no cache there is nothing to fall back to,
+     * so the SDK always tries the API.
+     *
+     * @param int $seconds
+     * @return static
+     */
+    public function setApiFailureRetryDelay(int $seconds): static
+    {
+        $this->apiFailureRetryDelay = max(0, $seconds);
+
+        return $this;
+    }
+
+    /**
+     * @param int $seconds
+     * @return static
+     */
+    public function withApiFailureRetryDelay(int $seconds): static
+    {
+        $self = clone $this;
+        $self->setApiFailureRetryDelay($seconds);
+
+        return $self;
+    }
+
+    public function getApiFailureRetryDelay(): int
+    {
+        return $this->apiFailureRetryDelay;
+    }
+
+    /**
+     * Fraction (0-1) of the cache TTL during which a still-fresh entry may be revalidated early,
+     * with a probability that grows as it approaches expiry. This spreads revalidation over time
+     * instead of letting every request in flight at the moment of expiry hit the API at once.
+     *
+     * Pass 0 to only ever revalidate after expiry.
+     *
+     * @param float $fraction
+     * @return static
+     */
+    public function setCacheEarlyRevalidation(float $fraction): static
+    {
+        $this->cacheEarlyRevalidation = max(0.0, min(1.0, $fraction));
+
+        return $this;
+    }
+
+    /**
+     * @param float $fraction
+     * @return static
+     */
+    public function withCacheEarlyRevalidation(float $fraction): static
+    {
+        $self = clone $this;
+        $self->setCacheEarlyRevalidation($fraction);
+
+        return $self;
+    }
+
+    public function getCacheEarlyRevalidation(): float
+    {
+        return $this->cacheEarlyRevalidation;
+    }
+
+    /**
+     * Cache key holding the "a fetch for this endpoint just failed" marker. Derived from the
+     * endpoint rather than from the payload cache key, so in remote evaluation mode - where every
+     * user has their own cache entry - one user's failure spares all the others the timeout too.
+     *
+     * @param string $url
+     * @return string
+     */
+    private function fetchFailureKey(string $url): string
+    {
+        return md5($url . '||fetch-failure-v1');
+    }
+
+    /**
+     * @param string $url
+     * @return bool
+     */
+    private function isInFetchFailureBackoff(string $url): bool
+    {
+        if (!$this->cache || $this->apiFailureRetryDelay <= 0) {
+            return false;
+        }
+
+        return (bool) $this->cache->get($this->fetchFailureKey($url));
+    }
+
+    /**
+     * Remember that a fetch failed, so the next requests serve the cached payload directly.
+     *
+     * @param string $url
+     * @return void
+     */
+    private function recordFetchFailure(string $url): void
+    {
+        if (!$this->cache || $this->apiFailureRetryDelay <= 0) {
+            return;
+        }
+        try {
+            $this->cache->set($this->fetchFailureKey($url), (string) time(), $this->apiFailureRetryDelay);
+        } catch (\Throwable $e) {
+            // A cache that cannot record the failure just means the next request retries
+            $this->log(LogLevel::DEBUG, "Could not record fetch failure", ["error" => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * @param string $url
+     * @return void
+     */
+    private function clearFetchFailure(string $url): void
+    {
+        // Deliberately not gated on apiFailureRetryDelay: an instance with the backoff turned off
+        // still knows the endpoint is healthy again, and other instances sharing this cache are
+        // waiting on exactly that marker.
+        if (!$this->cache) {
+            return;
+        }
+        try {
+            $this->cache->delete($this->fetchFailureKey($url));
+        } catch (\Throwable $e) {
+            $this->log(LogLevel::DEBUG, "Could not clear fetch failure", ["error" => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Decide whether a still-fresh cache entry should be revalidated anyway. The probability is 0
+     * until the entry enters the last [cacheEarlyRevalidation] of its TTL and then grows linearly
+     * to 1 at expiry, so entries get refreshed at staggered times and no burst of requests finds
+     * the same entry expired at once.
+     *
+     * @param int $expiresAt
+     * @return bool
+     */
+    private function shouldRevalidateEarly(int $expiresAt): bool
+    {
+        if ($this->cacheEarlyRevalidation <= 0) {
+            return false;
+        }
+
+        $window = (int) round($this->cacheTTL * $this->cacheEarlyRevalidation);
+        if ($window < 1) {
+            return false;
+        }
+
+        $remaining = $expiresAt - time();
+        if ($remaining > $window) {
+            return false;
+        }
+
+        // random_int is inclusive on both ends, hence the -1: remaining == $window gives
+        // probability 0, remaining <= 0 gives probability 1.
+        return random_int(0, $window - 1) >= $remaining;
     }
 
     /**
@@ -1727,6 +1914,12 @@ class Growthbook implements LoggerAwareInterface
                 $decoded = json_decode($cachedResponse, true);
                 if (is_array($decoded)) {
                     $isFresh = isset($decoded['expiresAt']) && $decoded['expiresAt'] > time();
+                    if ($isFresh && $this->shouldRevalidateEarly((int) $decoded['expiresAt'])) {
+                        // Still fresh, but close enough to expiry that this request takes the
+                        // refresh on itself - see shouldRevalidateEarly()
+                        $this->log(LogLevel::DEBUG, "Revalidating cached features early", ["url" => $url]);
+                        $isFresh = false;
+                    }
                     if ($isFresh) {
                         if (array_key_exists("features", $decoded) && is_array($decoded['features'])) {
                             $this->log(LogLevel::INFO, "Load features from cache", ["url" => $url, "numFeatures" => count($decoded['features'])]);
@@ -1742,6 +1935,18 @@ class Growthbook implements LoggerAwareInterface
                     $cachedData = $decoded;
                 }
             }
+        }
+
+        if ($cachedData !== null && $this->isInFetchFailureBackoff($url)) {
+            $this->log(LogLevel::INFO, "Skipping API after a recent failure, using cached features", ["url" => $url]);
+            if (array_key_exists("features", $cachedData) && is_array($cachedData['features'])) {
+                $this->setFeatures($cachedData['features']);
+            }
+            if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
+                $this->setSavedGroups($cachedData['savedGroups']);
+            }
+            $this->initializePlugins();
+            return;
         }
 
         if (!$this->httpClient || !$this->requestFactory) {
@@ -1798,6 +2003,11 @@ class Growthbook implements LoggerAwareInterface
             $parsed = json_decode($body, true);
             if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
                 $this->log(LogLevel::WARNING, "Could not load features", ["url" => $url, "responseBody" => $body]);
+                // A 304 without a cached payload to refresh is odd but not an API failure -
+                // backing off there would stop us asking again for no reason.
+                if ($statusCode !== 304) {
+                    $this->recordFetchFailure($url);
+                }
                 $this->initializePlugins();
                 return;
             }
@@ -1824,6 +2034,7 @@ class Growthbook implements LoggerAwareInterface
             $this->log(LogLevel::INFO, "Load features and saved groups from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
             $this->setFeatures($features);
             $this->setSavedGroups($savedGroups);
+            $this->clearFetchFailure($url);
 
             if ($this->cache) {
                 $cacheData = [
@@ -1845,6 +2056,7 @@ class Growthbook implements LoggerAwareInterface
                 "error" => $e->getMessage(),
                 "errorClass" => get_class($e)
             ]);
+            $this->recordFetchFailure($url);
             if ($cachedData !== null) {
                 $this->log(LogLevel::WARNING, "Using stale cache as fallback", ["url" => $url]);
                 if (array_key_exists("features", $cachedData) && is_array($cachedData['features'])) {
@@ -2021,6 +2233,10 @@ class Growthbook implements LoggerAwareInterface
                 $decoded = json_decode($cachedResponse, true);
                 if (is_array($decoded)) {
                     $isFresh = isset($decoded['expiresAt']) && $decoded['expiresAt'] > time();
+                    if ($isFresh && $this->shouldRevalidateEarly((int) $decoded['expiresAt'])) {
+                        $this->log(LogLevel::DEBUG, "Revalidating cached remote eval features early", ["url" => $url]);
+                        $isFresh = false;
+                    }
                     if ($isFresh) {
                         $this->applyRemoteEvalData($decoded, "cache");
                         return;
@@ -2028,6 +2244,12 @@ class Growthbook implements LoggerAwareInterface
                     $cachedData = $decoded;
                 }
             }
+        }
+
+        if ($cachedData !== null && $this->isInFetchFailureBackoff($url)) {
+            $this->log(LogLevel::INFO, "Skipping remote eval after a recent failure, using cached features", ["url" => $url]);
+            $this->applyRemoteEvalData($cachedData, "cache");
+            return;
         }
 
         if (!$this->httpClient || !$this->requestFactory) {
@@ -2067,6 +2289,7 @@ class Growthbook implements LoggerAwareInterface
 
             if ($statusCode >= 400) {
                 $this->log(LogLevel::WARNING, "Remote eval request failed", ["url" => $url, "statusCode" => $statusCode]);
+                $this->recordFetchFailure($url);
                 if ($cachedData !== null) {
                     $this->applyRemoteEvalData($cachedData, "stale cache");
                 }
@@ -2077,6 +2300,7 @@ class Growthbook implements LoggerAwareInterface
             $parsed = json_decode($responseBody, true);
             if (!is_array($parsed) || !array_key_exists("features", $parsed)) {
                 $this->log(LogLevel::WARNING, "Could not load remote eval features", ["url" => $url, "responseBody" => $responseBody]);
+                $this->recordFetchFailure($url);
                 if ($cachedData !== null) {
                     $this->applyRemoteEvalData($cachedData, "stale cache");
                 }
@@ -2089,6 +2313,7 @@ class Growthbook implements LoggerAwareInterface
             $this->log(LogLevel::INFO, "Load remote eval features from URL", ["url" => $url, "numFeatures" => count($features), "numGroups" => count($savedGroups)]);
             $this->setFeatures($features);
             $this->setSavedGroups($savedGroups);
+            $this->clearFetchFailure($url);
 
             if ($this->cache) {
                 $cacheData = [
@@ -2104,6 +2329,7 @@ class Growthbook implements LoggerAwareInterface
                 "error" => $e->getMessage(),
                 "errorClass" => get_class($e),
             ]);
+            $this->recordFetchFailure($url);
             if ($cachedData !== null) {
                 $this->log(LogLevel::WARNING, "Using stale cache as fallback", ["url" => $url]);
                 $this->applyRemoteEvalData($cachedData, "stale cache");

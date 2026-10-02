@@ -89,6 +89,14 @@ class Growthbook implements LoggerAwareInterface
     /** @var array<string,ViewedExperiment> */
     private $tracks = [];
 
+    /**
+     * Exposures recorded while no tracking callback was set, keyed the same way as [tracks].
+     * They are handed to the callback the moment one is installed - see setTrackingCallback().
+     *
+     * @var array<string,ViewedExperiment>
+     */
+    private $deferredTracks = [];
+
     /** @var StickyBucketService|null */
     private $stickyBucketService = null;
 
@@ -292,6 +300,7 @@ class Growthbook implements LoggerAwareInterface
     public function setTrackingCallback($trackingCallback): static
     {
         $this->trackingCallback = $trackingCallback;
+        $this->fireDeferredTrackingCalls();
 
         return $this;
     }
@@ -1258,21 +1267,9 @@ class Growthbook implements LoggerAwareInterface
         if (isset($this->tracks[$dedupeKey])) {
             return $result;
         }
-        $this->tracks[$dedupeKey] = new ViewedExperiment($exp, $result);
-        if ($this->trackingCallback) {
-            try {
-                call_user_func($this->trackingCallback, $exp, $result);
-            } catch (\Throwable $e) {
-                if ($this->logger) {
-                    $this->log(LogLevel::ERROR, "Error calling the trackingCallback function", [
-                        "experiment" => $exp->key,
-                        "error" => $e
-                    ]);
-                } else {
-                    throw $e;
-                }
-            }
-        }
+        $viewed = new ViewedExperiment($exp, $result);
+        $this->tracks[$dedupeKey] = $viewed;
+        $this->trackExposure($dedupeKey, $viewed);
         $this->pluginRegistry->onExperimentViewed($exp, $result, $this->attributes);
 
         // 15. Return the result
@@ -1281,6 +1278,74 @@ class Growthbook implements LoggerAwareInterface
             "variation" => $assigned
         ]);
         return $result;
+    }
+
+    /**
+     * Hand an exposure to the tracking callback, or hold on to it until one is set.
+     *
+     * Without this, an exposure evaluated before the callback was wired would be lost for good:
+     * it is already in [tracks], and that same entry is what deduplicates later evaluations, so
+     * re-evaluating the feature would never reach the callback either.
+     *
+     * @param string         $dedupeKey
+     * @param ViewedExperiment $viewed
+     * @return void
+     */
+    private function trackExposure(string $dedupeKey, ViewedExperiment $viewed): void
+    {
+        if (!$this->trackingCallback) {
+            $this->deferredTracks[$dedupeKey] = $viewed;
+            return;
+        }
+
+        $this->callTrackingCallback($viewed);
+    }
+
+    /**
+     * Deliver the exposures that were recorded before a tracking callback existed, once each.
+     * Mirrors the reference TypeScript SDK, which flushes its deferred tracking calls when a
+     * callback is installed.
+     *
+     * @return void
+     */
+    private function fireDeferredTrackingCalls(): void
+    {
+        if (!$this->trackingCallback || !$this->deferredTracks) {
+            return;
+        }
+
+        // Cleared before firing so a callback that evaluates features (or sets another callback)
+        // cannot see the same exposure a second time.
+        $deferred = $this->deferredTracks;
+        $this->deferredTracks = [];
+
+        foreach ($deferred as $viewed) {
+            $this->callTrackingCallback($viewed);
+        }
+    }
+
+    /**
+     * @param ViewedExperiment $viewed
+     * @return void
+     */
+    private function callTrackingCallback(ViewedExperiment $viewed): void
+    {
+        if (!$this->trackingCallback) {
+            return;
+        }
+
+        try {
+            call_user_func($this->trackingCallback, $viewed->experiment, $viewed->result);
+        } catch (\Throwable $e) {
+            if ($this->logger) {
+                $this->log(LogLevel::ERROR, "Error calling the trackingCallback function", [
+                    "experiment" => $viewed->experiment->key,
+                    "error" => $e
+                ]);
+            } else {
+                throw $e;
+            }
+        }
     }
 
     /**
@@ -1416,22 +1481,9 @@ class Growthbook implements LoggerAwareInterface
             if (isset($this->tracks[$dedupeKey])) {
                 continue;
             }
-            $this->tracks[$dedupeKey] = new ViewedExperiment($exp, $result);
-
-            if ($this->trackingCallback) {
-                try {
-                    call_user_func($this->trackingCallback, $exp, $result);
-                } catch (\Throwable $e) {
-                    if ($this->logger) {
-                        $this->log(LogLevel::ERROR, "Error calling the trackingCallback function", [
-                            "experiment" => $exp->key,
-                            "error" => $e
-                        ]);
-                    } else {
-                        throw $e;
-                    }
-                }
-            }
+            $viewed = new ViewedExperiment($exp, $result);
+            $this->tracks[$dedupeKey] = $viewed;
+            $this->trackExposure($dedupeKey, $viewed);
             $this->pluginRegistry->onExperimentViewed($exp, $result, $this->attributes);
         }
     }

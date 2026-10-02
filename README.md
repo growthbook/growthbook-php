@@ -327,6 +327,14 @@ $growthbook = new Growthbook([
 $trackingCallback = $growthbook->getTrackingCallback();
 ```
 
+The callback can also be wired after the instance already exists - useful when a framework container builds the instance before the analytics sink is available:
+
+```php
+$growthbook->setTrackingCallback($callback);
+```
+
+Experiments evaluated before that point are not lost: they are held and handed to the callback the moment it is set, once each. (`getViewedExperiments()` keeps listing every experiment seen during the request regardless, so the end-of-request loop above works either way.)
+
 ### Tracking Feature Usage
 
 You can also track every time a feature is evaluated using `featureUsageCallback`. Unlike `trackingCallback`, this fires for all feature evaluations — not just experiments.

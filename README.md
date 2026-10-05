@@ -509,11 +509,13 @@ Bandit rules carry their variations under `contextualVariations` rather than `va
 
 For a real exposure (the user was hash-bucketed into the experiment) the `experimentResult` reports which segment produced the weights:
 
-- **leafId** - The matched leaf, or `-1` when the definition was found but no leaf matched
+- **leafId** - The matched leaf, or `-1` when the definition was found but no leaf matched (or the matched leaf's weights were invalid for the experiment)
 - **variationWeights** - The weights actually applied to this user
 - **banditVersion** - Version of the backend-computed weights, when the definition carries one
 
-Forced variations, QA mode and users filtered out of the experiment report none of these fields. If `contextualBanditRef` points at a definition that is not in the payload, the rule runs with its own (marginal) weights and reports no bandit metadata.
+Forced variations, QA mode and users filtered out of the experiment report none of these fields. If `contextualBanditRef` points at a definition that is not in the payload, the rule runs with its own (marginal) weights and reports no bandit metadata. A rule with explicit `ranges` is bucketed on those ranges and reports no bandit metadata either, as no leaf's weights describe that assignment.
+
+With sticky bucketing enabled, a returning user keeps the variation they were first assigned, but the result reports the *current* leaf's `variationWeights` and `banditVersion`, which may differ from the weights in force when they were bucketed. This matches the reference SDK. Such exposures have `stickyBucketUsed` set to `true` - filter them out before treating `variationWeights` as assignment probabilities.
 
 ## Sticky Bucketing
 

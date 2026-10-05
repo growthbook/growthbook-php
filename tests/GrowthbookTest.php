@@ -2336,6 +2336,137 @@ final class GrowthbookTest extends TestCase
         $this->assertSame([0.5, 0.5], $result->variationWeights);
     }
 
+    public function testContextualBanditRuleWithExplicitRangesBucketsOnRanges(): void
+    {
+        // Explicit ranges win over weights in the bucketer, so the leaf's [1, 0] weights
+        // cannot describe the assignment - users split on the ranges and no metadata is reported.
+        $features = $this->banditFeatures();
+        $features['bandit-feature']['rules'][0]['ranges'] = [[0, 0.5], [0.5, 1]];
+
+        $values = [];
+        for ($i = 0; $i < 50; $i++) {
+            $gb = Growthbook::create()
+                ->withFeatures($features)
+                ->withContextualBandits($this->banditDefinitions())
+                ->withAttributes(['id' => 'user-' . $i, 'plan' => 'enterprise']);
+
+            $feature = $gb->getFeature('bandit-feature');
+            $values[$feature->value] = true;
+
+            $result = $feature->experimentResult;
+            $this->assertNotNull($result);
+            assert($result !== null);
+            $this->assertNull($result->leafId);
+            $this->assertNull($result->variationWeights);
+            $this->assertNull($result->banditVersion);
+        }
+
+        $this->assertArrayHasKey('control', $values);
+        $this->assertArrayHasKey('treatment', $values);
+    }
+
+    public function testContextualBanditLeafWithWrongWeightCountUsesFallback(): void
+    {
+        // getBucketRanges replaces a wrong-length vector with equal weights, so the leaf's
+        // weights must not be reported as the ones that bucketed the user.
+        $gb = Growthbook::create()
+            ->withFeatures($this->banditFeatures())
+            ->withContextualBandits([
+                'cb-bandit' => [
+                    'banditVersion' => 7,
+                    'contexts' => [
+                        ['leafId' => 5, 'condition' => [], 'weights' => [0.2, 0.2, 0.6]],
+                    ],
+                ],
+            ])
+            ->withAttributes(['id' => 'user-1']);
+
+        $result = $gb->getFeature('bandit-feature')->experimentResult;
+        $this->assertNotNull($result);
+        assert($result !== null);
+        $this->assertSame(-1, $result->leafId);
+        $this->assertSame([0.5, 0.5], $result->variationWeights);
+    }
+
+    public function testContextualBanditFallbackReportsEqualWeightsForInvalidRuleWeights(): void
+    {
+        // No leaf matches and the rule's own weights do not sum to 1, so the bucketer uses
+        // equal weights - and those are the weights the fallback must report.
+        $features = $this->banditFeatures();
+        $features['bandit-feature']['rules'][0]['weights'] = [0.9, 0.9];
+
+        $gb = Growthbook::create()
+            ->withFeatures($features)
+            ->withContextualBandits([
+                'cb-bandit' => [
+                    'banditVersion' => 7,
+                    'contexts' => [
+                        ['leafId' => 1, 'condition' => ['plan' => 'enterprise'], 'weights' => [1, 0]],
+                    ],
+                ],
+            ])
+            ->withAttributes(['id' => 'user-1', 'plan' => 'free']);
+
+        $result = $gb->getFeature('bandit-feature')->experimentResult;
+        $this->assertNotNull($result);
+        assert($result !== null);
+        $this->assertSame(-1, $result->leafId);
+        $this->assertSame([0.5, 0.5], $result->variationWeights);
+    }
+
+    public function testRemoteEvalRuleTracksKeepContextualBanditMetadata(): void
+    {
+        $response = (string) json_encode([
+            'features' => [
+                'bandit-feature' => [
+                    'defaultValue' => 'default',
+                    'rules' => [[
+                        'force' => 'treatment',
+                        'tracks' => [[
+                            'experiment' => ['key' => 'bandit-exp', 'variations' => ['control', 'treatment']],
+                            'result' => [
+                                'variationId' => 1,
+                                'inExperiment' => true,
+                                'value' => 'treatment',
+                                'hashUsed' => true,
+                                'hashAttribute' => 'id',
+                                'hashValue' => 'u1',
+                                'featureId' => 'bandit-feature',
+                                'key' => '1',
+                                'leafId' => 3,
+                                'variationWeights' => [0, 1],
+                                'banditVersion' => 7,
+                            ],
+                        ]],
+                    ]],
+                ],
+            ],
+            'savedGroups' => [],
+        ]);
+
+        [$client, $factory] = $this->makeRemoteEvalHttp($response, 200, $captured);
+
+        $tracked = [];
+        $gb = new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'attributes' => ['id' => 'u1'],
+            'trackingCallback' => function ($exp, $result) use (&$tracked) {
+                $tracked[] = $result;
+            },
+        ]);
+        $gb->initialize('sdk-test', 'https://proxy.example.com');
+
+        $this->assertSame('treatment', $gb->getValue('bandit-feature', 'default'));
+
+        $this->assertCount(1, $tracked);
+        $this->assertSame(3, $tracked[0]->leafId);
+        // JSON integers are normalised to the float[] the field declares
+        $this->assertSame([0.0, 1.0], $tracked[0]->variationWeights);
+        $this->assertSame(7, $tracked[0]->banditVersion);
+    }
+
     public function testEncryptedContextualBanditsAreDecrypted(): void
     {
         $key = 'Zvwv/+uhpFDznZ6SX28Yjg==';

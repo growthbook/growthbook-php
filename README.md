@@ -184,6 +184,19 @@ $savedGroups = json_decode($savedGroupsJSON, true);
 $growthbook = $growthbook->withSavedGroups($savedGroups);
 ```
 
+The SDK reads both saved group formats an SDK Connection can send by reference. The older one is a bare list of values per group, used by `$inGroup` / `$notInGroup`. The newer one (`savedGroupReferencesV2`) has a typed entry per group, used by `$savedGroup`:
+
+```php
+$savedGroups = [
+  // ID list: the attribute to check and its values
+  'grp_beta' => ['type' => 'list', 'attributeKey' => 'id', 'values' => ['u_1', 'u_2']],
+  // Condition group: a full targeting condition, which may reference other groups
+  'grp_pro' => ['type' => 'condition', 'condition' => ['plan' => 'pro']],
+];
+```
+
+A saved group the SDK cannot read (an unknown type, a missing or malformed entry, or a group that references itself) matches nobody rather than throwing.
+
 ## Remote Evaluation
 
 With remote evaluation, feature flags are evaluated on a self-hosted GrowthBook proxy/edge instead of locally in the SDK. Instead of downloading the full feature definitions, the SDK sends the current evaluation context (attributes, forced variations, forced features and URL) to the proxy via a `POST` request, and the proxy returns only the already-evaluated features. This keeps feature definitions and targeting logic off the client.

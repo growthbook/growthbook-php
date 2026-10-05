@@ -30,10 +30,14 @@ final class GrowthbookTest extends TestCase
             $this->cases = json_decode($cases, true);
         }
 
-        if (!array_key_exists($section, $this->cases)) {
-            throw new \Exception("Unknown test case: $section");
+        // A dotted section reaches a nested group, e.g. "savedGroupReferencesV2.evalCondition"
+        $raw = $this->cases;
+        foreach (explode('.', $section) as $part) {
+            if (!is_array($raw) || !array_key_exists($part, $raw)) {
+                throw new \Exception("Unknown test case: $section");
+            }
+            $raw = $raw[$part];
         }
-        $raw = $this->cases[$section];
         if (!$this->arrayIsList($raw)) {
             return $raw;
         }
@@ -401,6 +405,67 @@ final class GrowthbookTest extends TestCase
     public function contextualBanditProvider(): array
     {
         return $this->getCases("contextualBandit");
+    }
+
+    /**
+     * Shared spec cases for saved group references v2 ($savedGroup and typed savedGroups
+     * entries). They live under their own key so SDKs without v2 support skip them; each
+     * group has the same shape as the top-level section of the same name.
+     *
+     * @dataProvider savedGroupReferencesV2ConditionProvider
+     * @param array<string,mixed> $condition
+     * @param array<string,mixed> $attributes
+     * @param array<string,mixed> $savedGroups
+     */
+    public function testSavedGroupReferencesV2Condition(array $condition, array $attributes, bool $expected, array $savedGroups = []): void
+    {
+        $this->testEvalCondition($condition, $attributes, $expected, $savedGroups);
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function savedGroupReferencesV2ConditionProvider(): array
+    {
+        return $this->getCases("savedGroupReferencesV2.evalCondition");
+    }
+
+    /**
+     * @dataProvider savedGroupReferencesV2FeatureProvider
+     * @param array<string,mixed> $ctx
+     * @param string $key
+     * @param array<string,mixed> $expected
+     */
+    public function testSavedGroupReferencesV2Feature(array $ctx, string $key, array $expected): void
+    {
+        $this->testFeature($ctx, $key, $expected);
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function savedGroupReferencesV2FeatureProvider(): array
+    {
+        return $this->getCases("savedGroupReferencesV2.feature");
+    }
+
+    /**
+     * @dataProvider savedGroupReferencesV2RunProvider
+     * @param array<string,mixed> $ctx
+     * @param array<string,mixed> $exp
+     * @param mixed $expectedValue
+     */
+    public function testSavedGroupReferencesV2Run(array $ctx, array $exp, $expectedValue, bool $inExperiment, bool $hashUsed): void
+    {
+        $this->testRun($ctx, $exp, $expectedValue, $inExperiment, $hashUsed);
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function savedGroupReferencesV2RunProvider(): array
+    {
+        return $this->getCases("savedGroupReferencesV2.run");
     }
 
 

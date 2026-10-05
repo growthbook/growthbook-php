@@ -2,6 +2,11 @@
 
 namespace Growthbook;
 
+/**
+ * Evaluates targeting conditions. Semantics follow the reference JS SDK (mongrule.ts),
+ * including its JavaScript type coercion, so the js*() helpers below reproduce how
+ * JavaScript converts values to strings, numbers and booleans.
+ */
 class Condition
 {
     /**
@@ -84,17 +89,33 @@ class Condition
     }
 
     /**
-     * @param array<string,mixed> $obj
+     * Only a non-empty object whose keys all start with "$" is an operator object
+     *
+     * @param array<mixed> $obj
      * @return bool
      */
     private static function isOperatorObject(array $obj): bool
     {
+        if (!$obj) {
+            return false;
+        }
         foreach ($obj as $key => $value) {
-            if (!is_string($key) || $key[0] !== '$') {
+            if (!is_string($key) || $key === '' || $key[0] !== '$') {
                 return false;
             }
         }
         return true;
+    }
+
+    /**
+     * A decoded JSON array (as opposed to a decoded JSON object)
+     *
+     * @param mixed $value
+     * @return bool
+     */
+    private static function isList($value): bool
+    {
+        return is_array($value) && ($value === [] || array_keys($value) === range(0, count($value) - 1));
     }
 
     /**
@@ -107,10 +128,7 @@ class Condition
             return 'string';
         }
         if (is_array($attributeValue)) {
-            if ($attributeValue === [] || (array_keys($attributeValue) === range(0, count($attributeValue) - 1))) {
-                return "array";
-            }
-            return "object";
+            return static::isList($attributeValue) ? "array" : "object";
         }
         if (is_object($attributeValue)) {
             return "object";
@@ -153,124 +171,154 @@ class Condition
      */
     private static function evalConditionValue($conditionValue, $attributeValue, array $savedGroups, bool $insensitive = false): bool
     {
+        // Primitive conditions convert the attribute to the condition's type first, like JS
+        // `value + "" === condition`, `value * 1 === condition` and `!!value === condition`
+        if (is_string($conditionValue)) {
+            if ($insensitive) {
+                return strcasecmp(static::jsString($attributeValue), $conditionValue) === 0;
+            }
+            return static::jsString($attributeValue) === $conditionValue;
+        }
+        if (is_int($conditionValue) || is_float($conditionValue)) {
+            return static::jsNumber($attributeValue) === (float) $conditionValue;
+        }
+        if (is_bool($conditionValue)) {
+            return $attributeValue !== null && static::jsTruthy($attributeValue) === $conditionValue;
+        }
         if ($conditionValue === null) {
             return $attributeValue === null;
         }
-        // Simple equality comparison with optional case-insensitivity
-        if ($insensitive && is_string($conditionValue) && is_string($attributeValue)) {
-            return strcasecmp($conditionValue, $attributeValue) === 0;
-        }
 
-        $type = static::getType($conditionValue);
-
-        switch ($type) {
-            case 'string':
-            case 'number':
-            case 'boolean':
-                return static::isMatchingPrimitive($conditionValue, $attributeValue);
-            case 'array':
-                return is_array($attributeValue) && static::toJson($conditionValue) === static::toJson($attributeValue);
-            case 'object':
-                if (static::isOperatorObject($conditionValue)) {
-                    foreach ($conditionValue as $key => $value) {
-                        if (!static::evalOperatorCondition($key, $attributeValue, $value, $savedGroups)) {
-                            return false;
-                        }
-                    }
-                    return true;
+        if (is_array($conditionValue) && static::isOperatorObject($conditionValue)) {
+            foreach ($conditionValue as $key => $value) {
+                if (!static::evalOperatorCondition($key, $attributeValue, $value, $savedGroups)) {
+                    return false;
                 }
-                return is_array($attributeValue) && static::toJson($conditionValue) === static::toJson($attributeValue);
-
-            case 'null':
-                return $attributeValue === null;
-            default:
-                return strval($conditionValue) === strval($attributeValue);
+            }
+            return true;
         }
+
+        // Arrays and plain objects are compared by their JSON serialization
+        return static::toJson($conditionValue) === static::toJson($attributeValue);
     }
 
     /**
-     * @param array<string,mixed> $condition
+     * @param mixed $condition
      * @param mixed $attributeValue
      * @param array<string,mixed> $savedGroups
      * @return bool
      */
-    private static function elemMatch(array $condition, $attributeValue, array $savedGroups): bool
+    private static function elemMatch($condition, $attributeValue, array $savedGroups): bool
     {
-        if (!is_array($attributeValue)) {
+        if (!static::isList($attributeValue) || !is_array($condition)) {
             return false;
         }
 
+        $isOperatorObject = static::isOperatorObject($condition);
         foreach ($attributeValue as $item) {
-            if (static::isOperatorObject($condition)) {
+            // Only null elements are skipped; falsy values like 0, "" and false are still tested
+            if ($item === null) {
+                continue;
+            }
+            if ($isOperatorObject) {
                 if (static::evalConditionValue($condition, $item, $savedGroups)) {
                     return true;
                 }
-            } elseif (static::evalCondition($item, $condition, $savedGroups)) {
+                // A scalar element has no properties, so every path into it resolves to null
+            } elseif (static::evalCondition(is_array($item) ? $item : [], $condition, $savedGroups)) {
                 return true;
             }
         }
         return false;
     }
 
-
     /**
+     * Compares two values like the JS relational operators: two strings compare as text,
+     * anything else as numbers. Returns null when a number is NaN, which fails every
+     * comparison.
+     *
      * @param mixed $val1
      * @param mixed $val2
-     * @return int
+     * @return int|null
      */
-    private static function compare($val1, $val2): int
+    private static function compare($val1, $val2): ?int
     {
-        if (is_bool($val1) || is_bool($val2)) {
-            return $val1 !== null && $val2 !== null && !!$val1 === !!$val2 ? 0 : 1;
+        $val1 = static::jsToPrimitive($val1);
+        $val2 = static::jsToPrimitive($val2);
+
+        if (is_string($val1) && is_string($val2)) {
+            return strcmp($val1, $val2) <=> 0;
         }
 
-        if ((is_int($val1) || is_float($val1)) && !(is_int($val2) || is_float($val2))) {
-            if ($val2 === null) {
-                $val2 = 0;
-            } else {
-                $val2 = (float) $val2;
-            }
+        $num1 = static::jsNumber($val1);
+        $num2 = static::jsNumber($val2);
+        if (is_nan($num1) || is_nan($num2)) {
+            return null;
         }
+        return $num1 <=> $num2;
+    }
 
-        if ((is_int($val2) || is_float($val2)) && !(is_int($val1) || is_float($val1))) {
-            if ($val1 === null) {
-                $val1 = 0;
-            } else {
-                $val1 = (float) $val1;
-            }
+    /**
+     * Strict equality like JS `===`. Arrays and objects are compared by reference in JS,
+     * and two separately decoded values are never the same reference.
+     *
+     * @param mixed $val1
+     * @param mixed $val2
+     * @return bool
+     */
+    private static function isStrictEqual($val1, $val2): bool
+    {
+        if (is_array($val1) || is_array($val2) || is_object($val1) || is_object($val2)) {
+            return false;
         }
+        if ((is_int($val1) || is_float($val1)) && (is_int($val2) || is_float($val2))) {
+            return (float) $val1 === (float) $val2;
+        }
+        return $val1 === $val2;
+    }
 
-        if ($val1 > $val2) {
-            return 1;
+    /**
+     * Membership test like JS `Array.prototype.includes`: strict, except that int and
+     * float are the same number type and NaN matches NaN.
+     *
+     * @param mixed $val1
+     * @param mixed $val2
+     * @return bool
+     */
+    private static function isSameValueZero($val1, $val2): bool
+    {
+        if (is_float($val1) && is_float($val2) && is_nan($val1) && is_nan($val2)) {
+            return true;
         }
-        if ($val1 < $val2) {
-            return -1;
-        }
-        return 0;
+        return static::isStrictEqual($val1, $val2);
     }
 
     /**
      * @param string $operator
      * @param mixed $attributeValue
      * @param mixed $conditionValue
-     * @param mixed $savedGroups
+     * @param array<string,mixed> $savedGroups
      * @return bool
      */
-    private static function evalOperatorCondition(string $operator, $attributeValue, $conditionValue, $savedGroups): bool
+    private static function evalOperatorCondition(string $operator, $attributeValue, $conditionValue, array $savedGroups): bool
     {
         switch ($operator) {
             case '$eq':
-                return static::compare($attributeValue, $conditionValue) === 0;
+                return static::isStrictEqual($attributeValue, $conditionValue);
             case '$ne':
-                return static::compare($attributeValue, $conditionValue) !== 0;
+                return !static::isStrictEqual($attributeValue, $conditionValue);
             case '$lt':
-                return static::compare($attributeValue, $conditionValue) < 0;
+                $result = static::compare($attributeValue, $conditionValue);
+                return $result !== null && $result < 0;
             case '$lte':
-                return static::compare($attributeValue, $conditionValue) <= 0;
+                $result = static::compare($attributeValue, $conditionValue);
+                return $result !== null && $result <= 0;
             case '$gt':
-                return static::compare($attributeValue, $conditionValue) > 0;
+                $result = static::compare($attributeValue, $conditionValue);
+                return $result !== null && $result > 0;
             case '$gte':
-                return static::compare($attributeValue, $conditionValue) >= 0;
+                $result = static::compare($attributeValue, $conditionValue);
+                return $result !== null && $result >= 0;
             case '$veq':
                 return static::parseVersionString($attributeValue) === static::parseVersionString($conditionValue);
             case '$vne':
@@ -288,64 +336,52 @@ class Condition
             case '$regexi':
                 return static::regexMatch($conditionValue, $attributeValue, true) === 1;
             case '$in':
-                if (!is_array($conditionValue)) {
+                if (!static::isList($conditionValue)) {
                     return false;
                 }
                 return static::isIn($attributeValue, $conditionValue, false);
             case '$ini':
-                if (!is_array($conditionValue)) {
+                if (!static::isList($conditionValue)) {
                     return false;
                 }
                 return static::isIn($attributeValue, $conditionValue, true);
             case '$nin':
-                if (!is_array($conditionValue)) {
+                if (!static::isList($conditionValue)) {
                     return false;
                 }
                 return !static::isIn($attributeValue, $conditionValue, false);
             case '$nini':
-                if (!is_array($conditionValue)) {
+                if (!static::isList($conditionValue)) {
                     return false;
                 }
                 return !static::isIn($attributeValue, $conditionValue, true);
             case '$inGroup':
-                if (!array_key_exists($conditionValue, $savedGroups)) {
-                    return false;
-                }
-                if (!is_array($attributeValue)) {
-                    $attributeValue = [$attributeValue];
-                }
-                return array_uintersect($attributeValue, $savedGroups[$conditionValue], function ($a, $b) {
-                    return $a === $b ? 0 : 1;
-                }) !== [];
+                $values = static::getSavedGroupValues($conditionValue, $savedGroups);
+                return $values !== null && static::isIn($attributeValue, $values);
             case '$notInGroup':
-                if (!array_key_exists($conditionValue, $savedGroups)) {
-                    return true;
-                }
-                if (!is_array($attributeValue)) {
-                    $attributeValue = [$attributeValue];
-                }
-                return array_uintersect($attributeValue, $savedGroups[$conditionValue], function ($a, $b) {
-                    return $a === $b ? 0 : 1;
-                }) === [];
+                // No values means matching nobody - treating them as an empty list would pass everyone
+                $values = static::getSavedGroupValues($conditionValue, $savedGroups);
+                return $values !== null && !static::isIn($attributeValue, $values);
             case '$elemMatch':
                 return static::elemMatch($conditionValue, $attributeValue, $savedGroups);
             case '$size':
-                if (!is_array($attributeValue)) {
+                if (!static::isList($attributeValue)) {
                     return false;
                 }
                 return static::evalConditionValue($conditionValue, count($attributeValue), $savedGroups);
             case '$all':
-                if (!is_array($attributeValue) || !is_array($conditionValue)) {
+                if (!static::isList($attributeValue) || !static::isList($conditionValue)) {
                     return false;
                 }
                 return static::isInAll($attributeValue, $conditionValue, $savedGroups, false);
             case '$alli':
-                if (!is_array($attributeValue) || !is_array($conditionValue)) {
+                if (!static::isList($attributeValue) || !static::isList($conditionValue)) {
                     return false;
                 }
                 return static::isInAll($attributeValue, $conditionValue, $savedGroups, true);
             case '$exists':
-                if (!$conditionValue) {
+                // JS truthiness: [], {} and "0" ask for a present attribute too
+                if (!static::jsTruthy($conditionValue)) {
                     return $attributeValue === null;
                 }
                 return $attributeValue !== null;
@@ -356,6 +392,27 @@ class Condition
             default:
                 return false;
         }
+    }
+
+    /**
+     * Members of a saved group for $inGroup / $notInGroup. An id missing from the payload
+     * has always behaved like an empty list; an entry that is present but not a list of
+     * values returns null so that both operators fail closed.
+     *
+     * @param mixed $groupId
+     * @param array<string,mixed> $savedGroups
+     * @return array<mixed>|null
+     */
+    private static function getSavedGroupValues($groupId, array $savedGroups): ?array
+    {
+        if (!is_string($groupId) && !is_int($groupId)) {
+            return null;
+        }
+        if (!array_key_exists($groupId, $savedGroups)) {
+            return [];
+        }
+        $entry = $savedGroups[$groupId];
+        return static::isList($entry) ? $entry : null;
     }
 
     /**
@@ -396,6 +453,9 @@ class Condition
     }
 
     /**
+     * An array attribute matches when any of its elements is in the list. An object
+     * attribute never matches.
+     *
      * @param mixed $attributeValue
      * @param array<mixed> $conditionValue
      * @param bool $insensitive
@@ -403,7 +463,7 @@ class Condition
      */
     private static function isIn($attributeValue, array $conditionValue, bool $insensitive = false): bool
     {
-        if (!is_array($attributeValue)) {
+        if (!static::isList($attributeValue)) {
             $attributeValue = [$attributeValue];
         }
 
@@ -413,7 +473,7 @@ class Condition
                     if (strcasecmp($actual, $expected) === 0) {
                         return true;
                     }
-                } elseif ($actual === $expected) {
+                } elseif (static::isSameValueZero($actual, $expected)) {
                     return true;
                 }
             }
@@ -428,7 +488,7 @@ class Condition
      * @param bool $insensitive
      * @return bool
      */
-    private static function isInAll($attributeValue, $conditionValue, $savedGroups, bool $insensitive = false): bool
+    private static function isInAll(array $attributeValue, array $conditionValue, array $savedGroups, bool $insensitive = false): bool
     {
         foreach ($conditionValue as $a) {
             $pass = false;
@@ -451,6 +511,9 @@ class Condition
      * mirroring preg_match's own return values so callers can distinguish a
      * real "no match" from an unmatchable pattern.
      *
+     * Like JS RegExp.test(), the attribute is converted to text first, so an absent
+     * attribute is matched as "null". A non-string pattern is never a match.
+     *
      * @param mixed $pattern
      * @param mixed $value
      * @param bool $caseInsensitive
@@ -458,26 +521,132 @@ class Condition
      */
     private static function regexMatch($pattern, $value, bool $caseInsensitive = false)
     {
+        if (!is_string($pattern)) {
+            return false;
+        }
+        // Escape any "/" that is not already escaped, as it is the PCRE delimiter
+        $escaped = preg_replace('~(?<!\\\\)((?:\\\\\\\\)*)/~', '$1\\/', $pattern) ?? $pattern;
         $modifiers = $caseInsensitive ? 'i' : '';
-        return @preg_match('/' . $pattern . '/' . $modifiers, $value ?? '');
+        return @preg_match('/' . $escaped . '/' . $modifiers, static::jsString($value));
     }
 
     /**
-     * @param mixed $conditionValue
-     * @param mixed $attributeValue
+     * Converts a value to text like JS `String(value)`
+     *
+     * @param mixed $value
+     * @return string
+     */
+    private static function jsString($value): string
+    {
+        if ($value === null) {
+            return 'null';
+        }
+        if (is_bool($value)) {
+            return $value ? 'true' : 'false';
+        }
+        if (is_string($value)) {
+            return $value;
+        }
+        if (is_int($value)) {
+            return (string) $value;
+        }
+        if (is_float($value)) {
+            if (is_nan($value)) {
+                return 'NaN';
+            }
+            if (is_infinite($value)) {
+                return $value > 0 ? 'Infinity' : '-Infinity';
+            }
+            if (floor($value) === $value && abs($value) < 1e21) {
+                return sprintf('%.0f', $value);
+            }
+            return (string) json_encode($value);
+        }
+        if (static::isList($value)) {
+            // An array joins its elements with commas, rendering null elements as empty
+            return implode(',', array_map(function ($item) {
+                return $item === null ? '' : static::jsString($item);
+            }, $value));
+        }
+        return '[object Object]';
+    }
+
+    /**
+     * Converts a value to a number like JS `Number(value)`
+     *
+     * @param mixed $value
+     * @return float
+     */
+    private static function jsNumber($value): float
+    {
+        if ($value === null) {
+            return 0.0;
+        }
+        if (is_bool($value)) {
+            return $value ? 1.0 : 0.0;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (float) $value;
+        }
+        if (is_array($value) || is_object($value)) {
+            $primitive = static::jsToPrimitive($value);
+            return is_string($primitive) ? static::jsNumber($primitive) : NAN;
+        }
+        if (!is_string($value)) {
+            return NAN;
+        }
+
+        $value = trim($value);
+        if ($value === '') {
+            return 0.0;
+        }
+        if (preg_match('/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/', $value)) {
+            return (float) $value;
+        }
+        if (preg_match('/^0[xX]([0-9a-fA-F]+)$/', $value, $m)) {
+            return (float) hexdec($m[1]);
+        }
+        if (preg_match('/^0[oO]([0-7]+)$/', $value, $m)) {
+            return (float) octdec($m[1]);
+        }
+        if (preg_match('/^0[bB]([01]+)$/', $value, $m)) {
+            return (float) bindec($m[1]);
+        }
+        if (preg_match('/^([+-]?)Infinity$/', $value, $m)) {
+            return $m[1] === '-' ? -INF : INF;
+        }
+        return NAN;
+    }
+
+    /**
+     * Arrays and objects become text, like JS ToPrimitive does before comparing them
+     *
+     * @param mixed $value
+     * @return mixed
+     */
+    private static function jsToPrimitive($value)
+    {
+        if (is_array($value) || is_object($value)) {
+            return static::jsString($value);
+        }
+        return $value;
+    }
+
+    /**
+     * Truthiness like JS `!!value`: arrays and objects are always truthy, even when empty
+     *
+     * @param mixed $value
      * @return bool
      */
-    private static function isMatchingPrimitive($conditionValue, $attributeValue): bool
+    private static function jsTruthy($value): bool
     {
-        if ($attributeValue === null) {
+        if ($value === null || $value === false || $value === '') {
             return false;
         }
-
-        if (gettype($conditionValue) !== gettype($attributeValue)) {
-            return false;
+        if (is_int($value) || is_float($value)) {
+            return $value != 0 && !is_nan((float) $value);
         }
-
-        return $conditionValue === $attributeValue;
+        return true;
     }
 
     /**

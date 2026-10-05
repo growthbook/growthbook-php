@@ -83,6 +83,9 @@ final class ConditionOperatorTest extends TestCase
             'an absent attribute is not empty text' => [['a' => ['$regex' => '^$']], [], false],
             '$regexi matches an absent attribute as "null"' => [['a' => ['$regexi' => 'NULL']], [], true],
             'an invalid pattern is not a match' => [['a' => ['$regex' => '(']], ['a' => '('], false],
+            '$ does not match before a trailing newline' => [['a' => ['$regex' => '^\d+$']], ['a' => "123\n"], false],
+            '$regexi $ does not match before a trailing newline' => [['a' => ['$regexi' => '^abc$']], ['a' => "ABC\n"], false],
+            '$ still matches at the end' => [['a' => ['$regex' => '^\d+$']], ['a' => '123'], true],
 
             // $elemMatch
             '$elemMatch skips null elements' => [['a' => ['$elemMatch' => ['$exists' => false]]], ['a' => [null]], false],
@@ -102,6 +105,9 @@ final class ConditionOperatorTest extends TestCase
             '$notInGroup fails closed for a null entry' => [['a' => ['$notInGroup' => 'broken']], ['a' => 'a'], false, $groups],
             '$notInGroup fails closed for an entry that is not a list' => [['a' => ['$notInGroup' => 'typed']], ['a' => 'a'], false, $groups],
             '$notInGroup still passes for an id missing from the payload' => [['a' => ['$notInGroup' => 'missing']], ['a' => 'a'], true, $groups],
+            '$notInGroup passes for a null id, which looks up the missing group "null"' => [['a' => ['$notInGroup' => null]], ['a' => 'a'], true, $groups],
+            '$inGroup fails for a null id' => [['a' => ['$inGroup' => null]], ['a' => 'a'], false, $groups],
+            'a non-string id is looked up as text' => [['a' => ['$inGroup' => true]], ['a' => 'a'], true, ['true' => ['a']]],
 
             // Other
             '$type of an absent attribute is null' => [['a' => ['$type' => 'null']], [], true],

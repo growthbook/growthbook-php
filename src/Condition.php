@@ -405,9 +405,8 @@ class Condition
      */
     private static function getSavedGroupValues($groupId, array $savedGroups): ?array
     {
-        if (!is_string($groupId) && !is_int($groupId)) {
-            return null;
-        }
+        // A JS property lookup converts the key to text, so a null id looks up the group "null"
+        $groupId = static::jsString($groupId);
         if (!array_key_exists($groupId, $savedGroups)) {
             return [];
         }
@@ -526,7 +525,8 @@ class Condition
         }
         // Escape any "/" that is not already escaped, as it is the PCRE delimiter
         $escaped = preg_replace('~(?<!\\\\)((?:\\\\\\\\)*)/~', '$1\\/', $pattern) ?? $pattern;
-        $modifiers = $caseInsensitive ? 'i' : '';
+        // D: "$" matches only at the very end, not before a trailing newline, as in JS
+        $modifiers = $caseInsensitive ? 'iD' : 'D';
         return @preg_match('/' . $escaped . '/' . $modifiers, static::jsString($value));
     }
 

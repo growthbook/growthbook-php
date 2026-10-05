@@ -1082,8 +1082,9 @@ class Growthbook implements LoggerAwareInterface
      *
      * The first leaf whose condition matches the user's attributes wins and its weights replace
      * the experiment's own. When the definition is missing the experiment is left untouched
-     * (aggregate weights, no bandit metadata); when it exists but no leaf matches, the fallback
-     * leaf -1 is recorded against the experiment's own or equal weights.
+     * (aggregate weights, no bandit metadata), and so is a rule with explicit ranges. When no
+     * leaf matches, or the matched leaf's weights are invalid, the fallback leaf -1 is recorded
+     * against the weights the bucketer will actually use.
      *
      * @template T
      * @param InlineExperiment<T> $exp
@@ -1096,6 +1097,16 @@ class Growthbook implements LoggerAwareInterface
         $definition = $this->contextualBandits[$contextualBanditRef] ?? null;
         if (!$definition) {
             $this->log(LogLevel::DEBUG, "Contextual bandit ref not found in payload, using aggregate weights", [
+                "feature" => $featureKey,
+                "contextualBanditRef" => $contextualBanditRef
+            ]);
+            return;
+        }
+
+        // Explicit ranges take precedence over weights in the bucketer, so no leaf's weights
+        // can describe this assignment - bucket on the ranges and report no bandit metadata
+        if ($exp->ranges !== null) {
+            $this->log(LogLevel::DEBUG, "Contextual bandit rule has explicit ranges, skipping bandit weights", [
                 "feature" => $featureKey,
                 "contextualBanditRef" => $contextualBanditRef
             ]);
@@ -1118,19 +1129,22 @@ class Growthbook implements LoggerAwareInterface
             ]);
         }
 
-        if ($leaf && $leaf->weights !== null) {
+        $numVariations = count($exp->variations);
+        if ($leaf && $leaf->weights !== null && static::isValidWeightVector($leaf->weights, $numVariations)) {
             $exp->weights = $leaf->weights;
             $exp->contextualBandit = new ContextualBandit($leaf->leafId, $leaf->weights, $definition->banditVersion);
             return;
         }
 
-        $this->log(LogLevel::DEBUG, "Contextual bandit: no matching leaf, using fallback weights", [
+        // A leaf whose weights the bucketer would replace cannot describe the assignment, so it
+        // falls back like no match, reporting the weights that are actually used
+        $this->log(LogLevel::DEBUG, $leaf ? "Contextual bandit: matched leaf has invalid weights, using fallback weights" : "Contextual bandit: no matching leaf, using fallback weights", [
             "feature" => $featureKey,
             "contextualBanditRef" => $contextualBanditRef
         ]);
         $exp->contextualBandit = new ContextualBandit(
             ContextualBandit::FALLBACK_LEAF_ID,
-            $exp->weights ?? static::getEqualWeights(count($exp->variations)),
+            $exp->weights !== null && static::isValidWeightVector($exp->weights, $numVariations) ? $exp->weights : static::getEqualWeights($numVariations),
             $definition->banditVersion
         );
     }
@@ -1450,6 +1464,18 @@ class Growthbook implements LoggerAwareInterface
                 (bool)($resData['stickyBucketUsed'] ?? false)
             );
 
+            // The experiment rebuilt here carries no contextual bandit, so the bandit metadata
+            // of a server-side exposure has to come from the server's result
+            if (isset($resData['leafId']) && is_int($resData['leafId'])) {
+                $result->leafId = $resData['leafId'];
+            }
+            if (isset($resData['variationWeights']) && is_array($resData['variationWeights'])) {
+                $result->variationWeights = array_map('floatval', $resData['variationWeights']);
+            }
+            if (isset($resData['banditVersion']) && is_int($resData['banditVersion'])) {
+                $result->banditVersion = $resData['banditVersion'];
+            }
+
             // Deduplicate identical tracking calls (same logic as runExperiment)
             $dedupeKey = $result->hashAttribute . $result->hashValue . $exp->key . $result->variationId;
             if (isset($this->tracks[$dedupeKey])) {
@@ -1654,6 +1680,28 @@ class Growthbook implements LoggerAwareInterface
             $ranges[] = [$start, $start + $coverage * $weight];
         }
         return $ranges;
+    }
+
+    /**
+     * Whether getBucketRanges() would use these weights as given rather than replace them
+     * with equal weights. Also rejects negative and non-finite weights.
+     *
+     * @param array<mixed>|null $weights Raw weights from the payload
+     * @param int               $numVariations
+     * @return bool
+     */
+    private static function isValidWeightVector(?array $weights, int $numVariations): bool
+    {
+        if ($weights === null || count($weights) !== $numVariations) {
+            return false;
+        }
+        foreach ($weights as $weight) {
+            if ((!is_int($weight) && !is_float($weight)) || !is_finite((float) $weight) || $weight < 0) {
+                return false;
+            }
+        }
+        $sum = array_sum($weights);
+        return $sum >= 0.99 && $sum <= 1.01;
     }
 
     /**

@@ -175,7 +175,7 @@ class Condition
         // `value + "" === condition`, `value * 1 === condition` and `!!value === condition`
         if (is_string($conditionValue)) {
             if ($insensitive) {
-                return strcasecmp(static::jsString($attributeValue), $conditionValue) === 0;
+                return static::equalsIgnoreCase(static::jsString($attributeValue), $conditionValue);
             }
             return static::jsString($attributeValue) === $conditionValue;
         }
@@ -469,7 +469,7 @@ class Condition
         foreach ($attributeValue as $actual) {
             foreach ($conditionValue as $expected) {
                 if ($insensitive && is_string($actual) && is_string($expected)) {
-                    if (strcasecmp($actual, $expected) === 0) {
+                    if (static::equalsIgnoreCase($actual, $expected)) {
                         return true;
                     }
                 } elseif (static::isSameValueZero($actual, $expected)) {
@@ -525,9 +525,24 @@ class Condition
         }
         // Escape any "/" that is not already escaped, as it is the PCRE delimiter
         $escaped = preg_replace('~(?<!\\\\)((?:\\\\\\\\)*)/~', '$1\\/', $pattern) ?? $pattern;
-        // D: "$" matches only at the very end, not before a trailing newline, as in JS
-        $modifiers = $caseInsensitive ? 'iD' : 'D';
+        // D: "$" matches only at the very end, not before a trailing newline, as in JS.
+        // u: patterns and attributes are UTF-8, so "." and case-insensitivity work on characters
+        // rather than bytes; an attribute that is not valid UTF-8 is not a match.
+        $modifiers = $caseInsensitive ? 'iDu' : 'Du';
         return @preg_match('/' . $escaped . '/' . $modifiers, static::jsString($value));
+    }
+
+    /**
+     * Case-insensitive comparison like JS `a.toLowerCase() === b.toLowerCase()`, which
+     * folds any Unicode letter, not only ASCII
+     *
+     * @param string $val1
+     * @param string $val2
+     * @return bool
+     */
+    private static function equalsIgnoreCase(string $val1, string $val2): bool
+    {
+        return mb_strtolower($val1, 'UTF-8') === mb_strtolower($val2, 'UTF-8');
     }
 
     /**

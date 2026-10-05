@@ -87,6 +87,16 @@ final class ConditionOperatorTest extends TestCase
             '$regexi $ does not match before a trailing newline' => [['a' => ['$regexi' => '^abc$']], ['a' => "ABC\n"], false],
             '$ still matches at the end' => [['a' => ['$regex' => '^\d+$']], ['a' => '123'], true],
 
+            // Case-insensitive operators fold any Unicode letter, like JS toLowerCase()
+            '$ini folds Cyrillic letters' => [['a' => ['$ini' => ['київ']]], ['a' => 'КИЇВ'], true],
+            '$nini folds Cyrillic letters' => [['a' => ['$nini' => ['київ']]], ['a' => 'КИЇВ'], false],
+            '$ini folds accented Latin letters' => [['a' => ['$ini' => ['école']]], ['a' => 'ÉCOLE'], true],
+            '$alli folds Cyrillic letters' => [['a' => ['$alli' => ['львів', 'київ']]], ['a' => ['КИЇВ', 'ЛЬВІВ']], true],
+            '$regexi folds Cyrillic letters' => [['a' => ['$regexi' => '^київ$']], ['a' => 'КИЇВ'], true],
+            '$regex is still case-sensitive for Cyrillic' => [['a' => ['$regex' => '^київ$']], ['a' => 'КИЇВ'], false],
+            'a regex dot matches one multibyte character' => [['a' => ['$regex' => '^.$']], ['a' => 'ї'], true],
+            'an attribute that is not valid UTF-8 is not a regex match' => [['a' => ['$regex' => '.*']], ['a' => "\xC3\x28"], false],
+
             // $elemMatch
             '$elemMatch skips null elements' => [['a' => ['$elemMatch' => ['$exists' => false]]], ['a' => [null]], false],
             '$elemMatch with a non-operator body tolerates scalar elements' => [['a' => ['$elemMatch' => ['k' => 'v']]], ['a' => ['s', 1]], false],

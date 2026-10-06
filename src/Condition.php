@@ -12,39 +12,58 @@ class Condition
     /**
      * @param array<string,mixed> $attributes
      * @param array<string,mixed> $condition
-     * @param array<string,mixed> $savedGroups
+     * @param array<string,mixed> $savedGroups Either bare value lists ($inGroup) or typed
+     *                                         entries ($savedGroup), keyed by group id
      * @return bool
      */
     public static function evalCondition(array $attributes, array $condition, array $savedGroups): bool
     {
+        return static::evalConditionVisiting($attributes, $condition, $savedGroups, []);
+    }
+
+    /**
+     * @param array<string,mixed> $attributes
+     * @param array<string,mixed> $condition
+     * @param array<string,mixed> $savedGroups
+     * @param array<string,true> $visited Saved group ids already being resolved, to stop cycles
+     * @return bool
+     */
+    private static function evalConditionVisiting(array $attributes, array $condition, array $savedGroups, array $visited): bool
+    {
         foreach ($condition as $key => $value) {
             switch ($key) {
                 case '$or':
-                    if (!static::evalOr($attributes, $condition['$or'], $savedGroups)) {
+                    if (!static::evalOr($attributes, $condition['$or'], $savedGroups, $visited)) {
                         return false;
                     }
                     break;
 
                 case '$nor':
-                    if (static::evalOr($attributes, $condition['$nor'], $savedGroups)) {
+                    if (static::evalOr($attributes, $condition['$nor'], $savedGroups, $visited)) {
                         return false;
                     }
                     break;
 
                 case '$and':
-                    if (!static::evalAnd($attributes, $condition['$and'], $savedGroups)) {
+                    if (!static::evalAnd($attributes, $condition['$and'], $savedGroups, $visited)) {
                         return false;
                     }
                     break;
 
                 case '$not':
-                    if (static::evalCondition($attributes, $condition['$not'], $savedGroups)) {
+                    if (static::evalConditionVisiting($attributes, $condition['$not'], $savedGroups, $visited)) {
+                        return false;
+                    }
+                    break;
+
+                case '$savedGroup':
+                    if (!static::evalSavedGroup($attributes, $value, $savedGroups, $visited)) {
                         return false;
                     }
                     break;
 
                 default:
-                    if (!static::evalConditionValue($value, static::getPath($attributes, $key), $savedGroups)) {
+                    if (!static::evalConditionValue($value, static::getPath($attributes, $key), $savedGroups, false, $visited)) {
                         return false;
                     }
             }
@@ -53,19 +72,77 @@ class Condition
     }
 
     /**
+     * Resolves a `$savedGroup` reference such as {"id": "grp", "attributeKey": "backup_id"}.
+     * A payload can be newer than this SDK, so anything unrecognized matches nobody.
+     *
+     * @param array<string,mixed> $attributes
+     * @param mixed $reference
+     * @param array<string,mixed> $savedGroups
+     * @param array<string,true> $visited
+     * @return bool
+     */
+    private static function evalSavedGroup(array $attributes, $reference, array $savedGroups, array $visited): bool
+    {
+        if (!is_array($reference) || static::isList($reference)) {
+            return false;
+        }
+
+        $id = $reference['id'] ?? null;
+        if (!is_string($id) || isset($visited[$id])) {
+            return false;
+        }
+        // Falling back to the entry's attribute would check a different population
+        $attributeKey = $reference['attributeKey'] ?? null;
+        if (array_key_exists('attributeKey', $reference) && !is_string($attributeKey)) {
+            return false;
+        }
+
+        // Absent, or a v1 bare array
+        $entry = $savedGroups[$id] ?? null;
+        if (!is_array($entry) || static::isList($entry)) {
+            return false;
+        }
+
+        $type = $entry['type'] ?? null;
+        if ($type === 'list') {
+            // The override wins over the entry's own attribute
+            $key = $attributeKey ?? $entry['attributeKey'] ?? null;
+            $values = $entry['values'] ?? null;
+            if (!is_string($key) || !static::isList($values)) {
+                return false;
+            }
+            return static::isIn(static::getPath($attributes, $key), $values);
+        }
+
+        if ($type === 'condition') {
+            // A condition group has no single attribute, so any override is ignored
+            $condition = $entry['condition'] ?? null;
+            if (!is_array($condition)) {
+                return false;
+            }
+            $visited[$id] = true;
+            return static::evalConditionVisiting($attributes, $condition, $savedGroups, $visited);
+        }
+
+        // A group type added after this SDK was built
+        return false;
+    }
+
+    /**
      * @param array<string,mixed> $attributes
      * @param array<string,mixed>[] $conditions
      * @param array<string,mixed> $savedGroups
+     * @param array<string,true> $visited
      * @return bool
      */
-    private static function evalOr(array $attributes, array $conditions, array $savedGroups): bool
+    private static function evalOr(array $attributes, array $conditions, array $savedGroups, array $visited): bool
     {
         if (!count($conditions)) {
             return true;
         }
 
         foreach ($conditions as $condition) {
-            if (static::evalCondition($attributes, $condition, $savedGroups)) {
+            if (static::evalConditionVisiting($attributes, $condition, $savedGroups, $visited)) {
                 return true;
             }
         }
@@ -76,12 +153,13 @@ class Condition
      * @param array<string,mixed> $attributes
      * @param array<string,mixed>[] $conditions
      * @param array<string,mixed> $savedGroups
+     * @param array<string,true> $visited
      * @return bool
      */
-    private static function evalAnd(array $attributes, array $conditions, array $savedGroups): bool
+    private static function evalAnd(array $attributes, array $conditions, array $savedGroups, array $visited): bool
     {
         foreach ($conditions as $condition) {
-            if (!static::evalCondition($attributes, $condition, $savedGroups)) {
+            if (!static::evalConditionVisiting($attributes, $condition, $savedGroups, $visited)) {
                 return false;
             }
         }
@@ -167,9 +245,11 @@ class Condition
      * @param mixed $conditionValue
      * @param mixed $attributeValue
      * @param array<string,mixed> $savedGroups
+     * @param bool $insensitive
+     * @param array<string,true> $visited
      * @return bool
      */
-    private static function evalConditionValue($conditionValue, $attributeValue, array $savedGroups, bool $insensitive = false): bool
+    private static function evalConditionValue($conditionValue, $attributeValue, array $savedGroups, bool $insensitive = false, array $visited = []): bool
     {
         // Primitive conditions convert the attribute to the condition's type first, like JS
         // `value + "" === condition`, `value * 1 === condition` and `!!value === condition`
@@ -191,7 +271,7 @@ class Condition
 
         if (is_array($conditionValue) && static::isOperatorObject($conditionValue)) {
             foreach ($conditionValue as $key => $value) {
-                if (!static::evalOperatorCondition($key, $attributeValue, $value, $savedGroups)) {
+                if (!static::evalOperatorCondition($key, $attributeValue, $value, $savedGroups, $visited)) {
                     return false;
                 }
             }
@@ -206,9 +286,10 @@ class Condition
      * @param mixed $condition
      * @param mixed $attributeValue
      * @param array<string,mixed> $savedGroups
+     * @param array<string,true> $visited
      * @return bool
      */
-    private static function elemMatch($condition, $attributeValue, array $savedGroups): bool
+    private static function elemMatch($condition, $attributeValue, array $savedGroups, array $visited): bool
     {
         if (!static::isList($attributeValue) || !is_array($condition)) {
             return false;
@@ -221,11 +302,11 @@ class Condition
                 continue;
             }
             if ($isOperatorObject) {
-                if (static::evalConditionValue($condition, $item, $savedGroups)) {
+                if (static::evalConditionValue($condition, $item, $savedGroups, false, $visited)) {
                     return true;
                 }
                 // A scalar element has no properties, so every path into it resolves to null
-            } elseif (static::evalCondition(is_array($item) ? $item : [], $condition, $savedGroups)) {
+            } elseif (static::evalConditionVisiting(is_array($item) ? $item : [], $condition, $savedGroups, $visited)) {
                 return true;
             }
         }
@@ -298,9 +379,10 @@ class Condition
      * @param mixed $attributeValue
      * @param mixed $conditionValue
      * @param array<string,mixed> $savedGroups
+     * @param array<string,true> $visited
      * @return bool
      */
-    private static function evalOperatorCondition(string $operator, $attributeValue, $conditionValue, array $savedGroups): bool
+    private static function evalOperatorCondition(string $operator, $attributeValue, $conditionValue, array $savedGroups, array $visited): bool
     {
         switch ($operator) {
             case '$eq':
@@ -363,22 +445,22 @@ class Condition
                 $values = static::getSavedGroupValues($conditionValue, $savedGroups);
                 return $values !== null && !static::isIn($attributeValue, $values);
             case '$elemMatch':
-                return static::elemMatch($conditionValue, $attributeValue, $savedGroups);
+                return static::elemMatch($conditionValue, $attributeValue, $savedGroups, $visited);
             case '$size':
                 if (!static::isList($attributeValue)) {
                     return false;
                 }
-                return static::evalConditionValue($conditionValue, count($attributeValue), $savedGroups);
+                return static::evalConditionValue($conditionValue, count($attributeValue), $savedGroups, false, $visited);
             case '$all':
                 if (!static::isList($attributeValue) || !static::isList($conditionValue)) {
                     return false;
                 }
-                return static::isInAll($attributeValue, $conditionValue, $savedGroups, false);
+                return static::isInAll($attributeValue, $conditionValue, $savedGroups, false, $visited);
             case '$alli':
                 if (!static::isList($attributeValue) || !static::isList($conditionValue)) {
                     return false;
                 }
-                return static::isInAll($attributeValue, $conditionValue, $savedGroups, true);
+                return static::isInAll($attributeValue, $conditionValue, $savedGroups, true, $visited);
             case '$exists':
                 // JS truthiness: [], {} and "0" ask for a present attribute too
                 if (!static::jsTruthy($conditionValue)) {
@@ -388,16 +470,17 @@ class Condition
             case '$type':
                 return static::getType($attributeValue) === $conditionValue;
             case '$not':
-                return !static::evalConditionValue($conditionValue, $attributeValue, $savedGroups);
+                return !static::evalConditionValue($conditionValue, $attributeValue, $savedGroups, false, $visited);
             default:
                 return false;
         }
     }
 
     /**
-     * Members of a saved group for $inGroup / $notInGroup. An id missing from the payload
-     * has always behaved like an empty list; an entry that is present but not a list of
-     * values returns null so that both operators fail closed.
+     * Members of a saved group for $inGroup / $notInGroup: either a bare value list or a
+     * typed "list" entry. An id missing from the payload has always behaved like an empty
+     * list; any other entry (a condition group, an unknown type, a malformed value) returns
+     * null so that both operators fail closed.
      *
      * @param mixed $groupId
      * @param array<string,mixed> $savedGroups
@@ -411,7 +494,15 @@ class Condition
             return [];
         }
         $entry = $savedGroups[$groupId];
-        return static::isList($entry) ? $entry : null;
+        if (static::isList($entry)) {
+            return $entry;
+        }
+        // These operators take their attribute from the condition they sit on, not the entry
+        if (is_array($entry) && ($entry['type'] ?? null) === 'list') {
+            $values = $entry['values'] ?? null;
+            return static::isList($values) ? $values : null;
+        }
+        return null;
     }
 
     /**
@@ -485,14 +576,15 @@ class Condition
      * @param array<mixed> $conditionValue
      * @param array<string,mixed> $savedGroups
      * @param bool $insensitive
+     * @param array<string,true> $visited
      * @return bool
      */
-    private static function isInAll(array $attributeValue, array $conditionValue, array $savedGroups, bool $insensitive = false): bool
+    private static function isInAll(array $attributeValue, array $conditionValue, array $savedGroups, bool $insensitive, array $visited): bool
     {
         foreach ($conditionValue as $a) {
             $pass = false;
             foreach ($attributeValue as $b) {
-                if (static::evalConditionValue($a, $b, $savedGroups, $insensitive)) {
+                if (static::evalConditionValue($a, $b, $savedGroups, $insensitive, $visited)) {
                     $pass = true;
                     break;
                 }

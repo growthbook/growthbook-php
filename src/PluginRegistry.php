@@ -127,6 +127,23 @@ final class PluginRegistry
         }
     }
 
+    /**
+     * Dispatch a custom event to the plugins that opted in by implementing EventLoggingPlugin.
+     *
+     * @param string              $eventName
+     * @param array<string,mixed> $properties
+     * @param array<string,mixed> $attributes
+     */
+    public function onLogEvent(string $eventName, array $properties, array $attributes): void
+    {
+        foreach ($this->plugins as $plugin) {
+            if (!$plugin instanceof EventLoggingPlugin) {
+                continue;
+            }
+            $this->safeCall($plugin, fn() => $plugin->onLogEvent($eventName, $properties, $attributes));
+        }
+    }
+
     public function close(): void
     {
         foreach ($this->plugins as $plugin) {

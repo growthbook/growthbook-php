@@ -20,7 +20,7 @@ use Psr\Log\LogLevel;
  *   - batch reaches config->batchSize events
  *   - close() is called (e.g. on object destruction or end of request)
  */
-class GrowthBookTrackingPlugin implements Plugin
+class GrowthBookTrackingPlugin implements Plugin, EventLoggingPlugin
 {
     private const PACKAGE_NAME = "growthbook/growthbook";
 
@@ -109,7 +109,7 @@ class GrowthBookTrackingPlugin implements Plugin
      */
     public function onFeatureEvaluated(string $featureKey, FeatureResult $result, array $attributes): void
     {
-        if (!$this->initialized) {
+        if (!$this->initialized || !$this->config->enableFeatureUsageEvents) {
             return;
         }
         $this->enqueue([
@@ -124,6 +124,26 @@ class GrowthBookTrackingPlugin implements Plugin
                 // Which variation produced the value, when an experiment decided it
                 'variationId' => $result->experimentResult->key ?? "",
             ],
+            'attributes' => $this->mergedAttributes($attributes),
+        ]);
+    }
+
+    /**
+     * Custom events sent with Growthbook::logEvent(). Never deduplicated: the application chose
+     * to send each one, so a repeat is a second occurrence rather than noise.
+     *
+     * @param string              $eventName
+     * @param array<string,mixed> $properties
+     * @param array<string,mixed> $attributes
+     */
+    public function onLogEvent(string $eventName, array $properties, array $attributes): void
+    {
+        if (!$this->initialized) {
+            return;
+        }
+        $this->enqueue([
+            'event_name' => $eventName,
+            'properties' => $properties,
             'attributes' => $this->mergedAttributes($attributes),
         ]);
     }

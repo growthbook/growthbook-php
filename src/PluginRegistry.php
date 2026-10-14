@@ -62,9 +62,17 @@ final class PluginRegistry
         $this->logger = $logger;
     }
 
-    public function add(Plugin $plugin): void
+    /**
+     * @param Plugin      $plugin
+     * @param string|null $clientKey Initializes the plugin right away when already known
+     */
+    public function add(Plugin $plugin, ?string $clientKey = null): void
     {
         $this->plugins[] = $plugin;
+
+        if ($clientKey !== null && $clientKey !== "") {
+            $this->safeCall($plugin, fn() => $plugin->initialize($clientKey));
+        }
     }
 
     public function initialize(string $clientKey): void

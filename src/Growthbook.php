@@ -110,7 +110,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[],remoteEval?:bool,cacheKeyAttributes?:array<string>} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[],clientKey?:string,remoteEval?:bool,cacheKeyAttributes?:array<string>} $options
      */
     public function __construct(array $options = [])
     {
@@ -136,6 +136,7 @@ class Growthbook implements LoggerAwareInterface
             "apiTimeout",
             "apiConnectTimeout",
             "plugins",
+            "clientKey",
             "etagCacheSize",
             "remoteEval",
             "cacheKeyAttributes"
@@ -182,6 +183,9 @@ class Growthbook implements LoggerAwareInterface
         }
         if (array_key_exists("savedGroups", $options)) {
             $this->setSavedGroups(($options["savedGroups"]));
+        }
+        if (array_key_exists("clientKey", $options)) {
+            $this->setClientKey($options["clientKey"]);
         }
         if (array_key_exists("plugins", $options)) {
             foreach ($options["plugins"] as $plugin) {
@@ -511,8 +515,48 @@ class Growthbook implements LoggerAwareInterface
 
     public function addPlugin(Plugin $plugin): static
     {
-        $this->pluginRegistry->add($plugin);
+        // Pass the client key if we already have one: plugins used to receive initialize() only
+        // from initialize(), so one added afterwards stayed uninitialized and dropped its events.
+        $this->pluginRegistry->add($plugin, $this->clientKey);
         return $this;
+    }
+
+    /**
+     * Set the SDK Connection client key without fetching features.
+     *
+     * `initialize()` sets it as a side effect, but an app that loads features itself and passes
+     * them in with `setFeatures()` never calls it - and plugins that need the key, such as the
+     * built-in tracking plugin, then have nothing to send events with. Setting it here hands it
+     * to every plugin registered so far, and to any added later.
+     *
+     * @param string $clientKey
+     * @return static
+     */
+    public function setClientKey(string $clientKey): static
+    {
+        $this->clientKey = $clientKey;
+        if ($clientKey !== "") {
+            $this->initializePlugins();
+        }
+
+        return $this;
+    }
+
+    /**
+     * @param string $clientKey
+     * @return static
+     */
+    public function withClientKey(string $clientKey): static
+    {
+        $self = clone $this;
+        $self->setClientKey($clientKey);
+
+        return $self;
+    }
+
+    public function getClientKey(): string
+    {
+        return $this->clientKey;
     }
 
     /**

@@ -408,6 +408,31 @@ mixpanel.track("Experiment Viewed", <?=json_encode([
 ])?>);
 ```
 
+### Managed Event Tracking
+
+The built-in `GrowthBookTrackingPlugin` batches `Experiment Viewed` and `Feature Evaluated` events and sends them to GrowthBook's managed ingest endpoint, so you do not have to wire an analytics sink yourself.
+
+```php
+$growthbook = new Growthbook\Growthbook([
+  'plugins' => [new Growthbook\GrowthBookTrackingPlugin()],
+  'attributes' => ['id' => $userId],
+]);
+
+$growthbook->initialize('sdk-abc123');
+```
+
+The plugin needs your SDK Connection **client key** to send anything. `initialize()` sets it for you. If you load features yourself and never call `initialize()`, pass the key in - otherwise the plugin has nothing to send events with and silently drops them:
+
+```php
+$growthbook = new Growthbook\Growthbook([
+  'clientKey' => 'sdk-abc123',          // or ->setClientKey('sdk-abc123')
+  'plugins' => [new Growthbook\GrowthBookTrackingPlugin()],
+  'features' => $features,              // fetched and cached by your own code
+]);
+```
+
+Events are flushed when the batch fills up (`batchSize`, default 100) and at the end of the request. `Experiment Viewed` carries the experiment key, the **variation key** (matching the other GrowthBook SDKs, so exposures join against your experiment definition) and the bucketing unit; `Feature Evaluated` carries the feature key, value, source, rule id and the variation key when an experiment decided the value.
+
 ### Logging
 
 GrowthBook can output log messages to help you debug your feature flags and experiments.

@@ -434,7 +434,8 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $event = $bodies[0][0];
         $this->assertSame('Experiment Viewed', $event['event_name']);
         $this->assertSame('my-experiment', $event['properties']['experimentId']);
-        $this->assertSame(1, $event['properties']['variationId']);
+        // The variation key, which is the index as a string when the experiment defines no meta keys
+        $this->assertSame('1', $event['properties']['variationId']);
     }
 
     public function testExperimentViewedAttributesMerged(): void
@@ -491,5 +492,139 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $this->assertCount(2, $bodies[0]);
         $this->assertSame('Experiment Viewed', $bodies[0][0]['event_name']);
         $this->assertSame('Feature Evaluated', $bodies[0][1]['event_name']);
+    }
+
+    /**
+     * Captures the events a plugin sends.
+     *
+     * @param GrowthBookTrackingPlugin $plugin
+     * @param array<int,array<string,mixed>>|null $events
+     * @return void
+     */
+    private function captureEvents(GrowthBookTrackingPlugin $plugin, &$events): void
+    {
+        $events = [];
+        $plugin->setSendHandler(function (string $url, string $body) use (&$events): void {
+            foreach ((array) json_decode($body, true) as $event) {
+                $events[] = $event;
+            }
+        });
+    }
+
+    public function testExperimentViewedSendsTheVariationKeyNotTheIndex(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        // An experiment whose variations carry custom keys - what analysis joins exposures on
+        $exp = InlineExperiment::create('my-experiment', [0, 1]);
+        $exp->meta = [['key' => 'control'], ['key' => 'treatment']];
+        $plugin->onExperimentViewed($exp, new ExperimentResult($exp, 'id', 'user-1', 1, true, null), ['id' => 'user-1']);
+
+        $this->assertSame('treatment', $events[0]['properties']['variationId']);
+    }
+
+    public function testExperimentViewedCarriesTheBucketingUnit(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        $exp = $this->makeExperiment('my-experiment');
+        $plugin->onExperimentViewed($exp, new ExperimentResult($exp, 'company_id', 'acme', 1, true, null), ['id' => 'user-1']);
+
+        $this->assertSame('company_id', $events[0]['properties']['hashAttribute']);
+        $this->assertSame('acme', $events[0]['properties']['hashValue']);
+    }
+
+    public function testFeatureEvaluatedRuleIdSentinels(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        // A default value records the "$default" sentinel, as in the reference SDKs
+        $plugin->onFeatureEvaluated('my-feature', new FeatureResult(1, 'defaultValue'), []);
+        $this->assertSame('$default', $events[0]['properties']['ruleId']);
+
+        // A rule without an id records an empty string rather than null
+        $plugin->onFeatureEvaluated('my-feature', new FeatureResult(1, 'force'), []);
+        $this->assertSame('', $events[1]['properties']['ruleId']);
+
+        $plugin->onFeatureEvaluated('my-feature', new FeatureResult(1, 'force', null, null, 'rule-123'), []);
+        $this->assertSame('rule-123', $events[2]['properties']['ruleId']);
+    }
+
+    public function testFeatureEvaluatedCarriesTheVariationKey(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        $exp = InlineExperiment::create('my-experiment', [0, 1]);
+        $exp->meta = [['key' => 'control'], ['key' => 'treatment']];
+        $result = new ExperimentResult($exp, 'id', 'user-1', 1, true, 'my-feature');
+
+        $plugin->onFeatureEvaluated('my-feature', new FeatureResult(1, 'experiment', $exp, $result), []);
+        $this->assertSame('treatment', $events[0]['properties']['variationId']);
+
+        // and an empty string when no experiment was involved
+        $plugin->onFeatureEvaluated('my-feature', new FeatureResult(1, 'defaultValue'), []);
+        $this->assertSame('', $events[1]['properties']['variationId']);
+    }
+
+    public function testPluginReceivesClientKeyWithoutInitialize(): void
+    {
+        // An app that loads features itself never calls initialize(), so the plugin had no
+        // client key and dropped every event
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+
+        $gb = new Growthbook([
+            'clientKey' => 'sdk-test',
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+        $gb->isOn('my-feature');
+
+        $this->assertCount(1, $events);
+        $this->assertSame('Feature Evaluated', $events[0]['event_name']);
+    }
+
+    public function testPluginAddedAfterTheClientKeyIsKnownIsInitialized(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+
+        $gb = new Growthbook([
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+        $gb->setClientKey('sdk-test');
+        $gb->addPlugin($plugin); // added after the key was set
+
+        $gb->isOn('my-feature');
+
+        $this->assertCount(1, $events);
+    }
+
+    public function testClientKeySetAfterThePluginWasAddedReachesIt(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+
+        $gb = new Growthbook([
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+        $gb->setClientKey('sdk-test'); // key arrives last
+
+        $gb->isOn('my-feature');
+
+        $this->assertCount(1, $events);
+        $this->assertSame('sdk-test', $gb->getClientKey());
     }
 }

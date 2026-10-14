@@ -433,6 +433,24 @@ $growthbook = new Growthbook\Growthbook([
 
 Events are flushed when the batch fills up (`batchSize`, default 100) and at the end of the request. `Experiment Viewed` carries the experiment key, the **variation key** (matching the other GrowthBook SDKs, so exposures join against your experiment definition) and the bucketing unit; `Feature Evaluated` carries the feature key, value, source, rule id and the variation key when an experiment decided the value.
 
+A feature read several times during one request is reported once per distinct value, so a page evaluating a few hundred features does not spend its ingest budget on repeats. A changed value is reported again. If you want to cut feature-usage volume entirely, turn those events off - experiment exposures and custom events keep flowing:
+
+```php
+new Growthbook\GrowthBookTrackingPlugin(
+  new Growthbook\GrowthBookTrackingPluginConfig(enableFeatureUsageEvents: false)
+);
+```
+
+#### Custom events
+
+`logEvent()` sends your own events through the same pipeline, with the instance's attributes attached:
+
+```php
+$growthbook->logEvent('Checkout Completed', ['revenue' => 42]);
+```
+
+Custom events are never deduplicated - you chose to send each one. A plugin receives them by implementing `Growthbook\EventLoggingPlugin` alongside `Growthbook\Plugin`; plugins that do not are simply skipped.
+
 ### Logging
 
 GrowthBook can output log messages to help you debug your feature flags and experiments.

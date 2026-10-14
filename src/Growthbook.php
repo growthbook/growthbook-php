@@ -41,6 +41,17 @@ class Growthbook implements LoggerAwareInterface
     private $trackedFeatures = [];
 
     /**
+     * Feature key => encoded value already reported to plugins, so a feature read repeatedly
+     * during one request is reported once per distinct value. Kept separate from
+     * [trackedFeatures] because the feature usage callback and the plugins fire from different
+     * places - sharing one map would let whichever ran first swallow the other's event. One
+     * entry per feature key, so it cannot grow with the number of evaluations.
+     *
+     * @var array<string,string>
+     */
+    private $pluginTrackedFeatures = [];
+
+    /**
      * @var null|\Psr\SimpleCache\CacheInterface
      */
     private $cache = null;
@@ -869,7 +880,7 @@ class Growthbook implements LoggerAwareInterface
     public function getFeature(string $key, array $stack = []): FeatureResult
     {
         $result = $this->evaluateFeature($key, $stack);
-        if (empty($stack)) {
+        if (empty($stack) && $this->shouldReportFeatureUsageToPlugins($key, $result)) {
             $this->pluginRegistry->onFeatureEvaluated($key, $result, $this->attributes);
         }
         return $result;
@@ -1270,6 +1281,45 @@ class Growthbook implements LoggerAwareInterface
         if ($this->logger) {
             $this->logger->log($level, $message, $context);
         }
+    }
+
+    /**
+     * Send a custom event to every plugin that accepts them (see EventLoggingPlugin).
+     *
+     * Mirrors `gb.logEvent()` in the JS SDK: the event travels in the same envelope as the SDK's
+     * own events, carrying the attributes of the instance it was logged on. A plugin that throws
+     * is logged and skipped, like any other plugin callback.
+     *
+     * @param string              $eventName
+     * @param array<string,mixed> $properties
+     * @return static
+     */
+    public function logEvent(string $eventName, array $properties = []): static
+    {
+        $this->pluginRegistry->onLogEvent($eventName, $properties, $this->attributes);
+
+        return $this;
+    }
+
+    /**
+     * Whether this evaluation is worth reporting to plugins: a feature read repeatedly within a
+     * request produces the same event every time, and a page evaluating a few hundred features
+     * blew past the ingest limits on repeats alone. A changed value is reported again. This is
+     * the same rule the feature usage callback has always applied.
+     *
+     * @param string               $key
+     * @param FeatureResult<mixed> $result
+     * @return bool
+     */
+    private function shouldReportFeatureUsageToPlugins(string $key, FeatureResult $result): bool
+    {
+        $value = json_encode($result->value) ?: '';
+        if (isset($this->pluginTrackedFeatures[$key]) && $this->pluginTrackedFeatures[$key] === $value) {
+            return false;
+        }
+        $this->pluginTrackedFeatures[$key] = $value;
+
+        return true;
     }
 
     /**

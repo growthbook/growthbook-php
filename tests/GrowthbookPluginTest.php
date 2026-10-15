@@ -231,6 +231,48 @@ final class GrowthbookPluginIntegrationTest extends TestCase
         $this->assertSame(1, $plugin->featureCallCount);
     }
 
+    public function testDeduplicationIsScopedToTheCurrentUser(): void
+    {
+        $plugin = new MockPlugin();
+        $gb = $this->makeGrowthbook($plugin)->withFeatures([
+            'flag-b' => ['defaultValue' => true],
+        ])->withAttributes(['id' => 'user-1']);
+
+        $gb->isOn('flag-b');
+
+        // A per-user handle starts with a clean slate, and so does a change of attributes
+        $scoped = $gb->withAttributes(['id' => 'user-2']);
+        $scoped->isOn('flag-b');
+        $gb->setAttributes(['id' => 'user-3']);
+        $gb->isOn('flag-b');
+
+        $this->assertSame(3, $plugin->featureCallCount);
+    }
+
+    public function testEvaluationsBeforeTrackingWasWiredUpDoNotSuppressLaterEvents(): void
+    {
+        $gb = $this->makeGrowthbook()->withFeatures(['flag-b' => ['defaultValue' => true]]);
+
+        // Evaluated before anything could record it
+        $gb->isOn('flag-b');
+
+        $plugin = new MockPlugin();
+        $gb->addPlugin($plugin);
+        $gb->isOn('flag-b');
+        $this->assertSame(1, $plugin->featureCallCount, 'adding a plugin must not inherit a history');
+
+        // And the same once the plugins are given their client key
+        $gb->setClientKey('sdk-test');
+        $gb->isOn('flag-b');
+        $this->assertSame(2, $plugin->featureCallCount);
+
+        // A plugin joining later has seen none of it either
+        $late = new MockPlugin();
+        $gb->addPlugin($late);
+        $gb->isOn('flag-b');
+        $this->assertSame(1, $late->featureCallCount);
+    }
+
     public function testAChangedValueIsReportedAgain(): void
     {
         $plugin = new MockPlugin();

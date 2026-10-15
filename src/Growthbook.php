@@ -232,6 +232,8 @@ class Growthbook implements LoggerAwareInterface
      */
     public function setAttributes(array $attributes): static
     {
+        // New attributes can mean a different user, so what was already reported no longer applies
+        $this->pluginTrackedFeatures = [];
         $this->attributes = $attributes;
         $this->refreshStickyBuckets();
         $this->refreshForRemoteEval();
@@ -526,6 +528,10 @@ class Growthbook implements LoggerAwareInterface
 
     public function addPlugin(Plugin $plugin): static
     {
+        // The new plugin has seen nothing yet, so previous evaluations must not be treated as
+        // already reported
+        $this->pluginTrackedFeatures = [];
+
         // Pass the client key if we already have one: plugins used to receive initialize() only
         // from initialize(), so one added afterwards stayed uninitialized and dropped its events.
         $this->pluginRegistry->add($plugin, $this->clientKey);
@@ -880,8 +886,8 @@ class Growthbook implements LoggerAwareInterface
     public function getFeature(string $key, array $stack = []): FeatureResult
     {
         $result = $this->evaluateFeature($key, $stack);
-        if (empty($stack) && $this->shouldReportFeatureUsageToPlugins($key, $result)) {
-            $this->pluginRegistry->onFeatureEvaluated($key, $result, $this->attributes);
+        if (empty($stack)) {
+            $this->reportFeatureUsageToPlugins($key, $result);
         }
         return $result;
     }
@@ -1302,24 +1308,32 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * Whether this evaluation is worth reporting to plugins: a feature read repeatedly within a
-     * request produces the same event every time, and a page evaluating a few hundred features
-     * blew past the ingest limits on repeats alone. A changed value is reported again. This is
-     * the same rule the feature usage callback has always applied.
+     * Hand an evaluation to the plugins, unless they have already been told about this exact
+     * value: a feature read repeatedly within a request produces the same event every time, and a
+     * page evaluating a few hundred features blew past the ingest limits on repeats alone. A
+     * changed value is reported again. This is the same rule the feature usage callback applies.
+     *
+     * What was already reported is forgotten whenever the audience changes - a plugin is added,
+     * or the plugins are given their client key - so an evaluation made before tracking was
+     * wired up cannot suppress the first real event after it.
      *
      * @param string               $key
      * @param FeatureResult<mixed> $result
-     * @return bool
+     * @return void
      */
-    private function shouldReportFeatureUsageToPlugins(string $key, FeatureResult $result): bool
+    private function reportFeatureUsageToPlugins(string $key, FeatureResult $result): void
     {
+        if (!$this->pluginRegistry->hasPlugins()) {
+            return;
+        }
+
         $value = json_encode($result->value) ?: '';
         if (isset($this->pluginTrackedFeatures[$key]) && $this->pluginTrackedFeatures[$key] === $value) {
-            return false;
+            return;
         }
-        $this->pluginTrackedFeatures[$key] = $value;
 
-        return true;
+        $this->pluginRegistry->onFeatureEvaluated($key, $result, $this->attributes);
+        $this->pluginTrackedFeatures[$key] = $value;
     }
 
     /**
@@ -1834,6 +1848,10 @@ class Growthbook implements LoggerAwareInterface
 
     private function initializePlugins(): void
     {
+        // Until now the plugins had no client key and the built-in one discarded everything it
+        // was handed, so nothing that came before counts as reported
+        $this->pluginTrackedFeatures = [];
+
         $this->pluginRegistry->initialize($this->clientKey);
     }
 

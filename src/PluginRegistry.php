@@ -91,6 +91,11 @@ final class PluginRegistry
         $this->logger = $logger;
     }
 
+    public function hasPlugins(): bool
+    {
+        return $this->plugins !== [];
+    }
+
     /**
      * @param Plugin      $plugin
      * @param string|null $clientKey Initializes the plugin right away when already known

@@ -41,6 +41,17 @@ class Growthbook implements LoggerAwareInterface
     private $trackedFeatures = [];
 
     /**
+     * Feature key => encoded value already reported to plugins, so a feature read repeatedly
+     * during one request is reported once per distinct value. Kept separate from
+     * [trackedFeatures] because the feature usage callback and the plugins fire from different
+     * places - sharing one map would let whichever ran first swallow the other's event. One
+     * entry per feature key, so it cannot grow with the number of evaluations.
+     *
+     * @var array<string,string>
+     */
+    private $pluginTrackedFeatures = [];
+
+    /**
      * @var null|\Psr\SimpleCache\CacheInterface
      */
     private $cache = null;
@@ -110,7 +121,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[],remoteEval?:bool,cacheKeyAttributes?:array<string>} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[],clientKey?:string,remoteEval?:bool,cacheKeyAttributes?:array<string>} $options
      */
     public function __construct(array $options = [])
     {
@@ -136,6 +147,7 @@ class Growthbook implements LoggerAwareInterface
             "apiTimeout",
             "apiConnectTimeout",
             "plugins",
+            "clientKey",
             "etagCacheSize",
             "remoteEval",
             "cacheKeyAttributes"
@@ -183,6 +195,9 @@ class Growthbook implements LoggerAwareInterface
         if (array_key_exists("savedGroups", $options)) {
             $this->setSavedGroups(($options["savedGroups"]));
         }
+        if (array_key_exists("clientKey", $options)) {
+            $this->setClientKey($options["clientKey"]);
+        }
         if (array_key_exists("plugins", $options)) {
             foreach ($options["plugins"] as $plugin) {
                 $this->addPlugin($plugin);
@@ -196,9 +211,19 @@ class Growthbook implements LoggerAwareInterface
         }
     }
 
+    /**
+     * The fluent `withX()` methods hand out copies of this instance (per-request or per-user
+     * handles), and a PHP clone is shallow: the copy shares this instance's plugin registry.
+     * Register the copy as an owner so the plugins are only closed once every handle is gone.
+     */
+    public function __clone()
+    {
+        $this->pluginRegistry->retain();
+    }
+
     public function __destruct()
     {
-        $this->pluginRegistry->close();
+        $this->pluginRegistry->release();
     }
 
     /**
@@ -207,6 +232,8 @@ class Growthbook implements LoggerAwareInterface
      */
     public function setAttributes(array $attributes): static
     {
+        // New attributes can mean a different user, so what was already reported no longer applies
+        $this->pluginTrackedFeatures = [];
         $this->attributes = $attributes;
         $this->refreshStickyBuckets();
         $this->refreshForRemoteEval();
@@ -501,8 +528,52 @@ class Growthbook implements LoggerAwareInterface
 
     public function addPlugin(Plugin $plugin): static
     {
-        $this->pluginRegistry->add($plugin);
+        // The new plugin has seen nothing yet, so previous evaluations must not be treated as
+        // already reported
+        $this->pluginTrackedFeatures = [];
+
+        // Pass the client key if we already have one: plugins used to receive initialize() only
+        // from initialize(), so one added afterwards stayed uninitialized and dropped its events.
+        $this->pluginRegistry->add($plugin, $this->clientKey);
         return $this;
+    }
+
+    /**
+     * Set the SDK Connection client key without fetching features.
+     *
+     * `initialize()` sets it as a side effect, but an app that loads features itself and passes
+     * them in with `setFeatures()` never calls it - and plugins that need the key, such as the
+     * built-in tracking plugin, then have nothing to send events with. Setting it here hands it
+     * to every plugin registered so far, and to any added later.
+     *
+     * @param string $clientKey
+     * @return static
+     */
+    public function setClientKey(string $clientKey): static
+    {
+        $this->clientKey = $clientKey;
+        if ($clientKey !== "") {
+            $this->initializePlugins();
+        }
+
+        return $this;
+    }
+
+    /**
+     * @param string $clientKey
+     * @return static
+     */
+    public function withClientKey(string $clientKey): static
+    {
+        $self = clone $this;
+        $self->setClientKey($clientKey);
+
+        return $self;
+    }
+
+    public function getClientKey(): string
+    {
+        return $this->clientKey;
     }
 
     /**
@@ -765,7 +836,7 @@ class Growthbook implements LoggerAwareInterface
     {
         $result = $this->evaluateFeature($key, $stack);
         if (empty($stack)) {
-            $this->pluginRegistry->onFeatureEvaluated($key, $result, $this->attributes);
+            $this->reportFeatureUsageToPlugins($key, $result);
         }
         return $result;
     }
@@ -1165,6 +1236,53 @@ class Growthbook implements LoggerAwareInterface
         if ($this->logger) {
             $this->logger->log($level, $message, $context);
         }
+    }
+
+    /**
+     * Send a custom event to every plugin that accepts them (see EventLoggingPlugin).
+     *
+     * Mirrors `gb.logEvent()` in the JS SDK: the event travels in the same envelope as the SDK's
+     * own events, carrying the attributes of the instance it was logged on. A plugin that throws
+     * is logged and skipped, like any other plugin callback.
+     *
+     * @param string              $eventName
+     * @param array<string,mixed> $properties
+     * @return static
+     */
+    public function logEvent(string $eventName, array $properties = []): static
+    {
+        $this->pluginRegistry->onLogEvent($eventName, $properties, $this->attributes);
+
+        return $this;
+    }
+
+    /**
+     * Hand an evaluation to the plugins, unless they have already been told about this exact
+     * value: a feature read repeatedly within a request produces the same event every time, and a
+     * page evaluating a few hundred features blew past the ingest limits on repeats alone. A
+     * changed value is reported again. This is the same rule the feature usage callback applies.
+     *
+     * What was already reported is forgotten whenever the audience changes - a plugin is added,
+     * or the plugins are given their client key - so an evaluation made before tracking was
+     * wired up cannot suppress the first real event after it.
+     *
+     * @param string               $key
+     * @param FeatureResult<mixed> $result
+     * @return void
+     */
+    private function reportFeatureUsageToPlugins(string $key, FeatureResult $result): void
+    {
+        if (!$this->pluginRegistry->hasPlugins()) {
+            return;
+        }
+
+        $value = json_encode($result->value) ?: '';
+        if (isset($this->pluginTrackedFeatures[$key]) && $this->pluginTrackedFeatures[$key] === $value) {
+            return;
+        }
+
+        $this->pluginRegistry->onFeatureEvaluated($key, $result, $this->attributes);
+        $this->pluginTrackedFeatures[$key] = $value;
     }
 
     /**
@@ -1602,6 +1720,9 @@ class Growthbook implements LoggerAwareInterface
                 if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
                     $this->setSavedGroups($cachedData['savedGroups']);
                 }
+                // A warm cache answering 304 is the common path, not an error one: returning
+                // without this left the plugins unkeyed and dropping every event
+                $this->initializePlugins();
                 return;
             }
 
@@ -1609,6 +1730,7 @@ class Growthbook implements LoggerAwareInterface
             $parsed = json_decode($body, true);
             if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
                 $this->log(LogLevel::WARNING, "Could not load features", ["url" => $url, "responseBody" => $body]);
+                $this->initializePlugins();
                 return;
             }
 
@@ -1671,6 +1793,10 @@ class Growthbook implements LoggerAwareInterface
 
     private function initializePlugins(): void
     {
+        // Until now the plugins had no client key and the built-in one discarded everything it
+        // was handed, so nothing that came before counts as reported
+        $this->pluginTrackedFeatures = [];
+
         $this->pluginRegistry->initialize($this->clientKey);
     }
 

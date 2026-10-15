@@ -249,6 +249,15 @@ print_r($growthbook->getAttributes());
 
 Note: you can also use the fluent methods (e.g. `withFeatures`) at any point to update properties.
 
+The fluent methods return a copy and leave the original untouched, so `withAttributes` is also how you get a per-user/per-request handle from a shared instance - the equivalent of the JS SDK's `createScopedInstance`. Evaluation methods never take a user context, they read the instance they are called on:
+
+```php
+$scoped = $growthbook->withAttributes(['id' => $userId]);
+$scoped->isOn('my-feature');
+```
+
+Copies share the cache and the plugins of the original — so plugin tracking keeps batching across handles, and the plugins are closed only once the last handle is gone — but the features are copied at clone time, so a later `setFeatures()` or `initialize()` on the original does not reach a copy made before it. Because the plugins are shared, they keep sending to the client key they were first given: a copy with its own key does not redirect the original's events.
+
 ### Attributes
 
 You can specify attributes about the current user and request. These are used for two things:
@@ -398,6 +407,31 @@ mixpanel.track("Experiment Viewed", <?=json_encode([
   'Variant name' => $impression->result->key
 ])?>);
 ```
+
+### Managed Event Tracking
+
+The built-in `GrowthBookTrackingPlugin` batches `Experiment Viewed` and `Feature Evaluated` events and sends them to GrowthBook's managed ingest endpoint, so you do not have to wire an analytics sink yourself.
+
+```php
+$growthbook = new Growthbook\Growthbook([
+  'plugins' => [new Growthbook\GrowthBookTrackingPlugin()],
+  'attributes' => ['id' => $userId],
+]);
+
+$growthbook->initialize('sdk-abc123');
+```
+
+The plugin needs your SDK Connection **client key** to send anything. `initialize()` sets it for you. If you load features yourself and never call `initialize()`, pass the key in - otherwise the plugin has nothing to send events with and silently drops them:
+
+```php
+$growthbook = new Growthbook\Growthbook([
+  'clientKey' => 'sdk-abc123',          // or ->setClientKey('sdk-abc123')
+  'plugins' => [new Growthbook\GrowthBookTrackingPlugin()],
+  'features' => $features,              // fetched and cached by your own code
+]);
+```
+
+Events are flushed when the batch fills up (`batchSize`, default 100) and at the end of the request. `Experiment Viewed` carries the experiment key, the **variation key** (matching the other GrowthBook SDKs, so exposures join against your experiment definition) and the bucketing unit; `Feature Evaluated` carries the feature key, value, source, rule id and the variation key when an experiment decided the value.
 
 ### Logging
 

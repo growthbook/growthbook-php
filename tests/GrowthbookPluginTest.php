@@ -610,6 +610,132 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $this->assertCount(1, $events);
     }
 
+    public function testACopyDoesNotRerouteTheSharedPluginsEvents(): void
+    {
+        // The copies made by the fluent methods share their plugins, so re-keying one would send
+        // the original's events - and anything a shared plugin has already buffered - to the
+        // copy's connection
+        $plugin = $this->makePlugin(1);
+        $urls = [];
+        $plugin->setSendHandler(function (string $url) use (&$urls): void {
+            $urls[] = $url;
+        });
+
+        $gb = new Growthbook([
+            'clientKey' => 'sdk-root',
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+
+        $copy = $gb->withClientKey('sdk-copy');
+        $gb->isOn('my-feature');
+
+        $this->assertStringContainsString('client_key=sdk-root', $urls[0]);
+        $this->assertSame('sdk-copy', $copy->getClientKey(), 'the copy still reports its own key');
+    }
+
+    public function testADifferentClientKeyDoesNotRekeyPluginsAndIsReported(): void
+    {
+        $records = [];
+        $logger = $this->createMock(\Psr\Log\LoggerInterface::class);
+        $logger->method('log')->willReturnCallback(function ($level, $message) use (&$records): void {
+            $records[] = (string) $message;
+        });
+
+        $plugin = $this->makePlugin(1);
+        $urls = [];
+        $plugin->setSendHandler(function (string $url) use (&$urls): void {
+            $urls[] = $url;
+        });
+
+        $gb = new Growthbook([
+            'clientKey' => 'sdk-first',
+            'plugins' => [$plugin],
+            'logger' => $logger,
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+        $gb->setClientKey('sdk-second');
+        $gb->isOn('my-feature');
+
+        $this->assertStringContainsString('client_key=sdk-first', $urls[0]);
+        $this->assertContains('Plugins are already sending to another client key, keeping it', $records);
+    }
+
+    public function testPluginsAreInitializedWhenTheApiAnswers304(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+
+        $cached = [
+            'features' => ['my-feature' => ['defaultValue' => true]],
+            'savedGroups' => [],
+            'expiresAt' => time() - 10, // stale, so the SDK revalidates and gets a 304
+        ];
+        $cache = $this->createMock(\Psr\SimpleCache\CacheInterface::class);
+        $cache->method('get')->willReturn(json_encode($cached));
+
+        [$client, $factory] = $this->makeHttp('', 304);
+
+        $gb = new Growthbook([
+            'plugins' => [$plugin],
+            'cache' => $cache,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'attributes' => ['id' => 'user-1'],
+        ]);
+        $gb->initialize('sdk-test');
+        $gb->isOn('my-feature');
+
+        $this->assertCount(1, $events, 'a warm cache answering 304 must still key the plugins');
+    }
+
+    public function testPluginsAreInitializedWhenTheResponseIsUnusable(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+
+        [$client, $factory] = $this->makeHttp('not json', 200);
+
+        $gb = new Growthbook([
+            'plugins' => [$plugin],
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+        $gb->initialize('sdk-test');
+        $gb->isOn('my-feature');
+
+        $this->assertCount(1, $events);
+    }
+
+    /**
+     * @param string $body
+     * @param int    $statusCode
+     * @return array{0:\Psr\Http\Client\ClientInterface,1:\Psr\Http\Message\RequestFactoryInterface}
+     */
+    private function makeHttp(string $body, int $statusCode): array
+    {
+        $stream = $this->createMock(\Psr\Http\Message\StreamInterface::class);
+        $stream->method('getContents')->willReturn($body);
+
+        $response = $this->createMock(\Psr\Http\Message\ResponseInterface::class);
+        $response->method('getStatusCode')->willReturn($statusCode);
+        $response->method('getBody')->willReturn($stream);
+        $response->method('hasHeader')->willReturn(false);
+
+        $client = $this->createMock(\Psr\Http\Client\ClientInterface::class);
+        $client->method('sendRequest')->willReturn($response);
+
+        $request = $this->createMock(\Psr\Http\Message\RequestInterface::class);
+        $request->method('withHeader')->willReturnSelf();
+        $factory = $this->createMock(\Psr\Http\Message\RequestFactoryInterface::class);
+        $factory->method('createRequest')->willReturn($request);
+
+        return [$client, $factory];
+    }
+
     public function testClientKeySetAfterThePluginWasAddedReachesIt(): void
     {
         $plugin = $this->makePlugin(1);

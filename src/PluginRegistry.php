@@ -17,6 +17,14 @@ final class PluginRegistry
     private ?LoggerInterface $logger;
 
     /**
+     * Client key the plugins were keyed with, or null while they are still unkeyed. Plugins are
+     * keyed once: copies made with the fluent methods share this registry, so letting a copy
+     * re-key it would redirect the original's events - and any already buffered by a shared
+     * plugin - to the copy's connection.
+     */
+    private ?string $clientKey = null;
+
+    /**
      * Number of Growthbook instances sharing this registry. A registry is shared by every copy
      * made with the fluent `withX()` methods (PHP clones are shallow), so plugins must stay open
      * until the last of those copies is gone - see [retain] / [release].
@@ -70,13 +78,27 @@ final class PluginRegistry
     {
         $this->plugins[] = $plugin;
 
-        if ($clientKey !== null && $clientKey !== "") {
-            $this->safeCall($plugin, fn() => $plugin->initialize($clientKey));
+        // A plugin arriving after the key is known is keyed straight away, otherwise it would
+        // never receive initialize() at all
+        $key = $this->clientKey ?? $clientKey;
+        if ($key !== null && $key !== "") {
+            $this->clientKey = $key;
+            $this->safeCall($plugin, fn() => $plugin->initialize($key));
         }
     }
 
     public function initialize(string $clientKey): void
     {
+        if ($this->clientKey !== null) {
+            if ($this->clientKey !== $clientKey && $this->logger) {
+                $this->logger->log(LogLevel::WARNING, "Plugins are already sending to another client key, keeping it", [
+                    "ignored" => $clientKey,
+                ]);
+            }
+            return;
+        }
+
+        $this->clientKey = $clientKey;
         foreach ($this->plugins as $plugin) {
             $this->safeCall($plugin, fn() => $plugin->initialize($clientKey));
         }

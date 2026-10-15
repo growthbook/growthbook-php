@@ -256,7 +256,7 @@ $scoped = $growthbook->withAttributes(['id' => $userId]);
 $scoped->isOn('my-feature');
 ```
 
-Copies share the features, cache and plugins of the original, so plugin tracking keeps batching across handles and the plugins are closed only once the last handle is gone. `getViewedExperiments()` is per handle though: a copy starts from what the original had seen when the copy was made and records its own experiments after that, so read it from the handle you evaluated on.
+Copies share the cache and the plugins of the original — so plugin tracking keeps batching across handles, and the plugins are closed only once the last handle is gone — but the features are copied at clone time, so a later `setFeatures()` or `initialize()` on the original does not reach a copy made before it. Because the plugins are shared, they keep sending to the client key they were first given: a copy with its own key does not redirect the original's events.
 
 ### Attributes
 

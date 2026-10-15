@@ -1656,6 +1656,9 @@ class Growthbook implements LoggerAwareInterface
                 if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
                     $this->setSavedGroups($cachedData['savedGroups']);
                 }
+                // A warm cache answering 304 is the common path, not an error one: returning
+                // without this left the plugins unkeyed and dropping every event
+                $this->initializePlugins();
                 return;
             }
 
@@ -1663,6 +1666,7 @@ class Growthbook implements LoggerAwareInterface
             $parsed = json_decode($body, true);
             if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
                 $this->log(LogLevel::WARNING, "Could not load features", ["url" => $url, "responseBody" => $body]);
+                $this->initializePlugins();
                 return;
             }
 

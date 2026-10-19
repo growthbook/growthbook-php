@@ -65,6 +65,19 @@ final class PluginRegistry
         }
     }
 
+    public function hasPlugins(): bool
+    {
+        return $this->plugins !== [];
+    }
+
+    /**
+     * Whether the plugins are already sending to a different client key than the one given.
+     */
+    public function isKeyedWithOther(string $clientKey): bool
+    {
+        return $this->clientKey !== null && $this->clientKey !== $clientKey;
+    }
+
     public function setLogger(?LoggerInterface $logger): void
     {
         $this->logger = $logger;

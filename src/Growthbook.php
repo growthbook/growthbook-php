@@ -534,6 +534,7 @@ class Growthbook implements LoggerAwareInterface
      */
     public function setClientKey(string $clientKey): static
     {
+        $this->assertClientKeyIsCompatible($clientKey);
         $this->clientKey = $clientKey;
         if ($clientKey !== "") {
             $this->initializePlugins();
@@ -557,6 +558,31 @@ class Growthbook implements LoggerAwareInterface
     public function getClientKey(): string
     {
         return $this->clientKey;
+    }
+
+    /**
+     * Plugins are keyed once and shared with every copy of this instance, so once they report to
+     * one connection this instance - and its copies - cannot move to another: the features would
+     * come from one SDK connection and the events would land in the other. Use a separate
+     * Growthbook instance, with its own plugins, for a second connection.
+     *
+     * @param string $clientKey
+     * @return void
+     * @throws Exception
+     */
+    private function assertClientKeyIsCompatible(string $clientKey): void
+    {
+        if ($clientKey === "" || !$this->pluginRegistry->hasPlugins()) {
+            return;
+        }
+        if (!$this->pluginRegistry->isKeyedWithOther($clientKey)) {
+            return;
+        }
+
+        throw new Exception(
+            "Plugins are already sending to another SDK connection, so this instance cannot switch to \"$clientKey\". " .
+            "Create a separate Growthbook instance, with its own plugins, for the other connection."
+        );
     }
 
     /**
@@ -1568,6 +1594,9 @@ class Growthbook implements LoggerAwareInterface
      */
     public function initialize(string $clientKey, string $apiHost = "", string $decryptionKey = ""): void
     {
+        // Checked before anything is assigned: loading another connection's features while the
+        // shared plugins keep reporting to the first one is worse than refusing outright
+        $this->assertClientKeyIsCompatible($clientKey);
         $this->clientKey = $clientKey;
         $this->apiHost = $apiHost;
         $this->decryptionKey = $decryptionKey;

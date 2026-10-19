@@ -610,11 +610,10 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $this->assertCount(1, $events);
     }
 
-    public function testACopyDoesNotRerouteTheSharedPluginsEvents(): void
+    public function testACopyCannotPointAtAnotherConnection(): void
     {
-        // The copies made by the fluent methods share their plugins, so re-keying one would send
-        // the original's events - and anything a shared plugin has already buffered - to the
-        // copy's connection
+        // Copies share their plugins, so a copy with its own key would take the original's
+        // events - and anything already buffered - with it. The switch is refused instead.
         $plugin = $this->makePlugin(1);
         $urls = [];
         $plugin->setSendHandler(function (string $url) use (&$urls): void {
@@ -628,21 +627,21 @@ final class GrowthBookTrackingPluginTest extends TestCase
             'features' => ['my-feature' => ['defaultValue' => true]],
         ]);
 
-        $copy = $gb->withClientKey('sdk-copy');
-        $gb->isOn('my-feature');
+        try {
+            $gb->withClientKey('sdk-copy');
+            $this->fail('expected the copy to be refused a second connection');
+        } catch (\Exception $e) {
+            $this->assertStringContainsString('another SDK connection', $e->getMessage());
+        }
 
+        $gb->isOn('my-feature');
         $this->assertStringContainsString('client_key=sdk-root', $urls[0]);
-        $this->assertSame('sdk-copy', $copy->getClientKey(), 'the copy still reports its own key');
     }
 
-    public function testADifferentClientKeyDoesNotRekeyPluginsAndIsReported(): void
+    public function testSwitchingConnectionIsRefusedWithoutChangingAnything(): void
     {
-        $records = [];
-        $logger = $this->createMock(\Psr\Log\LoggerInterface::class);
-        $logger->method('log')->willReturnCallback(function ($level, $message) use (&$records): void {
-            $records[] = (string) $message;
-        });
-
+        // Letting this through loaded the other connection's features while the events kept
+        // going to the first one
         $plugin = $this->makePlugin(1);
         $urls = [];
         $plugin->setSendHandler(function (string $url) use (&$urls): void {
@@ -650,16 +649,48 @@ final class GrowthBookTrackingPluginTest extends TestCase
         });
 
         $gb = new Growthbook([
-            'clientKey' => 'sdk-first',
+            'clientKey' => 'sdk-a',
             'plugins' => [$plugin],
-            'logger' => $logger,
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => 'A']],
+        ]);
+
+        $this->expectException(\Exception::class);
+        try {
+            $gb->setClientKey('sdk-b');
+        } finally {
+            $this->assertSame('sdk-a', $gb->getClientKey(), 'nothing may be mutated by a refused switch');
+            $gb->isOn('my-feature');
+            $this->assertStringContainsString('client_key=sdk-a', $urls[0]);
+        }
+    }
+
+    public function testTheSameConnectionCanBeSetAgain(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+
+        $gb = new Growthbook([
+            'clientKey' => 'sdk-test',
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
             'features' => ['my-feature' => ['defaultValue' => true]],
         ]);
-        $gb->setClientKey('sdk-second');
+        $gb->setClientKey('sdk-test');
         $gb->isOn('my-feature');
 
-        $this->assertStringContainsString('client_key=sdk-first', $urls[0]);
-        $this->assertContains('Plugins are already sending to another client key, keeping it', $records);
+        $this->assertCount(1, $events);
+    }
+
+    public function testAnInstanceWithoutPluginsCanBeReinitialized(): void
+    {
+        // The restriction is about plugins, not about the SDK: without them, re-initializing
+        // against another connection is ordinary use
+        $gb = new Growthbook(['features' => ['my-feature' => ['defaultValue' => true]]]);
+        $gb->setClientKey('sdk-a');
+        $gb->setClientKey('sdk-b');
+
+        $this->assertSame('sdk-b', $gb->getClientKey());
     }
 
     public function testPluginsAreInitializedWhenTheApiAnswers304(): void

@@ -52,6 +52,15 @@ class Growthbook implements LoggerAwareInterface
     private $pluginTrackedFeatures = [];
 
     /**
+     * Plugin-registry generation the history above belongs to. The registry is shared with every
+     * copy, so comparing generations is what lets a plugin added through one handle invalidate
+     * what the others consider already reported, while each keeps its own per-user history.
+     *
+     * @var int
+     */
+    private $pluginTrackedGeneration = 0;
+
+    /**
      * @var null|\Psr\SimpleCache\CacheInterface
      */
     private $cache = null;
@@ -528,9 +537,6 @@ class Growthbook implements LoggerAwareInterface
 
     public function addPlugin(Plugin $plugin): static
     {
-        // The new plugin has seen nothing yet, so previous evaluations must not be treated as
-        // already reported
-        $this->pluginTrackedFeatures = [];
 
         // Pass the client key if we already have one: plugins used to receive initialize() only
         // from initialize(), so one added afterwards stayed uninitialized and dropped its events.
@@ -1314,8 +1320,8 @@ class Growthbook implements LoggerAwareInterface
      * changed value is reported again. This is the same rule the feature usage callback applies.
      *
      * What was already reported is forgotten whenever the audience changes - a plugin is added,
-     * or the plugins are given their client key - so an evaluation made before tracking was
-     * wired up cannot suppress the first real event after it.
+     * or the plugins are given their client key - for every handle sharing the registry, so an
+     * evaluation made before tracking was wired up cannot suppress the first real event after it.
      *
      * @param string               $key
      * @param FeatureResult<mixed> $result
@@ -1325,6 +1331,13 @@ class Growthbook implements LoggerAwareInterface
     {
         if (!$this->pluginRegistry->hasPlugins()) {
             return;
+        }
+
+        // Plugins were added or keyed since this history was built, through this handle or any
+        // other sharing the registry, so it no longer describes what has been recorded
+        if ($this->pluginTrackedGeneration !== $this->pluginRegistry->generation()) {
+            $this->pluginTrackedGeneration = $this->pluginRegistry->generation();
+            $this->pluginTrackedFeatures = [];
         }
 
         $value = json_encode($result->value) ?: '';
@@ -1848,9 +1861,6 @@ class Growthbook implements LoggerAwareInterface
 
     private function initializePlugins(): void
     {
-        // Until now the plugins had no client key and the built-in one discarded everything it
-        // was handed, so nothing that came before counts as reported
-        $this->pluginTrackedFeatures = [];
 
         $this->pluginRegistry->initialize($this->clientKey);
     }

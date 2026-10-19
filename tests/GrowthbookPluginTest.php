@@ -273,6 +273,25 @@ final class GrowthbookPluginIntegrationTest extends TestCase
         $this->assertSame(1, $late->featureCallCount);
     }
 
+    public function testWiringTrackingThroughOneHandleFreesTheOthers(): void
+    {
+        // The handles share the registry, so clearing only the one that added the plugin left
+        // every other handle suppressing its first real event
+        $plugin = new MockPlugin();
+        $root = $this->makeGrowthbook($plugin)
+            ->withFeatures(['flag-b' => ['defaultValue' => true]])
+            ->withAttributes(['id' => 'user-1']);
+
+        $scoped = $root->withAttributes(['id' => 'user-2']);
+        $scoped->isOn('flag-b');
+        $before = $plugin->featureCallCount;
+
+        $root->setClientKey('sdk-test');
+        $scoped->isOn('flag-b');
+
+        $this->assertSame($before + 1, $plugin->featureCallCount);
+    }
+
     public function testAChangedValueIsReportedAgain(): void
     {
         $plugin = new MockPlugin();

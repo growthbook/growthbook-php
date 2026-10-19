@@ -682,6 +682,29 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $this->assertCount(1, $events);
     }
 
+    public function testTheKeyIsRecordedOnlyOnceThereArePluginsToKey(): void
+    {
+        // Recording it earlier pinned the plugins to whichever key was set first, so a plugin
+        // added afterwards sent to a connection the instance had already left
+        $plugin = $this->makePlugin(1);
+        $urls = [];
+        $plugin->setSendHandler(function (string $url) use (&$urls): void {
+            $urls[] = $url;
+        });
+
+        $gb = new Growthbook([
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+        $gb->setClientKey('sdk-a');
+        $gb->setClientKey('sdk-b');
+        $gb->addPlugin($plugin);
+        $gb->isOn('my-feature');
+
+        $this->assertSame('sdk-b', $gb->getClientKey());
+        $this->assertStringContainsString('client_key=sdk-b', $urls[0]);
+    }
+
     public function testAnInstanceWithoutPluginsCanBeReinitialized(): void
     {
         // The restriction is about plugins, not about the SDK: without them, re-initializing

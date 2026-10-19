@@ -102,6 +102,13 @@ final class PluginRegistry
 
     public function initialize(string $clientKey): void
     {
+        // Nothing to key yet: remembering the key here would pin the plugins to whichever key
+        // happened to be set first, even though they only arrive later and the instance may have
+        // moved on by then
+        if ($this->plugins === []) {
+            return;
+        }
+
         if ($this->clientKey !== null) {
             if ($this->clientKey !== $clientKey && $this->logger) {
                 $this->logger->log(LogLevel::WARNING, "Plugins are already sending to another client key, keeping it", [

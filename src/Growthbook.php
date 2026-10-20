@@ -535,6 +535,7 @@ class Growthbook implements LoggerAwareInterface
     public function setClientKey(string $clientKey): static
     {
         $this->assertClientKeyIsCompatible($clientKey);
+        $this->detachFromSharedRegistryWhenChangingConnection($clientKey);
         $this->clientKey = $clientKey;
         if ($clientKey !== "") {
             $this->initializePlugins();
@@ -558,6 +559,30 @@ class Growthbook implements LoggerAwareInterface
     public function getClientKey(): string
     {
         return $this->clientKey;
+    }
+
+    /**
+     * A copy that takes its own client key before any plugin exists gets its own registry.
+     *
+     * Copies share the registry, so a plugin added to one of them later would be keyed with
+     * that handle's connection and would receive this one's events as well - reported under
+     * the wrong client key. Once plugins are registered the change is refused instead (see
+     * [assertClientKeyIsCompatible]); this only applies while there is nothing to move.
+     *
+     * @param string $clientKey
+     * @return void
+     */
+    private function detachFromSharedRegistryWhenChangingConnection(string $clientKey): void
+    {
+        if ($clientKey === $this->clientKey) {
+            return;
+        }
+        if ($this->pluginRegistry->hasPlugins() || !$this->pluginRegistry->isShared()) {
+            return;
+        }
+
+        $this->pluginRegistry->release();
+        $this->pluginRegistry = new PluginRegistry([], $this->logger);
     }
 
     /**

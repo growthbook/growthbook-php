@@ -682,6 +682,41 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $this->assertCount(1, $events);
     }
 
+    public function testACopyThatTookItsOwnKeyBeforePluginsIsNotTrackedByTheOriginals(): void
+    {
+        // The copy is allowed its own key while there are no plugins, but both handles still
+        // shared one registry - so a plugin added to the original later received the copy's
+        // events as well, reported under the original's connection
+        $original = new Growthbook([
+            'clientKey' => 'sdk-a',
+            'attributes' => ['id' => 'user-1'],
+        ]);
+        $copy = $original->withClientKey('sdk-b');
+        $copy->setFeatures(['checkout' => ['defaultValue' => true]]);
+
+        $originalPlugin = $this->makePlugin(1);
+        $originalUrls = [];
+        $originalPlugin->setSendHandler(function (string $url) use (&$originalUrls): void {
+            $originalUrls[] = $url;
+        });
+        $original->addPlugin($originalPlugin);
+
+        $copy->isOn('checkout');
+        $this->assertSame([], $originalUrls, 'the copy has no plugins of its own yet');
+
+        // and a plugin the copy registers itself is keyed with the copy's connection
+        $copyPlugin = $this->makePlugin(1);
+        $copyUrls = [];
+        $copyPlugin->setSendHandler(function (string $url) use (&$copyUrls): void {
+            $copyUrls[] = $url;
+        });
+        $copy->addPlugin($copyPlugin);
+        $copy->isOn('checkout');
+
+        $this->assertStringContainsString('client_key=sdk-b', $copyUrls[0]);
+        $this->assertSame([], $originalUrls, "the original's plugin never sees the copy's events");
+    }
+
     public function testTheKeyIsRecordedOnlyOnceThereArePluginsToKey(): void
     {
         // Recording it earlier pinned the plugins to whichever key was set first, so a plugin

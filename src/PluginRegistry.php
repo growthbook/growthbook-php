@@ -71,6 +71,14 @@ final class PluginRegistry
     }
 
     /**
+     * Whether more than one Growthbook instance holds this registry.
+     */
+    public function isShared(): bool
+    {
+        return $this->refCount > 1;
+    }
+
+    /**
      * Whether the plugins are already sending to a different client key than the one given.
      */
     public function isKeyedWithOther(string $clientKey): bool

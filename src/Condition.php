@@ -620,7 +620,30 @@ class Condition
     private static function regexMatch($pattern, $value, bool $caseInsensitive = false)
     {
         $modifiers = $caseInsensitive ? 'i' : '';
-        return @preg_match('/' . $pattern . '/' . $modifiers, $value ?? '');
+        return @preg_match('/' . static::escapeRegexDelimiter((string) $pattern) . '/' . $modifiers, $value ?? '');
+    }
+
+    /**
+     * Escapes every unescaped "/" so the pattern can be wrapped in "/" delimiters.
+     *
+     * @param string $pattern
+     * @return string
+     */
+    private static function escapeRegexDelimiter(string $pattern): string
+    {
+        $escaped = '';
+        $length = strlen($pattern);
+        for ($i = 0; $i < $length; $i++) {
+            $char = $pattern[$i];
+            if ($char === '\\' && $i + 1 < $length) {
+                $escaped .= $char . $pattern[++$i];
+            } elseif ($char === '/') {
+                $escaped .= '\\/';
+            } else {
+                $escaped .= $char;
+            }
+        }
+        return $escaped;
     }
 
     /**

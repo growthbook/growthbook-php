@@ -20,7 +20,7 @@ use Psr\Log\LogLevel;
  *   - batch reaches config->batchSize events
  *   - close() is called (e.g. on object destruction or end of request)
  */
-class GrowthBookTrackingPlugin implements Plugin
+class GrowthBookTrackingPlugin implements Plugin, EventLoggingPlugin
 {
     private const PACKAGE_NAME = "growthbook/growthbook";
 
@@ -90,7 +90,14 @@ class GrowthBookTrackingPlugin implements Plugin
             'event_name' => 'Experiment Viewed',
             'properties' => [
                 'experimentId' => $experiment->key,
-                'variationId'  => $result->variationId,
+                // The variation's key, not its index: analysis joins exposures on the key, so an
+                // experiment with custom variation keys matched nothing when the index was sent.
+                // Matches the JS, Go and Kotlin SDKs.
+                'variationId'  => $result->key,
+                // Without the bucketing unit an exposure cannot be attributed to the user it
+                // was assigned to.
+                'hashAttribute' => $result->hashAttribute,
+                'hashValue'     => $result->hashValue,
             ],
             'attributes' => $this->mergedAttributes($attributes),
         ]);
@@ -102,7 +109,7 @@ class GrowthBookTrackingPlugin implements Plugin
      */
     public function onFeatureEvaluated(string $featureKey, FeatureResult $result, array $attributes): void
     {
-        if (!$this->initialized) {
+        if (!$this->initialized || !$this->config->enableFeatureUsageEvents) {
             return;
         }
         $this->enqueue([
@@ -111,10 +118,47 @@ class GrowthBookTrackingPlugin implements Plugin
                 'feature' => $featureKey,
                 'value'   => $result->value,
                 'source'  => $result->source,
-                'ruleId'  => $result->ruleId ?? null,
+                // The reference SDKs record "$default" for a default value and an empty string
+                // for a rule without an id, so the same evaluation reads the same everywhere.
+                'ruleId'  => self::ruleIdFor($result),
+                // Which variation produced the value, when an experiment decided it
+                'variationId' => $result->experimentResult->key ?? "",
             ],
             'attributes' => $this->mergedAttributes($attributes),
         ]);
+    }
+
+    /**
+     * Custom events sent with Growthbook::logEvent(). Never deduplicated: the application chose
+     * to send each one, so a repeat is a second occurrence rather than noise.
+     *
+     * @param string              $eventName
+     * @param array<string,mixed> $properties
+     * @param array<string,mixed> $attributes
+     */
+    public function onLogEvent(string $eventName, array $properties, array $attributes): void
+    {
+        if (!$this->initialized) {
+            return;
+        }
+        $this->enqueue([
+            'event_name' => $eventName,
+            'properties' => $properties,
+            'attributes' => $this->mergedAttributes($attributes),
+        ]);
+    }
+
+    /**
+     * @param FeatureResult<mixed> $result
+     * @return string
+     */
+    private static function ruleIdFor(FeatureResult $result): string
+    {
+        if ($result->source === "defaultValue") {
+            return "\$default";
+        }
+
+        return $result->ruleId ?? "";
     }
 
     /**

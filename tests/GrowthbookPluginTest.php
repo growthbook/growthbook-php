@@ -84,6 +84,54 @@ final class GrowthbookPluginIntegrationTest extends TestCase
         $this->assertTrue($plugin->closeCalled);
     }
 
+    public function testScopedCopyDoesNotClosePluginsOfTheOriginal(): void
+    {
+        $plugin = new MockPlugin();
+        $gb = new Growthbook([
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+
+        // A per-request handle going out of scope must not shut down the plugins the
+        // original still uses - a closed plugin never flushes again.
+        $scoped = $gb->withAttributes(['id' => 'user-2']);
+        $scoped->isOn('my-feature');
+        unset($scoped);
+
+        $this->assertFalse($plugin->closeCalled);
+
+        $before = $plugin->featureCallCount;
+        $gb->isOn('my-feature');
+        $this->assertSame($before + 1, $plugin->featureCallCount, 'the original must keep dispatching to plugins');
+
+        unset($gb);
+        $this->assertTrue($plugin->closeCalled);
+    }
+
+    public function testPluginsStayOpenWhenTheOriginalIsDestroyedFirst(): void
+    {
+        $plugin = new MockPlugin();
+        $gb = new Growthbook([
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+
+        // Reassigning over the original (`$gb = $gb->withAttributes(...)`) leaves the copy as
+        // the only owner; the plugins belong to it now.
+        $scoped = $gb->withAttributes(['id' => 'user-2']);
+        unset($gb);
+
+        $this->assertFalse($plugin->closeCalled);
+
+        $scoped->isOn('my-feature');
+        $this->assertSame(1, $plugin->featureCallCount);
+
+        unset($scoped);
+        $this->assertTrue($plugin->closeCalled);
+    }
+
     public function testPluginAddedViaConstructorOption(): void
     {
         $plugin = new MockPlugin();
@@ -168,7 +216,83 @@ final class GrowthbookPluginIntegrationTest extends TestCase
         $this->assertSame('child', $plugin->featureEvents[0]['key']);
     }
 
-    public function testIsOnAndIsOffTriggerPluginOnce(): void
+    public function testRepeatedEvaluationsOfTheSameValueAreReportedOnce(): void
+    {
+        $plugin = new MockPlugin();
+        $gb = $this->makeGrowthbook($plugin)->withFeatures([
+            'flag-b' => ['defaultValue' => true],
+        ]);
+
+        // Same feature, same value - one event, however many times it is read
+        $gb->isOn('flag-b');
+        $gb->isOff('flag-b');
+        $gb->getFeature('flag-b');
+
+        $this->assertSame(1, $plugin->featureCallCount);
+    }
+
+    public function testDeduplicationIsScopedToTheCurrentUser(): void
+    {
+        $plugin = new MockPlugin();
+        $gb = $this->makeGrowthbook($plugin)->withFeatures([
+            'flag-b' => ['defaultValue' => true],
+        ])->withAttributes(['id' => 'user-1']);
+
+        $gb->isOn('flag-b');
+
+        // A per-user handle starts with a clean slate, and so does a change of attributes
+        $scoped = $gb->withAttributes(['id' => 'user-2']);
+        $scoped->isOn('flag-b');
+        $gb->setAttributes(['id' => 'user-3']);
+        $gb->isOn('flag-b');
+
+        $this->assertSame(3, $plugin->featureCallCount);
+    }
+
+    public function testEvaluationsBeforeTrackingWasWiredUpDoNotSuppressLaterEvents(): void
+    {
+        $gb = $this->makeGrowthbook()->withFeatures(['flag-b' => ['defaultValue' => true]]);
+
+        // Evaluated before anything could record it
+        $gb->isOn('flag-b');
+
+        $plugin = new MockPlugin();
+        $gb->addPlugin($plugin);
+        $gb->isOn('flag-b');
+        $this->assertSame(1, $plugin->featureCallCount, 'adding a plugin must not inherit a history');
+
+        // And the same once the plugins are given their client key
+        $gb->setClientKey('sdk-test');
+        $gb->isOn('flag-b');
+        $this->assertSame(2, $plugin->featureCallCount);
+
+        // A plugin joining later has seen none of it either
+        $late = new MockPlugin();
+        $gb->addPlugin($late);
+        $gb->isOn('flag-b');
+        $this->assertSame(1, $late->featureCallCount);
+    }
+
+    public function testWiringTrackingThroughOneHandleFreesTheOthers(): void
+    {
+        // The handles share the registry, so clearing only the one that added the plugin left
+        // every other handle suppressing its first real event
+        $plugin = new MockPlugin();
+        $root = $this->makeGrowthbook($plugin)
+            ->withFeatures(['flag-b' => ['defaultValue' => true]])
+            ->withAttributes(['id' => 'user-1']);
+
+        $scoped = $root->withAttributes(['id' => 'user-2']);
+        $scoped->isOn('flag-b');
+        $before = $plugin->featureCallCount;
+
+        $root->setClientKey('sdk-test');
+        $scoped->isOn('flag-b');
+
+        $this->assertSame($before + 1, $plugin->featureCallCount);
+    }
+
+    public function testAChangedValueIsReportedAgain(): void
     {
         $plugin = new MockPlugin();
         $gb = $this->makeGrowthbook($plugin)->withFeatures([
@@ -176,9 +300,57 @@ final class GrowthbookPluginIntegrationTest extends TestCase
         ]);
 
         $gb->isOn('flag-b');
-        $gb->isOff('flag-b');
+        $gb->setFeatures(['flag-b' => ['defaultValue' => false]]);
+        $gb->isOn('flag-b');
 
         $this->assertSame(2, $plugin->featureCallCount);
+    }
+
+    public function testLogEventReachesPluginsThatAcceptCustomEvents(): void
+    {
+        $tracking = new GrowthBookTrackingPlugin(new GrowthBookTrackingPluginConfig(batchSize: 1));
+        $events = [];
+        $tracking->setSendHandler(function (string $url, string $body) use (&$events): void {
+            foreach ((array) json_decode($body, true) as $event) {
+                $events[] = $event;
+            }
+        });
+
+        // A plugin that only implements Plugin must simply be skipped, not break the dispatch
+        $plain = new MockPlugin();
+
+        $gb = new Growthbook([
+            'clientKey' => 'sdk-test',
+            'plugins' => [$plain, $tracking],
+            'attributes' => ['id' => 'user-1'],
+        ]);
+
+        $gb->logEvent('Checkout Completed', ['revenue' => 42]);
+
+        $this->assertCount(1, $events);
+        $this->assertSame('Checkout Completed', $events[0]['event_name']);
+        $this->assertSame(['revenue' => 42], $events[0]['properties']);
+        $this->assertSame('user-1', $events[0]['attributes']['id']);
+        $this->assertSame('php', $events[0]['attributes']['sdk_language']);
+    }
+
+    public function testCustomEventsAreNotDeduplicated(): void
+    {
+        $tracking = new GrowthBookTrackingPlugin(new GrowthBookTrackingPluginConfig(batchSize: 1));
+        $events = [];
+        $tracking->setSendHandler(function (string $url, string $body) use (&$events): void {
+            foreach ((array) json_decode($body, true) as $event) {
+                $events[] = $event;
+            }
+        });
+
+        $gb = new Growthbook(['clientKey' => 'sdk-test', 'plugins' => [$tracking]]);
+
+        // The app chose to send each one, so a repeat is a second occurrence
+        $gb->logEvent('Button Clicked');
+        $gb->logEvent('Button Clicked');
+
+        $this->assertCount(2, $events);
     }
 
     public function testMultiplePluginsAllReceiveEvents(): void
@@ -386,7 +558,8 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $event = $bodies[0][0];
         $this->assertSame('Experiment Viewed', $event['event_name']);
         $this->assertSame('my-experiment', $event['properties']['experimentId']);
-        $this->assertSame(1, $event['properties']['variationId']);
+        // The variation key, which is the index as a string when the experiment defines no meta keys
+        $this->assertSame('1', $event['properties']['variationId']);
     }
 
     public function testExperimentViewedAttributesMerged(): void
@@ -443,5 +616,411 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $this->assertCount(2, $bodies[0]);
         $this->assertSame('Experiment Viewed', $bodies[0][0]['event_name']);
         $this->assertSame('Feature Evaluated', $bodies[0][1]['event_name']);
+    }
+
+    /**
+     * Captures the events a plugin sends.
+     *
+     * @param GrowthBookTrackingPlugin $plugin
+     * @param array<int,array<string,mixed>>|null $events
+     * @return void
+     */
+    private function captureEvents(GrowthBookTrackingPlugin $plugin, &$events): void
+    {
+        $events = [];
+        $plugin->setSendHandler(function (string $url, string $body) use (&$events): void {
+            foreach ((array) json_decode($body, true) as $event) {
+                $events[] = $event;
+            }
+        });
+    }
+
+    public function testExperimentViewedSendsTheVariationKeyNotTheIndex(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        // An experiment whose variations carry custom keys - what analysis joins exposures on
+        $exp = InlineExperiment::create('my-experiment', [0, 1]);
+        $exp->meta = [['key' => 'control'], ['key' => 'treatment']];
+        $plugin->onExperimentViewed($exp, new ExperimentResult($exp, 'id', 'user-1', 1, true, null), ['id' => 'user-1']);
+
+        $this->assertSame('treatment', $events[0]['properties']['variationId']);
+    }
+
+    public function testExperimentViewedCarriesTheBucketingUnit(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        $exp = $this->makeExperiment('my-experiment');
+        $plugin->onExperimentViewed($exp, new ExperimentResult($exp, 'company_id', 'acme', 1, true, null), ['id' => 'user-1']);
+
+        $this->assertSame('company_id', $events[0]['properties']['hashAttribute']);
+        $this->assertSame('acme', $events[0]['properties']['hashValue']);
+    }
+
+    public function testFeatureEvaluatedRuleIdSentinels(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        // A default value records the "$default" sentinel, as in the reference SDKs
+        $plugin->onFeatureEvaluated('my-feature', new FeatureResult(1, 'defaultValue'), []);
+        $this->assertSame('$default', $events[0]['properties']['ruleId']);
+
+        // A rule without an id records an empty string rather than null
+        $plugin->onFeatureEvaluated('my-feature', new FeatureResult(1, 'force'), []);
+        $this->assertSame('', $events[1]['properties']['ruleId']);
+
+        $plugin->onFeatureEvaluated('my-feature', new FeatureResult(1, 'force', null, null, 'rule-123'), []);
+        $this->assertSame('rule-123', $events[2]['properties']['ruleId']);
+    }
+
+    public function testFeatureEvaluatedCarriesTheVariationKey(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        $exp = InlineExperiment::create('my-experiment', [0, 1]);
+        $exp->meta = [['key' => 'control'], ['key' => 'treatment']];
+        $result = new ExperimentResult($exp, 'id', 'user-1', 1, true, 'my-feature');
+
+        $plugin->onFeatureEvaluated('my-feature', new FeatureResult(1, 'experiment', $exp, $result), []);
+        $this->assertSame('treatment', $events[0]['properties']['variationId']);
+
+        // and an empty string when no experiment was involved
+        $plugin->onFeatureEvaluated('my-feature', new FeatureResult(1, 'defaultValue'), []);
+        $this->assertSame('', $events[1]['properties']['variationId']);
+    }
+
+    public function testPluginReceivesClientKeyWithoutInitialize(): void
+    {
+        // An app that loads features itself never calls initialize(), so the plugin had no
+        // client key and dropped every event
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+
+        $gb = new Growthbook([
+            'clientKey' => 'sdk-test',
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+        $gb->isOn('my-feature');
+
+        $this->assertCount(1, $events);
+        $this->assertSame('Feature Evaluated', $events[0]['event_name']);
+    }
+
+    public function testPluginAddedAfterTheClientKeyIsKnownIsInitialized(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+
+        $gb = new Growthbook([
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+        $gb->setClientKey('sdk-test');
+        $gb->addPlugin($plugin); // added after the key was set
+
+        $gb->isOn('my-feature');
+
+        $this->assertCount(1, $events);
+    }
+
+    public function testACopyCannotPointAtAnotherConnection(): void
+    {
+        // Copies share their plugins, so a copy with its own key would take the original's
+        // events - and anything already buffered - with it. The switch is refused instead.
+        $plugin = $this->makePlugin(1);
+        $urls = [];
+        $plugin->setSendHandler(function (string $url) use (&$urls): void {
+            $urls[] = $url;
+        });
+
+        $gb = new Growthbook([
+            'clientKey' => 'sdk-root',
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+
+        try {
+            $gb->withClientKey('sdk-copy');
+            $this->fail('expected the copy to be refused a second connection');
+        } catch (\Exception $e) {
+            $this->assertStringContainsString('another SDK connection', $e->getMessage());
+        }
+
+        $gb->isOn('my-feature');
+        $this->assertStringContainsString('client_key=sdk-root', $urls[0]);
+    }
+
+    public function testSwitchingConnectionIsRefusedWithoutChangingAnything(): void
+    {
+        // Letting this through loaded the other connection's features while the events kept
+        // going to the first one
+        $plugin = $this->makePlugin(1);
+        $urls = [];
+        $plugin->setSendHandler(function (string $url) use (&$urls): void {
+            $urls[] = $url;
+        });
+
+        $gb = new Growthbook([
+            'clientKey' => 'sdk-a',
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => 'A']],
+        ]);
+
+        $this->expectException(\Exception::class);
+        try {
+            $gb->setClientKey('sdk-b');
+        } finally {
+            $this->assertSame('sdk-a', $gb->getClientKey(), 'nothing may be mutated by a refused switch');
+            $gb->isOn('my-feature');
+            $this->assertStringContainsString('client_key=sdk-a', $urls[0]);
+        }
+    }
+
+    public function testTheSameConnectionCanBeSetAgain(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+
+        $gb = new Growthbook([
+            'clientKey' => 'sdk-test',
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+        $gb->setClientKey('sdk-test');
+        $gb->isOn('my-feature');
+
+        $this->assertCount(1, $events);
+    }
+
+    public function testACopyThatTookItsOwnKeyBeforePluginsIsNotTrackedByTheOriginals(): void
+    {
+        // The copy is allowed its own key while there are no plugins, but both handles still
+        // shared one registry - so a plugin added to the original later received the copy's
+        // events as well, reported under the original's connection
+        $original = new Growthbook([
+            'clientKey' => 'sdk-a',
+            'attributes' => ['id' => 'user-1'],
+        ]);
+        $copy = $original->withClientKey('sdk-b');
+        $copy->setFeatures(['checkout' => ['defaultValue' => true]]);
+
+        $originalPlugin = $this->makePlugin(1);
+        $originalUrls = [];
+        $originalPlugin->setSendHandler(function (string $url) use (&$originalUrls): void {
+            $originalUrls[] = $url;
+        });
+        $original->addPlugin($originalPlugin);
+
+        $copy->isOn('checkout');
+        $this->assertSame([], $originalUrls, 'the copy has no plugins of its own yet');
+
+        // and a plugin the copy registers itself is keyed with the copy's connection
+        $copyPlugin = $this->makePlugin(1);
+        $copyUrls = [];
+        $copyPlugin->setSendHandler(function (string $url) use (&$copyUrls): void {
+            $copyUrls[] = $url;
+        });
+        $copy->addPlugin($copyPlugin);
+        $copy->isOn('checkout');
+
+        $this->assertStringContainsString('client_key=sdk-b', $copyUrls[0]);
+        $this->assertSame([], $originalUrls, "the original's plugin never sees the copy's events");
+    }
+
+    public function testACopyInitializedWithItsOwnConnectionIsNotTrackedByTheOriginals(): void
+    {
+        // Same registration order as the withClientKey() case, reached through initialize()
+        [$client, $factory] = $this->makeHttp(
+            (string) json_encode(['features' => ['checkout' => ['defaultValue' => true]], 'savedGroups' => []]),
+            200
+        );
+
+        $original = new Growthbook([
+            'clientKey' => 'sdk-a',
+            'attributes' => ['id' => 'user-1'],
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+        ]);
+        $copy = $original->withAttributes(['id' => 'user-2']);
+        $copy->initialize('sdk-b');
+
+        $plugin = $this->makePlugin(1);
+        $urls = [];
+        $plugin->setSendHandler(function (string $url) use (&$urls): void {
+            $urls[] = $url;
+        });
+        $original->addPlugin($plugin);
+
+        $copy->isOn('checkout');
+
+        $this->assertSame('sdk-b', $copy->getClientKey());
+        $this->assertSame([], $urls, "the original's plugin must not receive the copy's events");
+    }
+
+    public function testTheKeyIsRecordedOnlyOnceThereArePluginsToKey(): void
+    {
+        // Recording it earlier pinned the plugins to whichever key was set first, so a plugin
+        // added afterwards sent to a connection the instance had already left
+        $plugin = $this->makePlugin(1);
+        $urls = [];
+        $plugin->setSendHandler(function (string $url) use (&$urls): void {
+            $urls[] = $url;
+        });
+
+        $gb = new Growthbook([
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+        $gb->setClientKey('sdk-a');
+        $gb->setClientKey('sdk-b');
+        $gb->addPlugin($plugin);
+        $gb->isOn('my-feature');
+
+        $this->assertSame('sdk-b', $gb->getClientKey());
+        $this->assertStringContainsString('client_key=sdk-b', $urls[0]);
+    }
+
+    public function testAnInstanceWithoutPluginsCanBeReinitialized(): void
+    {
+        // The restriction is about plugins, not about the SDK: without them, re-initializing
+        // against another connection is ordinary use
+        $gb = new Growthbook(['features' => ['my-feature' => ['defaultValue' => true]]]);
+        $gb->setClientKey('sdk-a');
+        $gb->setClientKey('sdk-b');
+
+        $this->assertSame('sdk-b', $gb->getClientKey());
+    }
+
+    public function testPluginsAreInitializedWhenTheApiAnswers304(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+
+        $cached = [
+            'features' => ['my-feature' => ['defaultValue' => true]],
+            'savedGroups' => [],
+            'expiresAt' => time() - 10, // stale, so the SDK revalidates and gets a 304
+        ];
+        $cache = $this->createMock(\Psr\SimpleCache\CacheInterface::class);
+        $cache->method('get')->willReturn(json_encode($cached));
+
+        [$client, $factory] = $this->makeHttp('', 304);
+
+        $gb = new Growthbook([
+            'plugins' => [$plugin],
+            'cache' => $cache,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'attributes' => ['id' => 'user-1'],
+        ]);
+        $gb->initialize('sdk-test');
+        $gb->isOn('my-feature');
+
+        $this->assertCount(1, $events, 'a warm cache answering 304 must still key the plugins');
+    }
+
+    public function testPluginsAreInitializedWhenTheResponseIsUnusable(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+
+        [$client, $factory] = $this->makeHttp('not json', 200);
+
+        $gb = new Growthbook([
+            'plugins' => [$plugin],
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+        $gb->initialize('sdk-test');
+        $gb->isOn('my-feature');
+
+        $this->assertCount(1, $events);
+    }
+
+    /**
+     * @param string $body
+     * @param int    $statusCode
+     * @return array{0:\Psr\Http\Client\ClientInterface,1:\Psr\Http\Message\RequestFactoryInterface}
+     */
+    private function makeHttp(string $body, int $statusCode): array
+    {
+        $stream = $this->createMock(\Psr\Http\Message\StreamInterface::class);
+        $stream->method('getContents')->willReturn($body);
+
+        $response = $this->createMock(\Psr\Http\Message\ResponseInterface::class);
+        $response->method('getStatusCode')->willReturn($statusCode);
+        $response->method('getBody')->willReturn($stream);
+        $response->method('hasHeader')->willReturn(false);
+
+        $client = $this->createMock(\Psr\Http\Client\ClientInterface::class);
+        $client->method('sendRequest')->willReturn($response);
+
+        $request = $this->createMock(\Psr\Http\Message\RequestInterface::class);
+        $request->method('withHeader')->willReturnSelf();
+        $factory = $this->createMock(\Psr\Http\Message\RequestFactoryInterface::class);
+        $factory->method('createRequest')->willReturn($request);
+
+        return [$client, $factory];
+    }
+
+    public function testFeatureUsageEventsCanBeTurnedOff(): void
+    {
+        $plugin = new GrowthBookTrackingPlugin(
+            new GrowthBookTrackingPluginConfig(batchSize: 1, enableFeatureUsageEvents: false)
+        );
+        $this->captureEvents($plugin, $events);
+
+        $gb = new Growthbook([
+            'clientKey' => 'sdk-test',
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
+            'features' => [
+                'my-feature' => ['defaultValue' => true],
+                'exp-feature' => ['defaultValue' => 0, 'rules' => [['key' => 'my-exp', 'variations' => [0, 1]]]],
+            ],
+        ]);
+
+        $gb->isOn('my-feature');   // feature usage - dropped
+        $gb->isOn('exp-feature');  // exposure - kept
+        $gb->logEvent('Checkout Completed'); // custom event - kept
+
+        $names = array_column($events, 'event_name');
+        $this->assertNotContains('Feature Evaluated', $names);
+        $this->assertContains('Experiment Viewed', $names);
+        $this->assertContains('Checkout Completed', $names);
+    }
+
+    public function testClientKeySetAfterThePluginWasAddedReachesIt(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+
+        $gb = new Growthbook([
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]);
+        $gb->setClientKey('sdk-test'); // key arrives last
+
+        $gb->isOn('my-feature');
+
+        $this->assertCount(1, $events);
+        $this->assertSame('sdk-test', $gb->getClientKey());
     }
 }

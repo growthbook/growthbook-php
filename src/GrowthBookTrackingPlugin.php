@@ -90,7 +90,14 @@ class GrowthBookTrackingPlugin implements Plugin
             'event_name' => 'Experiment Viewed',
             'properties' => [
                 'experimentId' => $experiment->key,
-                'variationId'  => $result->variationId,
+                // The variation's key, not its index: analysis joins exposures on the key, so an
+                // experiment with custom variation keys matched nothing when the index was sent.
+                // Matches the JS, Go and Kotlin SDKs.
+                'variationId'  => $result->key,
+                // Without the bucketing unit an exposure cannot be attributed to the user it
+                // was assigned to.
+                'hashAttribute' => $result->hashAttribute,
+                'hashValue'     => $result->hashValue,
             ],
             'attributes' => $this->mergedAttributes($attributes),
         ]);
@@ -111,10 +118,27 @@ class GrowthBookTrackingPlugin implements Plugin
                 'feature' => $featureKey,
                 'value'   => $result->value,
                 'source'  => $result->source,
-                'ruleId'  => $result->ruleId ?? null,
+                // The reference SDKs record "$default" for a default value and an empty string
+                // for a rule without an id, so the same evaluation reads the same everywhere.
+                'ruleId'  => self::ruleIdFor($result),
+                // Which variation produced the value, when an experiment decided it
+                'variationId' => $result->experimentResult->key ?? "",
             ],
             'attributes' => $this->mergedAttributes($attributes),
         ]);
+    }
+
+    /**
+     * @param FeatureResult<mixed> $result
+     * @return string
+     */
+    private static function ruleIdFor(FeatureResult $result): string
+    {
+        if ($result->source === "defaultValue") {
+            return "\$default";
+        }
+
+        return $result->ruleId ?? "";
     }
 
     /**

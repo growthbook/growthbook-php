@@ -110,7 +110,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[],remoteEval?:bool,cacheKeyAttributes?:array<string>} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[],clientKey?:string,remoteEval?:bool,cacheKeyAttributes?:array<string>} $options
      */
     public function __construct(array $options = [])
     {
@@ -136,6 +136,7 @@ class Growthbook implements LoggerAwareInterface
             "apiTimeout",
             "apiConnectTimeout",
             "plugins",
+            "clientKey",
             "etagCacheSize",
             "remoteEval",
             "cacheKeyAttributes"
@@ -183,6 +184,9 @@ class Growthbook implements LoggerAwareInterface
         if (array_key_exists("savedGroups", $options)) {
             $this->setSavedGroups(($options["savedGroups"]));
         }
+        if (array_key_exists("clientKey", $options)) {
+            $this->setClientKey($options["clientKey"]);
+        }
         if (array_key_exists("plugins", $options)) {
             foreach ($options["plugins"] as $plugin) {
                 $this->addPlugin($plugin);
@@ -196,9 +200,19 @@ class Growthbook implements LoggerAwareInterface
         }
     }
 
+    /**
+     * The fluent `withX()` methods hand out copies of this instance (per-request or per-user
+     * handles), and a PHP clone is shallow: the copy shares this instance's plugin registry.
+     * Register the copy as an owner so the plugins are only closed once every handle is gone.
+     */
+    public function __clone()
+    {
+        $this->pluginRegistry->retain();
+    }
+
     public function __destruct()
     {
-        $this->pluginRegistry->close();
+        $this->pluginRegistry->release();
     }
 
     /**
@@ -501,8 +515,99 @@ class Growthbook implements LoggerAwareInterface
 
     public function addPlugin(Plugin $plugin): static
     {
-        $this->pluginRegistry->add($plugin);
+        // Pass the client key if we already have one: plugins used to receive initialize() only
+        // from initialize(), so one added afterwards stayed uninitialized and dropped its events.
+        $this->pluginRegistry->add($plugin, $this->clientKey);
         return $this;
+    }
+
+    /**
+     * Set the SDK Connection client key without fetching features.
+     *
+     * `initialize()` sets it as a side effect, but an app that loads features itself and passes
+     * them in with `setFeatures()` never calls it - and plugins that need the key, such as the
+     * built-in tracking plugin, then have nothing to send events with. Setting it here hands it
+     * to every plugin registered so far, and to any added later.
+     *
+     * @param string $clientKey
+     * @return static
+     */
+    public function setClientKey(string $clientKey): static
+    {
+        $this->assertClientKeyIsCompatible($clientKey);
+        $this->detachFromSharedRegistryWhenChangingConnection($clientKey);
+        $this->clientKey = $clientKey;
+        if ($clientKey !== "") {
+            $this->initializePlugins();
+        }
+
+        return $this;
+    }
+
+    /**
+     * @param string $clientKey
+     * @return static
+     */
+    public function withClientKey(string $clientKey): static
+    {
+        $self = clone $this;
+        $self->setClientKey($clientKey);
+
+        return $self;
+    }
+
+    public function getClientKey(): string
+    {
+        return $this->clientKey;
+    }
+
+    /**
+     * A copy that takes its own client key before any plugin exists gets its own registry.
+     *
+     * Copies share the registry, so a plugin added to one of them later would be keyed with
+     * that handle's connection and would receive this one's events as well - reported under
+     * the wrong client key. Once plugins are registered the change is refused instead (see
+     * [assertClientKeyIsCompatible]); this only applies while there is nothing to move.
+     *
+     * @param string $clientKey
+     * @return void
+     */
+    private function detachFromSharedRegistryWhenChangingConnection(string $clientKey): void
+    {
+        if ($clientKey === $this->clientKey) {
+            return;
+        }
+        if ($this->pluginRegistry->hasPlugins() || !$this->pluginRegistry->isShared()) {
+            return;
+        }
+
+        $this->pluginRegistry->release();
+        $this->pluginRegistry = new PluginRegistry([], $this->logger);
+    }
+
+    /**
+     * Plugins are keyed once and shared with every copy of this instance, so once they report to
+     * one connection this instance - and its copies - cannot move to another: the features would
+     * come from one SDK connection and the events would land in the other. Use a separate
+     * Growthbook instance, with its own plugins, for a second connection.
+     *
+     * @param string $clientKey
+     * @return void
+     * @throws Exception
+     */
+    private function assertClientKeyIsCompatible(string $clientKey): void
+    {
+        if ($clientKey === "" || !$this->pluginRegistry->hasPlugins()) {
+            return;
+        }
+        if (!$this->pluginRegistry->isKeyedWithOther($clientKey)) {
+            return;
+        }
+
+        throw new Exception(
+            "Plugins are already sending to another SDK connection, so this instance cannot switch to \"$clientKey\". " .
+            "Create a separate Growthbook instance, with its own plugins, for the other connection."
+        );
     }
 
     /**
@@ -1514,6 +1619,10 @@ class Growthbook implements LoggerAwareInterface
      */
     public function initialize(string $clientKey, string $apiHost = "", string $decryptionKey = ""): void
     {
+        // Checked before anything is assigned: loading another connection's features while the
+        // shared plugins keep reporting to the first one is worse than refusing outright
+        $this->assertClientKeyIsCompatible($clientKey);
+        $this->detachFromSharedRegistryWhenChangingConnection($clientKey);
         $this->clientKey = $clientKey;
         $this->apiHost = $apiHost;
         $this->decryptionKey = $decryptionKey;
@@ -1602,6 +1711,9 @@ class Growthbook implements LoggerAwareInterface
                 if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
                     $this->setSavedGroups($cachedData['savedGroups']);
                 }
+                // A warm cache answering 304 is the common path, not an error one: returning
+                // without this left the plugins unkeyed and dropping every event
+                $this->initializePlugins();
                 return;
             }
 
@@ -1609,6 +1721,7 @@ class Growthbook implements LoggerAwareInterface
             $parsed = json_decode($body, true);
             if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
                 $this->log(LogLevel::WARNING, "Could not load features", ["url" => $url, "responseBody" => $body]);
+                $this->initializePlugins();
                 return;
             }
 

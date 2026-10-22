@@ -888,7 +888,7 @@ class Growthbook implements LoggerAwareInterface
 
             $conditionPassed = Condition::evalCondition(
                 ['value' => $parentRes->value],
-                $parentCondition['condition'] ?? null,
+                $parentCondition['condition'] ?? [],
                 $this->savedGroups
             );
 

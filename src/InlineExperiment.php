@@ -60,6 +60,16 @@ class InlineExperiment
     public $customFields;
 
     /**
+     * Resolved contextual bandit routing for this evaluation: the leaf that matched and the
+     * weights it contributed. Set during feature evaluation for rules with a
+     * `contextualBanditRef` and cleared again unless the user is really exposed
+     * (hashUsed && inExperiment). Not a configuration option.
+     *
+     * @var ContextualBandit|null
+     */
+    public $contextualBandit;
+
+    /**
      * @param string $key
      * @param T[] $variations
      * @return InlineExperiment<T>

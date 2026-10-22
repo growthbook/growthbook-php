@@ -1622,6 +1622,7 @@ class Growthbook implements LoggerAwareInterface
         // Checked before anything is assigned: loading another connection's features while the
         // shared plugins keep reporting to the first one is worse than refusing outright
         $this->assertClientKeyIsCompatible($clientKey);
+        $this->detachFromSharedRegistryWhenChangingConnection($clientKey);
         $this->clientKey = $clientKey;
         $this->apiHost = $apiHost;
         $this->decryptionKey = $decryptionKey;

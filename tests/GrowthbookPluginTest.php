@@ -717,6 +717,36 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $this->assertSame([], $originalUrls, "the original's plugin never sees the copy's events");
     }
 
+    public function testACopyInitializedWithItsOwnConnectionIsNotTrackedByTheOriginals(): void
+    {
+        // Same registration order as the withClientKey() case, reached through initialize()
+        [$client, $factory] = $this->makeHttp(
+            (string) json_encode(['features' => ['checkout' => ['defaultValue' => true]], 'savedGroups' => []]),
+            200
+        );
+
+        $original = new Growthbook([
+            'clientKey' => 'sdk-a',
+            'attributes' => ['id' => 'user-1'],
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+        ]);
+        $copy = $original->withAttributes(['id' => 'user-2']);
+        $copy->initialize('sdk-b');
+
+        $plugin = $this->makePlugin(1);
+        $urls = [];
+        $plugin->setSendHandler(function (string $url) use (&$urls): void {
+            $urls[] = $url;
+        });
+        $original->addPlugin($plugin);
+
+        $copy->isOn('checkout');
+
+        $this->assertSame('sdk-b', $copy->getClientKey());
+        $this->assertSame([], $urls, "the original's plugin must not receive the copy's events");
+    }
+
     public function testTheKeyIsRecordedOnlyOnceThereArePluginsToKey(): void
     {
         // Recording it earlier pinned the plugins to whichever key was set first, so a plugin

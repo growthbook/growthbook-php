@@ -165,9 +165,11 @@ class Condition
 
         switch ($type) {
             case 'string':
+                return static::toJsString($attributeValue) === $conditionValue;
             case 'number':
+                return static::toJsNumber($attributeValue) === (float) $conditionValue;
             case 'boolean':
-                return static::isMatchingPrimitive($conditionValue, $attributeValue);
+                return $attributeValue !== null && static::isJsTruthy($attributeValue) === $conditionValue;
             case 'array':
                 return is_array($attributeValue) && static::toJson($conditionValue) === static::toJson($attributeValue);
             case 'object':
@@ -459,25 +461,169 @@ class Condition
     private static function regexMatch($pattern, $value, bool $caseInsensitive = false)
     {
         $modifiers = $caseInsensitive ? 'i' : '';
-        return @preg_match('/' . $pattern . '/' . $modifiers, $value ?? '');
+        return @preg_match('/' . static::escapeRegexDelimiter((string) $pattern) . '/' . $modifiers, $value ?? '');
     }
 
     /**
-     * @param mixed $conditionValue
-     * @param mixed $attributeValue
+     * Escapes every unescaped "/" so the pattern can be wrapped in "/" delimiters.
+     *
+     * @param string $pattern
+     * @return string
+     */
+    private static function escapeRegexDelimiter(string $pattern): string
+    {
+        $escaped = '';
+        $length = strlen($pattern);
+        for ($i = 0; $i < $length; $i++) {
+            $char = $pattern[$i];
+            if ($char === '\\' && $i + 1 < $length) {
+                $escaped .= $char . $pattern[++$i];
+            } elseif ($char === '/') {
+                $escaped .= '\\/';
+            } else {
+                $escaped .= $char;
+            }
+        }
+        return $escaped;
+    }
+
+    /**
+     * Converts a value to a string the way JavaScript's String() does.
+     *
+     * @param mixed $value
+     * @return string
+     */
+    private static function toJsString($value): string
+    {
+        if ($value === null) {
+            return 'null';
+        }
+        if (is_bool($value)) {
+            return $value ? 'true' : 'false';
+        }
+        if (is_int($value)) {
+            return (string) $value;
+        }
+        if (is_float($value)) {
+            return static::formatJsNumber($value);
+        }
+        if (is_string($value)) {
+            return $value;
+        }
+        if (is_array($value) && static::getType($value) === 'array') {
+            return implode(',', array_map(function ($item) {
+                return $item === null ? '' : static::toJsString($item);
+            }, $value));
+        }
+        return '[object Object]';
+    }
+
+    /**
+     * Formats a float like JavaScript's Number.prototype.toString().
+     *
+     * @param float $value
+     * @return string
+     */
+    private static function formatJsNumber(float $value): string
+    {
+        if (is_nan($value)) {
+            return 'NaN';
+        }
+        if (is_infinite($value)) {
+            return $value > 0 ? 'Infinity' : '-Infinity';
+        }
+        if ($value == 0) {
+            return '0';
+        }
+
+        // var_export uses the shortest round-trip representation (serialize_precision = -1)
+        $repr = strtolower(var_export(abs($value), true));
+        $parts = explode('e', $repr);
+        $mantissa = $parts[0];
+        $exponent = isset($parts[1]) ? (int) $parts[1] : 0;
+        $dot = strpos($mantissa, '.');
+        $digits = str_replace('.', '', $mantissa);
+        $point = ($dot === false ? strlen($mantissa) : $dot) + $exponent;
+        $trimmed = ltrim($digits, '0');
+        $point -= strlen($digits) - strlen($trimmed);
+        $digits = rtrim($trimmed, '0');
+        $k = strlen($digits);
+
+        if ($k <= $point && $point <= 21) {
+            $result = $digits . str_repeat('0', $point - $k);
+        } elseif (0 < $point && $point <= 21) {
+            $result = substr($digits, 0, $point) . '.' . substr($digits, $point);
+        } elseif (-6 < $point && $point <= 0) {
+            $result = '0.' . str_repeat('0', -$point) . $digits;
+        } else {
+            $e = $point - 1;
+            $result = $digits[0] . ($k > 1 ? '.' . substr($digits, 1) : '') . 'e' . ($e < 0 ? '-' : '+') . abs($e);
+        }
+
+        return ($value < 0 ? '-' : '') . $result;
+    }
+
+    /**
+     * Converts a value to a number the way JavaScript's Number() does (NAN when not numeric).
+     *
+     * @param mixed $value
+     * @return float
+     */
+    private static function toJsNumber($value): float
+    {
+        if ($value === null || $value === false) {
+            return 0.0;
+        }
+        if ($value === true) {
+            return 1.0;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (float) $value;
+        }
+        if (is_array($value) && static::getType($value) === 'array') {
+            return static::toJsNumber(static::toJsString($value));
+        }
+        if (!is_string($value)) {
+            return NAN;
+        }
+
+        $str = preg_replace('/^[\s\p{Zs}\x{FEFF}\x{2028}\x{2029}]+|[\s\p{Zs}\x{FEFF}\x{2028}\x{2029}]+$/u', '', $value);
+        if ($str === null) {
+            return NAN;
+        }
+        if ($str === '') {
+            return 0.0;
+        }
+        if (preg_match('/^[+-]?Infinity$/', $str)) {
+            return $str[0] === '-' ? -INF : INF;
+        }
+        if (preg_match('/^0x[0-9a-f]+$/i', $str)) {
+            return (float) hexdec($str);
+        }
+        if (preg_match('/^0o[0-7]+$/i', $str)) {
+            return (float) octdec(substr($str, 2));
+        }
+        if (preg_match('/^0b[01]+$/i', $str)) {
+            return (float) bindec(substr($str, 2));
+        }
+        if (preg_match('/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i', $str)) {
+            return (float) $str;
+        }
+        return NAN;
+    }
+
+    /**
+     * Returns whether a value is truthy in JavaScript.
+     *
+     * @param mixed $value
      * @return bool
      */
-    private static function isMatchingPrimitive($conditionValue, $attributeValue): bool
+    private static function isJsTruthy($value): bool
     {
-        if ($attributeValue === null) {
+        if (is_float($value) && is_nan($value)) {
             return false;
         }
-
-        if (gettype($conditionValue) !== gettype($attributeValue)) {
-            return false;
-        }
-
-        return $conditionValue === $attributeValue;
+        return !($value === null || $value === false || $value === 0 || $value === 0.0 || $value === '');
     }
 
     /**

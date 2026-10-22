@@ -1,0 +1,746 @@
+[
+  [
+    "$regex - leading slash path",
+    {
+      "s": {
+        "$regex": "^/pricing"
+      }
+    },
+    {
+      "s": "/pricing/plans"
+    },
+    true
+  ],
+  [
+    "$regex - leading slash path no match",
+    {
+      "s": {
+        "$regex": "^/pricing"
+      }
+    },
+    {
+      "s": "/about"
+    },
+    false
+  ],
+  [
+    "$regex - slash in middle",
+    {
+      "s": {
+        "$regex": "a/b"
+      }
+    },
+    {
+      "s": "xa/by"
+    },
+    true
+  ],
+  [
+    "$regex - multiple slashes",
+    {
+      "s": {
+        "$regex": "^/a/b/c$"
+      }
+    },
+    {
+      "s": "/a/b/c"
+    },
+    true
+  ],
+  [
+    "$regex - lone slash",
+    {
+      "s": {
+        "$regex": "/"
+      }
+    },
+    {
+      "s": "x/y"
+    },
+    true
+  ],
+  [
+    "$regex - already escaped slash",
+    {
+      "s": {
+        "$regex": "^a\\/b$"
+      }
+    },
+    {
+      "s": "a/b"
+    },
+    true
+  ],
+  [
+    "$regex - escaped slash then unescaped slash",
+    {
+      "s": {
+        "$regex": "\\//"
+      }
+    },
+    {
+      "s": "x//y"
+    },
+    true
+  ],
+  [
+    "$regex - escaped backslash before slash",
+    {
+      "s": {
+        "$regex": "^a\\\\/b$"
+      }
+    },
+    {
+      "s": "a\\/b"
+    },
+    true
+  ],
+  [
+    "$regex - slash in character class",
+    {
+      "s": {
+        "$regex": "^[/]x$"
+      }
+    },
+    {
+      "s": "/x"
+    },
+    true
+  ],
+  [
+    "$regexi - leading slash path",
+    {
+      "s": {
+        "$regexi": "^/PRICING"
+      }
+    },
+    {
+      "s": "/Pricing"
+    },
+    true
+  ],
+  [
+    "$regex - invalid pattern with slash",
+    {
+      "s": {
+        "$regex": "(/"
+      }
+    },
+    {
+      "s": "(/"
+    },
+    false
+  ],
+  [
+    "$regex - invalid pattern",
+    {
+      "s": {
+        "$regex": "["
+      }
+    },
+    {
+      "s": "["
+    },
+    false
+  ],
+  [
+    "string condition - number attribute",
+    {
+      "n": "10"
+    },
+    {
+      "n": 10
+    },
+    true
+  ],
+  [
+    "string condition - decimal attribute",
+    {
+      "n": "1.5"
+    },
+    {
+      "n": 1.5
+    },
+    true
+  ],
+  [
+    "string condition - large number attribute",
+    {
+      "n": "1e+21"
+    },
+    {
+      "n": 1e+21
+    },
+    true
+  ],
+  [
+    "string condition - small number attribute",
+    {
+      "n": "1.5e-7"
+    },
+    {
+      "n": 1.5e-7
+    },
+    true
+  ],
+  [
+    "string condition - 0.000001",
+    {
+      "n": "0.000001"
+    },
+    {
+      "n": 0.000001
+    },
+    true
+  ],
+  [
+    "string condition - negative number attribute",
+    {
+      "n": "-2.5"
+    },
+    {
+      "n": -2.5
+    },
+    true
+  ],
+  [
+    "string condition - true attribute",
+    {
+      "b": "true"
+    },
+    {
+      "b": true
+    },
+    true
+  ],
+  [
+    "string condition - false attribute",
+    {
+      "b": "false"
+    },
+    {
+      "b": false
+    },
+    true
+  ],
+  [
+    "string condition - null attribute",
+    {
+      "n": "null"
+    },
+    {
+      "n": null
+    },
+    true
+  ],
+  [
+    "string condition - missing attribute is null",
+    {
+      "n": "null"
+    },
+    {},
+    true
+  ],
+  [
+    "string condition - undefined vs missing attribute",
+    {
+      "n": "undefined"
+    },
+    {},
+    false
+  ],
+  [
+    "string condition - empty vs null attribute",
+    {
+      "n": ""
+    },
+    {
+      "n": null
+    },
+    false
+  ],
+  [
+    "string condition - array attribute",
+    {
+      "n": "a,b"
+    },
+    {
+      "n": [
+        "a",
+        "b"
+      ]
+    },
+    true
+  ],
+  [
+    "string condition - nested array attribute",
+    {
+      "n": "a,b,1,,true"
+    },
+    {
+      "n": [
+        "a",
+        [
+          "b",
+          1
+        ],
+        null,
+        true
+      ]
+    },
+    true
+  ],
+  [
+    "string condition - object attribute",
+    {
+      "n": "[object Object]"
+    },
+    {
+      "n": {
+        "a": 1
+      }
+    },
+    true
+  ],
+  [
+    "string condition - same string",
+    {
+      "n": "abc"
+    },
+    {
+      "n": "abc"
+    },
+    true
+  ],
+  [
+    "string condition - leading zero string",
+    {
+      "n": "10"
+    },
+    {
+      "n": "010"
+    },
+    false
+  ],
+  [
+    "number condition - numeric string",
+    {
+      "n": 10
+    },
+    {
+      "n": "10"
+    },
+    true
+  ],
+  [
+    "number condition - padded numeric string",
+    {
+      "n": 10
+    },
+    {
+      "n": " 10 "
+    },
+    true
+  ],
+  [
+    "number condition - decimal string",
+    {
+      "n": 1.5
+    },
+    {
+      "n": "1.5"
+    },
+    true
+  ],
+  [
+    "number condition - 10.0 string",
+    {
+      "n": 10
+    },
+    {
+      "n": "10.0"
+    },
+    true
+  ],
+  [
+    "number condition - exponent string",
+    {
+      "n": 1000
+    },
+    {
+      "n": "1e3"
+    },
+    true
+  ],
+  [
+    "number condition - hex string",
+    {
+      "n": 16
+    },
+    {
+      "n": "0x10"
+    },
+    true
+  ],
+  [
+    "number condition - numeric prefix string",
+    {
+      "n": 10
+    },
+    {
+      "n": "10abc"
+    },
+    false
+  ],
+  [
+    "number condition - non numeric string",
+    {
+      "n": 0
+    },
+    {
+      "n": "abc"
+    },
+    false
+  ],
+  [
+    "number condition - empty string is 0",
+    {
+      "n": 0
+    },
+    {
+      "n": ""
+    },
+    true
+  ],
+  [
+    "number condition - true is 1",
+    {
+      "n": 1
+    },
+    {
+      "n": true
+    },
+    true
+  ],
+  [
+    "number condition - false is 0",
+    {
+      "n": 0
+    },
+    {
+      "n": false
+    },
+    true
+  ],
+  [
+    "number condition - null is 0",
+    {
+      "n": 0
+    },
+    {
+      "n": null
+    },
+    true
+  ],
+  [
+    "number condition - missing is null so 0",
+    {
+      "n": 0
+    },
+    {},
+    true
+  ],
+  [
+    "number condition - 1 vs missing",
+    {
+      "n": 1
+    },
+    {},
+    false
+  ],
+  [
+    "number condition - single element array",
+    {
+      "n": 5
+    },
+    {
+      "n": [
+        5
+      ]
+    },
+    true
+  ],
+  [
+    "number condition - empty array is 0",
+    {
+      "n": 0
+    },
+    {
+      "n": []
+    },
+    true
+  ],
+  [
+    "number condition - two element array",
+    {
+      "n": 1
+    },
+    {
+      "n": [
+        1,
+        2
+      ]
+    },
+    false
+  ],
+  [
+    "number condition - same number",
+    {
+      "n": 10
+    },
+    {
+      "n": 10
+    },
+    true
+  ],
+  [
+    "number condition - different number",
+    {
+      "n": 10
+    },
+    {
+      "n": 11
+    },
+    false
+  ],
+  [
+    "boolean condition - true vs 'true'",
+    {
+      "b": true
+    },
+    {
+      "b": "true"
+    },
+    true
+  ],
+  [
+    "boolean condition - false vs 'false'",
+    {
+      "b": false
+    },
+    {
+      "b": "false"
+    },
+    false
+  ],
+  [
+    "boolean condition - true vs 'false'",
+    {
+      "b": true
+    },
+    {
+      "b": "false"
+    },
+    true
+  ],
+  [
+    "boolean condition - true vs '0'",
+    {
+      "b": true
+    },
+    {
+      "b": "0"
+    },
+    true
+  ],
+  [
+    "boolean condition - false vs 0",
+    {
+      "b": false
+    },
+    {
+      "b": 0
+    },
+    true
+  ],
+  [
+    "boolean condition - true vs 0",
+    {
+      "b": true
+    },
+    {
+      "b": 0
+    },
+    false
+  ],
+  [
+    "boolean condition - true vs 1",
+    {
+      "b": true
+    },
+    {
+      "b": 1
+    },
+    true
+  ],
+  [
+    "boolean condition - false vs empty string",
+    {
+      "b": false
+    },
+    {
+      "b": ""
+    },
+    true
+  ],
+  [
+    "boolean condition - false vs missing",
+    {
+      "b": false
+    },
+    {},
+    false
+  ],
+  [
+    "boolean condition - false vs null",
+    {
+      "b": false
+    },
+    {
+      "b": null
+    },
+    false
+  ],
+  [
+    "boolean condition - true vs null",
+    {
+      "b": true
+    },
+    {
+      "b": null
+    },
+    false
+  ],
+  [
+    "boolean condition - true vs empty array",
+    {
+      "b": true
+    },
+    {
+      "b": []
+    },
+    true
+  ],
+  [
+    "boolean condition - true vs object",
+    {
+      "b": true
+    },
+    {
+      "b": {
+        "a": 1
+      }
+    },
+    true
+  ],
+  [
+    "null condition - missing",
+    {
+      "n": null
+    },
+    {},
+    true
+  ],
+  [
+    "null condition - null",
+    {
+      "n": null
+    },
+    {
+      "n": null
+    },
+    true
+  ],
+  [
+    "null condition - 0",
+    {
+      "n": null
+    },
+    {
+      "n": 0
+    },
+    false
+  ],
+  [
+    "null condition - empty string",
+    {
+      "n": null
+    },
+    {
+      "n": ""
+    },
+    false
+  ],
+  [
+    "$size - string condition",
+    {
+      "a": {
+        "$size": "2"
+      }
+    },
+    {
+      "a": [
+        1,
+        2
+      ]
+    },
+    true
+  ],
+  [
+    "$elemMatch - string condition vs number elements",
+    {
+      "a": {
+        "$elemMatch": {
+          "$eq": 1
+        }
+      }
+    },
+    {
+      "a": [
+        1,
+        2
+      ]
+    },
+    true
+  ],
+  [
+    "$not - number condition vs numeric string",
+    {
+      "n": {
+        "$not": 10
+      }
+    },
+    {
+      "n": "10"
+    },
+    false
+  ],
+  [
+    "$all - string condition vs number elements",
+    {
+      "a": {
+        "$all": [
+          "1",
+          2
+        ]
+      }
+    },
+    {
+      "a": [
+        1,
+        "2"
+      ]
+    },
+    true
+  ]
+]

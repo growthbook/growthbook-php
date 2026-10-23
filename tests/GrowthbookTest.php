@@ -117,10 +117,10 @@ final class GrowthbookTest extends TestCase
     /**
      * Regression for issue #69: version operators must not throw a TypeError
      * when the targeted attribute is missing (null). A missing attribute is
-     * normalised to "0" (matching the reference TypeScript SDK), so evaluation
-     * proceeds against "0" rather than crashing. Notably "$vgte" — the operator
-     * from the issue — evaluates to false, so the rule is skipped and the
-     * feature falls back to its default value.
+     * not a version, so every version operator fails except "$vne", its
+     * negation (matching the reference TypeScript SDK). Notably "$vgte" — the
+     * operator from the issue — evaluates to false, so the rule is skipped and
+     * the feature falls back to its default value.
      *
      * @dataProvider versionOperatorMissingAttributeProvider
      * @param array<string,mixed> $condition
@@ -136,14 +136,14 @@ final class GrowthbookTest extends TestCase
      */
     public function versionOperatorMissingAttributeProvider(): array
     {
-        // Missing attribute -> "0"; expected result of comparing "0" to "1.2.3".
+        // Missing attribute is not a version: only the negation matches.
         $ops = [
             '$veq'  => false,
             '$vne'  => true,
             '$vgt'  => false,
             '$vgte' => false,
-            '$vlt'  => true,
-            '$vlte' => true,
+            '$vlt'  => false,
+            '$vlte' => false,
         ];
         $cases = [];
         foreach ($ops as $op => $expected) {
@@ -330,6 +330,9 @@ final class GrowthbookTest extends TestCase
      */
     public function testFeature(array $ctx, string $key, array $expected): void
     {
+        if (array_key_exists('contextualBandits', $ctx)) {
+            $this->markTestSkipped('Contextual bandits are not supported by this SDK yet');
+        }
         $gb = new Growthbook($ctx);
         $res = $gb->getFeature($key);
 

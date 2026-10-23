@@ -167,9 +167,9 @@ class Condition
             case 'string':
             case 'number':
             case 'boolean':
-                return static::isMatchingPrimitive($conditionValue, $attributeValue);
+                return static::isEqual($conditionValue, $attributeValue);
             case 'array':
-                return is_array($attributeValue) && static::toJson($conditionValue) === static::toJson($attributeValue);
+                return static::getType($attributeValue) === $type && static::toJson($conditionValue) === static::toJson($attributeValue);
             case 'object':
                 if (static::isOperatorObject($conditionValue)) {
                     foreach ($conditionValue as $key => $value) {
@@ -179,7 +179,7 @@ class Condition
                     }
                     return true;
                 }
-                return is_array($attributeValue) && static::toJson($conditionValue) === static::toJson($attributeValue);
+                return static::getType($attributeValue) === $type && static::toJson($conditionValue) === static::toJson($attributeValue);
 
             case 'null':
                 return $attributeValue === null;
@@ -214,39 +214,48 @@ class Condition
 
 
     /**
-     * @param mixed $val1
-     * @param mixed $val2
+     * Strict equality: values of different types are never equal. Integers and
+     * floats are both JSON numbers, so 1 equals 1.0.
+     *
+     * @param mixed $a
+     * @param mixed $b
+     * @return bool
+     */
+    private static function isEqual($a, $b): bool
+    {
+        if (static::getType($a) !== static::getType($b)) {
+            return false;
+        }
+        if (static::getType($a) === 'number') {
+            return $a == $b;
+        }
+        return $a === $b;
+    }
+
+    /**
+     * Only two numbers or two strings can be ordered. Strings compare as text.
+     *
+     * @param mixed $a
+     * @param mixed $b
+     * @return bool
+     */
+    private static function isOrderable($a, $b): bool
+    {
+        $type = static::getType($a);
+        return ($type === 'number' || $type === 'string') && $type === static::getType($b);
+    }
+
+    /**
+     * @param mixed $a
+     * @param mixed $b
      * @return int
      */
-    private static function compare($val1, $val2): int
+    private static function compare($a, $b): int
     {
-        if (is_bool($val1) || is_bool($val2)) {
-            return $val1 !== null && $val2 !== null && !!$val1 === !!$val2 ? 0 : 1;
+        if (is_string($a) && is_string($b)) {
+            return strcmp($a, $b) <=> 0;
         }
-
-        if ((is_int($val1) || is_float($val1)) && !(is_int($val2) || is_float($val2))) {
-            if ($val2 === null) {
-                $val2 = 0;
-            } else {
-                $val2 = (float) $val2;
-            }
-        }
-
-        if ((is_int($val2) || is_float($val2)) && !(is_int($val1) || is_float($val1))) {
-            if ($val1 === null) {
-                $val1 = 0;
-            } else {
-                $val1 = (float) $val1;
-            }
-        }
-
-        if ($val1 > $val2) {
-            return 1;
-        }
-        if ($val1 < $val2) {
-            return -1;
-        }
-        return 0;
+        return $a <=> $b;
     }
 
     /**
@@ -260,33 +269,28 @@ class Condition
     {
         switch ($operator) {
             case '$eq':
-                return static::compare($attributeValue, $conditionValue) === 0;
+                return static::isEqual($attributeValue, $conditionValue);
             case '$ne':
-                return static::compare($attributeValue, $conditionValue) !== 0;
+                return !static::isEqual($attributeValue, $conditionValue);
             case '$lt':
-                return static::compare($attributeValue, $conditionValue) < 0;
+                return static::isOrderable($attributeValue, $conditionValue) && static::compare($attributeValue, $conditionValue) < 0;
             case '$lte':
-                return static::compare($attributeValue, $conditionValue) <= 0;
+                return static::isOrderable($attributeValue, $conditionValue) && static::compare($attributeValue, $conditionValue) <= 0;
             case '$gt':
-                return static::compare($attributeValue, $conditionValue) > 0;
+                return static::isOrderable($attributeValue, $conditionValue) && static::compare($attributeValue, $conditionValue) > 0;
             case '$gte':
-                return static::compare($attributeValue, $conditionValue) >= 0;
+                return static::isOrderable($attributeValue, $conditionValue) && static::compare($attributeValue, $conditionValue) >= 0;
             case '$veq':
-                return static::parseVersionString($attributeValue) === static::parseVersionString($conditionValue);
             case '$vne':
-                return static::parseVersionString($attributeValue) !== static::parseVersionString($conditionValue);
             case '$vgt':
-                return static::parseVersionString($attributeValue) > static::parseVersionString($conditionValue);
             case '$vgte':
-                return static::parseVersionString($attributeValue) >= static::parseVersionString($conditionValue);
             case '$vlt':
-                return static::parseVersionString($attributeValue) < static::parseVersionString($conditionValue);
             case '$vlte':
-                return static::parseVersionString($attributeValue) <= static::parseVersionString($conditionValue);
+                return static::evalVersion($operator, $attributeValue, $conditionValue);
             case '$regex':
-                return static::regexMatch($conditionValue, $attributeValue) === 1;
+                return is_string($attributeValue) && static::regexMatch($conditionValue, $attributeValue) === 1;
             case '$regexi':
-                return static::regexMatch($conditionValue, $attributeValue, true) === 1;
+                return is_string($attributeValue) && static::regexMatch($conditionValue, $attributeValue, true) === 1;
             case '$in':
                 if (!is_array($conditionValue)) {
                     return false;
@@ -359,6 +363,38 @@ class Condition
     }
 
     /**
+     * Version operators need two strings or two numbers. On a type mismatch
+     * only $vne, the negation of $veq, matches.
+     *
+     * @param string $operator
+     * @param mixed $attributeValue
+     * @param mixed $conditionValue
+     * @return bool
+     */
+    private static function evalVersion(string $operator, $attributeValue, $conditionValue): bool
+    {
+        if (!static::isOrderable($attributeValue, $conditionValue)) {
+            return $operator === '$vne';
+        }
+        $actual = static::parseVersionString($attributeValue);
+        $expected = static::parseVersionString($conditionValue);
+        switch ($operator) {
+            case '$veq':
+                return $actual === $expected;
+            case '$vne':
+                return $actual !== $expected;
+            case '$vgt':
+                return $actual > $expected;
+            case '$vgte':
+                return $actual >= $expected;
+            case '$vlt':
+                return $actual < $expected;
+            default:
+                return $actual <= $expected;
+        }
+    }
+
+    /**
      * @param mixed $version
      * @return string
      */
@@ -413,7 +449,7 @@ class Condition
                     if (strcasecmp($actual, $expected) === 0) {
                         return true;
                     }
-                } elseif ($actual === $expected) {
+                } elseif (static::isEqual($actual, $expected)) {
                     return true;
                 }
             }
@@ -460,24 +496,6 @@ class Condition
     {
         $modifiers = $caseInsensitive ? 'i' : '';
         return @preg_match('/' . $pattern . '/' . $modifiers, $value ?? '');
-    }
-
-    /**
-     * @param mixed $conditionValue
-     * @param mixed $attributeValue
-     * @return bool
-     */
-    private static function isMatchingPrimitive($conditionValue, $attributeValue): bool
-    {
-        if ($attributeValue === null) {
-            return false;
-        }
-
-        if (gettype($conditionValue) !== gettype($attributeValue)) {
-            return false;
-        }
-
-        return $conditionValue === $attributeValue;
     }
 
     /**

@@ -837,11 +837,20 @@ class Growthbook implements LoggerAwareInterface
                 return "cyclic";
             }
 
-            $conditionPassed = Condition::evalCondition(
-                ['value' => $parentRes->value],
-                $parentCondition['condition'] ?? null,
-                $this->savedGroups
-            );
+            // A malformed condition (e.g. {"$not": null}) doesn't match instead of throwing
+            try {
+                $conditionPassed = Condition::evalCondition(
+                    ['value' => $parentRes->value],
+                    $parentCondition['condition'] ?? [],
+                    $this->savedGroups
+                );
+            } catch (\Throwable $e) {
+                $this->log(LogLevel::WARNING, "Could not evaluate prerequisite condition", [
+                    "id" => $conditionId,
+                    "error" => $e->getMessage(),
+                ]);
+                $conditionPassed = false;
+            }
 
             if ($conditionPassed) {
                 $resultByConditionId[$conditionId] = "pass";

@@ -236,6 +236,10 @@ class Growthbook implements LoggerAwareInterface
     public function __clone()
     {
         $this->pluginRegistry->retain();
+        // A deferred exposure belongs to the instance that recorded it: inheriting the buffer
+        // would deliver one exposure once per copy and once more by the original - double
+        // counting in the same analytics backend, which skews results worse than a miss does.
+        $this->deferredTracks = [];
     }
 
     public function __destruct()
@@ -1319,8 +1323,21 @@ class Growthbook implements LoggerAwareInterface
         $deferred = $this->deferredTracks;
         $this->deferredTracks = [];
 
+        // With no logger set, callTrackingCallback() re-throws.  Letting that escape the loop
+        // would drop every exposure after the failing one - they are no longer in the buffer and
+        // [tracks] still marks them as seen, so nothing could recover them.  Each one is
+        // delivered on its own, and the first failure is raised once the rest are out.
+        $firstError = null;
         foreach ($deferred as $viewed) {
-            $this->callTrackingCallback($viewed);
+            try {
+                $this->callTrackingCallback($viewed);
+            } catch (\Throwable $e) {
+                $firstError = $firstError ?? $e;
+            }
+        }
+
+        if ($firstError !== null) {
+            throw $firstError;
         }
     }
 

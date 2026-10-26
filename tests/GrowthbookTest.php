@@ -173,6 +173,59 @@ final class GrowthbookTest extends TestCase
         return $this->getCases("reducePayload");
     }
 
+    public function testReducePayloadWithManyGroupsSharingALargeList(): void
+    {
+        // Every condition group references the same large list group, so the
+        // cycle check must not re-walk that list once per group
+        $savedGroups = [
+            'ids' => ['type' => 'list', 'attributeKey' => 'id', 'values' => array_map('strval', range(1, 20000))],
+        ];
+        $rules = [];
+        for ($i = 0; $i < 300; $i++) {
+            $savedGroups["g$i"] = [
+                'type' => 'condition',
+                'condition' => ['$savedGroup' => ['id' => 'ids'], 'country' => 'US'],
+            ];
+            $rules[] = ['condition' => ['$savedGroup' => ['id' => "g$i"]], 'force' => true];
+        }
+        $payload = ['features' => ['f' => ['defaultValue' => false, 'rules' => $rules]], 'savedGroups' => $savedGroups];
+
+        $result = $this->toJsonArray(Growthbook::reducePayload($payload, ['attributes' => ['country' => 'US']]));
+
+        // Each group drops its known "country" check and keeps the list reference
+        $this->assertSame(['$savedGroup' => ['id' => 'ids']], $result['savedGroups']['g0']['condition']);
+        $this->assertSame(['$savedGroup' => ['id' => 'ids']], $result['savedGroups']['g299']['condition']);
+        $this->assertCount(20000, $result['savedGroups']['ids']['values']);
+        $this->assertCount(301, $result['savedGroups']);
+    }
+
+    public function testReducePayloadKeepsOnlyGroupsOnACycleAsWritten(): void
+    {
+        $savedGroups = [
+            // a -> b -> a is a cycle; c references the cycle but isn't on it;
+            // s references itself. The unknown "z" keeps them undecided.
+            'a' => ['type' => 'condition', 'condition' => ['$or' => [['$savedGroup' => ['id' => 'b']], ['x' => true]], 'y' => true, 'z' => 1]],
+            'b' => ['type' => 'condition', 'condition' => ['$not' => ['$savedGroup' => ['id' => 'a']], 'y' => true, 'z' => 1]],
+            'c' => ['type' => 'condition', 'condition' => ['$savedGroup' => ['id' => 'a'], 'y' => true]],
+            's' => ['type' => 'condition', 'condition' => ['$or' => [['$savedGroup' => ['id' => 's']], ['x' => true]], 'y' => true, 'z' => 1]],
+        ];
+        $payload = [
+            'features' => ['f' => ['defaultValue' => false, 'rules' => [
+                ['condition' => ['$savedGroup' => ['id' => 'c']], 'force' => true],
+                ['condition' => ['$savedGroup' => ['id' => 's']], 'force' => true],
+            ]]],
+            'savedGroups' => $savedGroups,
+        ];
+
+        $result = $this->toJsonArray(Growthbook::reducePayload($payload, ['attributes' => ['y' => true]]));
+
+        $this->assertSame($savedGroups['a']['condition'], $result['savedGroups']['a']['condition']);
+        $this->assertSame($savedGroups['b']['condition'], $result['savedGroups']['b']['condition']);
+        $this->assertSame($savedGroups['s']['condition'], $result['savedGroups']['s']['condition']);
+        // Not on the cycle, so its known "y" check is reduced away
+        $this->assertSame(['$savedGroup' => ['id' => 'a']], $result['savedGroups']['c']['condition']);
+    }
+
     /**
      * Decodes a value the way the expected results were decoded, so an empty
      * object and an empty array compare equal

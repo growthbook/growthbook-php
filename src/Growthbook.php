@@ -1758,47 +1758,22 @@ class Growthbook implements LoggerAwareInterface
         $mark([$features, $experiments, $bandits], true);
 
         // A group on a cycle can't be reduced on its own: its result depends on
-        // which group the evaluation entered the cycle from
-        $reaches = function (string $from, string $to, array &$visited) use (&$reaches, $savedGroups): bool {
-            $found = [];
-            $collect = function ($x) use (&$collect, &$found, $savedGroups): void {
-                if (is_string($x)) {
-                    if (array_key_exists($x, $savedGroups)) {
-                        $found[] = $x;
-                    }
-                } elseif (is_array($x) || is_object($x)) {
-                    foreach ((array) $x as $v) {
-                        $collect($v);
-                    }
-                }
-            };
-            $collect($savedGroups[$from]);
-            foreach ($found as $id) {
-                if ($id === $to) {
-                    return true;
-                }
-                if (isset($visited[$id])) {
-                    continue;
-                }
-                $visited[$id] = true;
-                if ($reaches($id, $to, $visited)) {
-                    return true;
-                }
-            }
-            return false;
-        };
+        // which group the evaluation entered the cycle from. Each group's
+        // referenced ids are collected once, then one pass finds every group
+        // on a cycle (a strongly connected component of more than one group,
+        // or a group that references itself).
+        $onCycle = static::savedGroupsOnCycle($savedGroups);
 
         // Keep each saved group whose id appears as a string anywhere, with
         // condition groups reduced. This needs no list of the operators that
         // reference groups.
         $groups = [];
-        $keep = function ($x) use (&$keep, &$groups, $savedGroups, $attributes, $asWritten, $reaches): void {
+        $keep = function ($x) use (&$keep, &$groups, $savedGroups, $attributes, $asWritten, $onCycle): void {
             if (is_string($x)) {
                 if (!array_key_exists($x, $savedGroups) || array_key_exists($x, $groups)) {
                     return;
                 }
-                $visited = [];
-                $condition = isset($asWritten[$x]) || $reaches($x, $x, $visited)
+                $condition = isset($asWritten[$x]) || isset($onCycle[$x])
                     ? null
                     : Condition::pruneSavedGroup($attributes, ['id' => $x], $savedGroups);
                 $groups[$x] = is_array($condition) && is_array($savedGroups[$x])
@@ -1822,6 +1797,77 @@ class Growthbook implements LoggerAwareInterface
             $payload['contextualBandits'] = $bandits ?: new \stdClass();
         }
         return $payload;
+    }
+
+    /**
+     * The ids of the saved groups that are on a reference cycle, found with
+     * Tarjan's strongly connected components algorithm.
+     *
+     * @param array<string,mixed> $savedGroups
+     * @return array<string,true>
+     */
+    private static function savedGroupsOnCycle(array $savedGroups): array
+    {
+        // Each group's referenced group ids, collected once
+        $refs = [];
+        foreach ($savedGroups as $id => $group) {
+            $found = [];
+            $collect = function ($x) use (&$collect, &$found, $savedGroups): void {
+                if (is_string($x)) {
+                    if (array_key_exists($x, $savedGroups)) {
+                        $found[$x] = true;
+                    }
+                } elseif (is_array($x) || is_object($x)) {
+                    foreach ((array) $x as $v) {
+                        $collect($v);
+                    }
+                }
+            };
+            $collect($group);
+            $refs[(string) $id] = array_map('strval', array_keys($found));
+        }
+
+        $index = 0;
+        $indexes = [];
+        $lowlinks = [];
+        $stack = [];
+        $onStack = [];
+        $onCycle = [];
+        $connect = function (string $v) use (&$connect, &$index, &$indexes, &$lowlinks, &$stack, &$onStack, &$onCycle, $refs): void {
+            $indexes[$v] = $index;
+            $lowlinks[$v] = $index;
+            $index++;
+            $stack[] = $v;
+            $onStack[$v] = true;
+            foreach ($refs[$v] as $w) {
+                if (!isset($indexes[$w])) {
+                    $connect($w);
+                    $lowlinks[$v] = min($lowlinks[$v], $lowlinks[$w]);
+                } elseif (isset($onStack[$w])) {
+                    $lowlinks[$v] = min($lowlinks[$v], $indexes[$w]);
+                }
+            }
+            if ($lowlinks[$v] !== $indexes[$v]) {
+                return;
+            }
+            $component = [];
+            do {
+                $w = array_pop($stack);
+                unset($onStack[$w]);
+                $component[] = $w;
+            } while ($w !== $v);
+            if (count($component) > 1 || in_array($v, $refs[$v], true)) {
+                foreach ($component as $w) {
+                    $onCycle[$w] = true;
+                }
+            }
+        };
+        foreach (array_keys($refs) as $v) {
+            if (!isset($indexes[$v])) {
+                $connect($v);
+            }
+        }
+        return $onCycle;
     }
 
     /**

@@ -64,7 +64,12 @@ class Condition
      */
     public static function pruneSavedGroup(array $attributes, $reference, array $savedGroups): array|bool|null
     {
-        return static::evalSavedGroup($attributes, $reference, $savedGroups, true);
+        // A malformed group can't be decided, so it stays as written
+        try {
+            return static::evalSavedGroup($attributes, $reference, $savedGroups, true);
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /**

@@ -226,6 +226,21 @@ final class GrowthbookTest extends TestCase
         $this->assertSame(['$savedGroup' => ['id' => 'a']], $result['savedGroups']['c']['condition']);
     }
 
+    public function testReducePayloadKeepsAMalformedSavedGroupAsWritten(): void
+    {
+        $payload = [
+            'features' => ['f' => ['defaultValue' => false, 'rules' => [
+                ['condition' => ['$savedGroup' => ['id' => 'g']], 'force' => true],
+            ]]],
+            'savedGroups' => ['g' => ['type' => 'condition', 'condition' => ['$not' => null]]],
+        ];
+
+        $result = $this->toJsonArray(Growthbook::reducePayload($payload, ['attributes' => []]));
+
+        $this->assertSame($payload['features'], $result['features']);
+        $this->assertSame($payload['savedGroups'], $result['savedGroups']);
+    }
+
     /**
      * Decodes a value the way the expected results were decoded, so an empty
      * object and an empty array compare equal

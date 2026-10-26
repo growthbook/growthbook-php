@@ -1435,7 +1435,7 @@ class Growthbook implements LoggerAwareInterface
         if ($range) {
             return self::inRange($n, $range);
         } elseif ($coverage !== null) {
-            return $n <= $coverage;
+            return $n < $coverage;
         }
 
         return true;

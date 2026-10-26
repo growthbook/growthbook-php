@@ -742,9 +742,12 @@ final class GrowthbookTest extends TestCase
         $etagCacheProperty->setAccessible(true);
         $etagCache = $etagCacheProperty->getValue($gb);
 
-        // The URL should have its ETag stored
+        // Stored under the same key as the payload cache, so that two instances differing only
+        // in their custom request headers cannot send each other's If-None-Match
         $url = "https://cdn.growthbook.io/api/features/test-client-key";
-        $this->assertSame($etag, $etagCache->get($url));
+        $this->assertSame(1, $etagCache->size());
+        $this->assertSame($etag, $etagCache->get(md5($url . 'v2')));
+        $this->assertNull($etagCache->get($url), 'the raw url is no longer the key');
     }
 
     /**
@@ -2270,6 +2273,152 @@ final class GrowthbookTest extends TestCase
         $gb = Growthbook::create()->withApiHostRequestHeaders(['X-Tenant-Id' => 42]);
 
         $this->assertSame(['X-Tenant-Id' => '42'], $gb->getApiHostRequestHeaders());
+    }
+
+    /**
+     * Cache double backed by a plain array, so a test can see which keys were written.
+     *
+     * @param array<string,string>|null $store
+     * @return \Psr\SimpleCache\CacheInterface
+     */
+    private function makeRecordingCache(&$store): \Psr\SimpleCache\CacheInterface
+    {
+        $store = [];
+        $cache = $this->createMock(\Psr\SimpleCache\CacheInterface::class);
+        $cache->method('get')->willReturnCallback(function (string $key) use (&$store) {
+            return $store[$key] ?? null;
+        });
+        $cache->method('set')->willReturnCallback(function (string $key, $value) use (&$store) {
+            $store[$key] = $value;
+            return true;
+        });
+
+        return $cache;
+    }
+
+    public function testDifferentHeadersDoNotShareACacheEntry(): void
+    {
+        // A gateway answers per tenant, so sharing one entry serves one tenant's payload to
+        // another
+        $cache = $this->makeRecordingCache($store);
+
+        [$acmeClient, $factory] = $this->makeHeaderCapturingHttp(
+            (string) json_encode(['features' => ['flag' => ['defaultValue' => 'ACME']]]),
+            $ignored
+        );
+        $acme = new Growthbook([
+            'cache' => $cache,
+            'httpClient' => $acmeClient,
+            'requestFactory' => $factory,
+            'apiHostRequestHeaders' => ['X-Tenant' => 'acme'],
+        ]);
+        $acme->initialize('sdk-test', 'https://gw.example.com');
+
+        [$globexClient, $globexFactory] = $this->makeHeaderCapturingHttp(
+            (string) json_encode(['features' => ['flag' => ['defaultValue' => 'GLOBEX']]]),
+            $ignored2
+        );
+        $globex = new Growthbook([
+            'cache' => $cache,
+            'httpClient' => $globexClient,
+            'requestFactory' => $globexFactory,
+            'apiHostRequestHeaders' => ['X-Tenant' => 'globex'],
+        ]);
+        $globex->initialize('sdk-test', 'https://gw.example.com');
+
+        $this->assertSame('ACME', $acme->getValue('flag', '?'));
+        $this->assertSame('GLOBEX', $globex->getValue('flag', '?'));
+        $this->assertCount(2, $store, 'each header set needs its own entry');
+    }
+
+    public function testTheCacheKeyIsUnchangedWithoutCustomHeaders(): void
+    {
+        // Existing deployments must keep hitting the entries they already have
+        $cache = $this->makeRecordingCache($store);
+        [$client, $factory] = $this->makeHeaderCapturingHttp((string) json_encode(['features' => []]), $ignored);
+
+        (new Growthbook([
+            'cache' => $cache,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+        ]))->initialize('sdk-test');
+
+        $url = 'https://cdn.growthbook.io/api/features/sdk-test';
+        $this->assertArrayHasKey(md5($url . 'v2'), $store);
+    }
+
+    public function testRemoteEvalCacheSeparatesHeaderSets(): void
+    {
+        $cache = $this->makeRecordingCache($store);
+        $response = (string) json_encode(['features' => [], 'savedGroups' => []]);
+
+        [$clientA, $factoryA] = $this->makeRemoteEvalHttp($response, 200, $capturedA);
+        (new Growthbook([
+            'remoteEval' => true,
+            'cache' => $cache,
+            'httpClient' => $clientA,
+            'requestFactory' => $factoryA,
+            'apiHostRequestHeaders' => ['X-Tenant' => 'acme'],
+            'url' => '',
+        ]))->initialize('sdk-test', 'https://proxy.example.com');
+
+        [$clientB, $factoryB] = $this->makeRemoteEvalHttp($response, 200, $capturedB);
+        (new Growthbook([
+            'remoteEval' => true,
+            'cache' => $cache,
+            'httpClient' => $clientB,
+            'requestFactory' => $factoryB,
+            'apiHostRequestHeaders' => ['X-Tenant' => 'globex'],
+            'url' => '',
+        ]))->initialize('sdk-test', 'https://proxy.example.com');
+
+        $this->assertSame(1, $capturedA['sendCount']);
+        $this->assertSame(1, $capturedB['sendCount'], 'the second tenant must not read the first one\'s entry');
+    }
+
+    public function testSettingHeadersRefreshesRemoteEval(): void
+    {
+        $response = (string) json_encode(['features' => [], 'savedGroups' => []]);
+        [$client, $factory] = $this->makeRemoteEvalHttp($response, 200, $captured);
+
+        $gb = new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'attributes' => ['id' => 'u1'],
+        ]);
+        $gb->initialize('sdk-test', 'https://proxy.example.com');
+        $this->assertSame(1, $captured['sendCount']);
+
+        // The proxy can answer differently per header, so the previous result is stale
+        $gb->setApiHostRequestHeaders(['X-Tenant' => 'acme']);
+
+        $this->assertSame(2, $captured['sendCount']);
+    }
+
+    public function testRequestHeaderNameWithTrailingNewlineIsRejected(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        Growthbook::create()->withApiHostRequestHeaders(["X-Foo\n" => 'value']);
+    }
+
+    public function testCaseDifferingDuplicateHeaderNamesAreRejected(): void
+    {
+        // Both would be stored, but only the last reaches the request
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('duplicate');
+
+        Growthbook::create()->withApiHostRequestHeaders(['Authorization' => 'a', 'authorization' => 'b']);
+    }
+
+    public function testHeaderValueWithSurroundingWhitespaceIsRejected(): void
+    {
+        // PSR-7 implementations reject it, and there it surfaces as a failed fetch rather than
+        // as a configuration error
+        $this->expectException(\InvalidArgumentException::class);
+
+        Growthbook::create()->withApiHostRequestHeaders(['X-Tenant' => ' acme ']);
     }
 
     public function testRequestHeaderValuesAreNeverLogged(): void

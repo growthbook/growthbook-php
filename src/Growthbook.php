@@ -724,32 +724,47 @@ class Growthbook implements LoggerAwareInterface
      * Headers are not sent to the event ingestor used by the tracking plugin - that endpoint is
      * configured separately through GrowthBookTrackingPluginConfig.
      *
-     * @param array<array-key,mixed> $apiHostRequestHeaders Header name => value
+     * @param array<array-key,mixed> $apiHostRequestHeaders Header name => value (string or number)
      * @return static
      * @throws \InvalidArgumentException When a name is reserved or a name/value is malformed
      */
     public function setApiHostRequestHeaders(array $apiHostRequestHeaders): static
     {
         $validated = [];
+        $seen = [];
         foreach ($apiHostRequestHeaders as $name => $value) {
-            if (!is_string($name) || !preg_match('/^[!#$%&\'*+\-.^_`|~0-9A-Za-z]+$/', $name)) {
+            // \z rather than $, which in PCRE also matches before a trailing newline
+            if (!is_string($name) || !preg_match('/^[!#$%&\'*+\-.^_`|~0-9A-Za-z]+\z/', $name)) {
                 throw new \InvalidArgumentException("Invalid request header name: " . (is_string($name) ? "\"$name\"" : gettype($name)));
             }
-            if (in_array(strtolower($name), self::RESERVED_REQUEST_HEADERS, true)) {
+            $lowercased = strtolower($name);
+            if (in_array($lowercased, self::RESERVED_REQUEST_HEADERS, true)) {
                 throw new \InvalidArgumentException("Request header \"$name\" is managed by the SDK and cannot be overridden");
             }
+            // Header names are case-insensitive on the wire, so two spellings of one name would
+            // be stored as two entries while only the last reached the request
+            if (isset($seen[$lowercased])) {
+                throw new \InvalidArgumentException("Request header \"$name\" is a duplicate of \"{$seen[$lowercased]}\"");
+            }
+            $seen[$lowercased] = $name;
+
             if (!is_string($value) && !is_int($value) && !is_float($value)) {
                 throw new \InvalidArgumentException("Value of request header \"$name\" must be a string or a number");
             }
             $value = (string) $value;
-            // The value is never echoed back in the message - it may be a secret.
-            if (preg_match('/[\r\n\0]/', $value)) {
-                throw new \InvalidArgumentException("Value of request header \"$name\" must not contain CR, LF or NUL characters");
+            // The PSR-7 grammar, so a value this accepts cannot be rejected later by withHeader()
+            // deep inside initialize(), where it surfaces as a failed fetch instead of a config
+            // error. The value is never echoed back in the message - it may be a secret.
+            if (!preg_match('/^[ \t]*[\x21-\x7E\x80-\xFF]*(?:[ \t]+[\x21-\x7E\x80-\xFF]+)*[ \t]*\z/', $value) || trim($value, " \t") !== $value) {
+                throw new \InvalidArgumentException("Value of request header \"$name\" is not a valid header value");
             }
             $validated[$name] = $value;
         }
 
         $this->apiHostRequestHeaders = $validated;
+        // The headers change what a proxy returns, so an already-initialized remote-eval instance
+        // must re-evaluate rather than keep serving the previous headers' result
+        $this->refreshForRemoteEval();
 
         return $this;
     }
@@ -772,6 +787,24 @@ class Growthbook implements LoggerAwareInterface
     public function getApiHostRequestHeaders(): array
     {
         return $this->apiHostRequestHeaders;
+    }
+
+    /**
+     * Cache-key fragment for the configured headers, empty when none are set so that keys stay
+     * byte-identical for everyone not using the option.
+     *
+     * @return string
+     */
+    private function apiHostRequestHeadersKeyPart(): string
+    {
+        if (!$this->apiHostRequestHeaders) {
+            return '';
+        }
+
+        $headers = $this->apiHostRequestHeaders;
+        ksort($headers);
+
+        return '||h=' . (json_encode($headers) ?: '');
     }
 
     /**
@@ -1810,8 +1843,10 @@ class Growthbook implements LoggerAwareInterface
         }
 
         $url = rtrim(empty($this->apiHost) ? self::DEFAULT_API_HOST : $this->apiHost, "/") . "/api/features/" . $this->clientKey;
-        // Update when the cache format changes to prevent issues when updating the library version
-        $cacheKey = md5($url . 'v2');
+        // Update when the cache format changes to prevent issues when updating the library version.
+        // The headers are part of the key because a gateway can return a different payload per
+        // tenant for the same url - without them two instances would share one entry.
+        $cacheKey = md5($url . 'v2' . $this->apiHostRequestHeadersKeyPart());
 
         // First try fetching from cache
         $cachedData = null;
@@ -1863,7 +1898,10 @@ class Growthbook implements LoggerAwareInterface
             $req = $req->withHeader('User-Agent', 'growthbook-php/' . $this->sdkVersion());
             \assert($req instanceof \Psr\Http\Message\RequestInterface);
 
-            $cachedETag = $this->etagCache->get($url);
+            // Keyed like the payload cache, not by url: otherwise an instance would send another
+            // instance's If-None-Match and adopt its payload on a 304 from a gateway that does not
+            // vary on the custom headers. It also keeps raw header values out of the in-memory key.
+            $cachedETag = $this->etagCache->get($cacheKey);
             if ($cachedETag !== null && $cachedData !== null) {
                 $req = $req->withHeader('If-None-Match', $cachedETag);
                 \assert($req instanceof \Psr\Http\Message\RequestInterface);
@@ -1914,7 +1952,7 @@ class Growthbook implements LoggerAwareInterface
             // Store ETag for next conditional request
             $etag = $this->extractETagFromResponse($res);
             if ($etag !== null) {
-                $this->etagCache->put($url, $etag);
+                $this->etagCache->put($cacheKey, $etag);
             }
 
 
@@ -2046,6 +2084,12 @@ class Growthbook implements LoggerAwareInterface
             "fv" => $payload["forcedVariations"],
             "url" => $payload["url"],
         ];
+        // The proxy can answer differently per gateway header (tenant, authorization), so two
+        // instances that differ only in headers must not share an entry. Added before the sort
+        // below, which makes the key canonical for free.
+        if ($this->apiHostRequestHeaders) {
+            $keyData["h"] = $this->apiHostRequestHeaders;
+        }
 
         // Sort keys recursively so the serialized key is canonical regardless of
         // attribute/forcedVariation insertion order. Matches Python (sort_keys=True)

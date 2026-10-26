@@ -155,9 +155,11 @@ $growthbook = Growthbook\Growthbook::create()
   ->withApiHostRequestHeaders(['Authorization' => 'Bearer ' . getenv('GB_GATEWAY_TOKEN')]);
 ```
 
-Keep the token in an environment variable or your secrets manager rather than in code. Header values are never written to the log.
+Keep the token in an environment variable or your secrets manager rather than in code. The SDK never writes header values to the log itself, though it cannot promise the same for an HTTP client whose exception messages it logs - one more reason the values are validated up front.
 
-Headers managed by the SDK - `User-Agent`, `If-None-Match` and `Content-Type` - cannot be overridden: passing one of them (in any casing) throws an `InvalidArgumentException`, as does a malformed header name or a value containing CR/LF. This keeps ETag caching working and rules out header injection.
+Headers managed by the SDK - `User-Agent`, `If-None-Match` and `Content-Type` - cannot be overridden: passing one of them (in any casing) throws an `InvalidArgumentException`. So does a malformed name, two spellings of the same name (header names are case-insensitive, so only one of them would be sent), or a value outside the HTTP grammar, including surrounding whitespace and CR/LF. Validating here rather than leaving it to the HTTP client means a bad header is a configuration error naming the header, not a failed feature fetch.
+
+Responses are cached per header set: two instances that differ only in their custom headers get their own cache entries, so a gateway that answers differently per tenant cannot have one tenant's payload served to another. Cache keys are unchanged if you do not use the option.
 
 These headers are not sent to the event ingestor used by the tracking plugin; that endpoint is configured separately through `GrowthBookTrackingPluginConfig`.
 

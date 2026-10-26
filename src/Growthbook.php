@@ -1533,6 +1533,230 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
+     * Shrinks a payload for a user whose attributes are only partly known, e.g.
+     * on a server bootstrapping a client SDK. The result evaluates the same as
+     * the full payload for anyone who agrees with the known attributes.
+     *
+     * @param array<string,mixed> $payload A decoded, decrypted features API response
+     * @param array{attributes?:array<string,mixed>,include?:array<string,mixed>,exclude?:array<string,mixed>,prerequisites?:string} $options
+     *   attributes: the attributes known for the user.
+     *   include: keep only the features and auto experiments that match every
+     *   filter ({projects?:string[], tags?:string[], customFields?:array<string,mixed[]>}).
+     *   exclude: remove the features and auto experiments that match any filter.
+     *   prerequisites: "keep" (default) sends the prerequisites of what is kept
+     *   even when the filters remove them, so the client evaluates the same as
+     *   the full payload. "filter" applies the filters to them too.
+     * @return array<string,mixed>
+     */
+    public static function reducePayload(array $payload, array $options = []): array
+    {
+        $attributes = $options['attributes'] ?? [];
+        $include = $options['include'] ?? [];
+        $exclude = $options['exclude'] ?? [];
+        $prerequisites = $options['prerequisites'] ?? 'keep';
+        $savedGroups = is_array($payload['savedGroups'] ?? null) ? $payload['savedGroups'] : [];
+        $allFeatures = is_array($payload['features'] ?? null) ? $payload['features'] : [];
+        $allExperiments = is_array($payload['experiments'] ?? null) ? $payload['experiments'] : [];
+
+        // Only an array counts, as with `$in`, and any one of its values is enough
+        $has = function ($actual, $want): bool {
+            return is_array($want) && Condition::isIn($actual, $want);
+        };
+
+        // A rule without projects applies wherever its feature is delivered
+        $ruleInProjects = function ($meta) use ($include, $has): bool {
+            return !isset($include['projects'])
+                || !is_array($meta)
+                || !isset($meta['projects'])
+                || $has($meta['projects'], $include['projects']);
+        };
+        // A feature or experiment has to list one of the projects, or be in all
+        // of them. One without projects is in none, like one without tags.
+        $inProjects = function (array $meta) use ($include, $has): bool {
+            return !isset($include['projects'])
+                || !empty($meta['allProjects'])
+                || $has($meta['projects'] ?? null, $include['projects']);
+        };
+        // Kept when it matches every `include` filter and no `exclude` filter.
+        // Only listed projects are excluded, so one in all projects stays.
+        $matches = function ($meta) use ($include, $exclude, $has, $inProjects): bool {
+            $m = is_array($meta) ? $meta : [];
+            $field = function (string $k) use ($m) {
+                return is_array($m['customFields'] ?? null) ? ($m['customFields'][$k] ?? null) : null;
+            };
+            if (!$inProjects($m)) {
+                return false;
+            }
+            if (isset($include['tags']) && !$has($m['tags'] ?? null, $include['tags'])) {
+                return false;
+            }
+            foreach ($include['customFields'] ?? [] as $k => $want) {
+                if (!$has($field((string) $k), $want)) {
+                    return false;
+                }
+            }
+            if ($has($m['projects'] ?? null, $exclude['projects'] ?? null) || $has($m['tags'] ?? null, $exclude['tags'] ?? null)) {
+                return false;
+            }
+            foreach ($exclude['customFields'] ?? [] as $k => $want) {
+                if ($has($field((string) $k), $want)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        // Reduces a rule or an auto experiment
+        $prune = function (array $item) use ($attributes, $savedGroups): array {
+            if (!isset($item['condition']) || !is_array($item['condition'])) {
+                return $item;
+            }
+            $condition = Condition::pruneCondition($attributes, $item['condition'], $savedGroups);
+            if ($condition === true) {
+                unset($item['condition']);
+            } elseif ($condition === false) {
+                // Kept, since sticky buckets and forced variations skip an
+                // experiment's condition, and a rule's prerequisites are checked before it
+                $item['condition'] = ['$not' => new \stdClass()];
+                // A force rule that never passes never returns its value
+                if (array_key_exists('force', $item)) {
+                    $item['force'] = null;
+                }
+            } else {
+                $item['condition'] = $condition;
+            }
+            return $item;
+        };
+
+        // Adds a feature, then the prerequisites the client evaluates for it,
+        // even when the filters drop them. With "filter", only the filters
+        // decide, except for holdouts, which aren't app features and are always kept.
+        $added = [];
+        $parentIds = function (array $item) use ($prerequisites): array {
+            $ids = [];
+            foreach ($item['parentConditions'] ?? [] as $parent) {
+                $id = (string) ($parent['id'] ?? '');
+                if ($prerequisites !== 'filter' || str_starts_with($id, '$holdout:')) {
+                    $ids[] = $id;
+                }
+            }
+            return $ids;
+        };
+        $add = function (string $id) use (&$add, &$added, $parentIds, $allFeatures, $inProjects, $ruleInProjects, $prune): void {
+            if (!array_key_exists($id, $allFeatures) || array_key_exists($id, $added)) {
+                return;
+            }
+            $feature = $allFeatures[$id];
+            if (!is_array($feature)) {
+                return;
+            }
+            // Rules scoped to other projects aren't served. A prerequisite from
+            // another project keeps its own, as on the server.
+            $scoped = $inProjects(is_array($feature['metadata'] ?? null) ? $feature['metadata'] : []);
+            $rules = null;
+            if (is_array($feature['rules'] ?? null)) {
+                $rules = [];
+                foreach ($feature['rules'] as $rule) {
+                    if (!$scoped || $ruleInProjects($rule['metadata'] ?? null)) {
+                        $rules[] = $prune($rule);
+                    }
+                }
+                $feature['rules'] = $rules;
+            }
+            // Stored before its parents are added, so a prerequisite cycle ends
+            $added[$id] = $feature;
+            foreach ($rules ?? [] as $rule) {
+                foreach ($parentIds($rule) as $parentId) {
+                    $add($parentId);
+                }
+            }
+        };
+
+        foreach ($allFeatures as $id => $feature) {
+            if ($matches(is_array($feature) ? ($feature['metadata'] ?? null) : null)) {
+                $add((string) $id);
+            }
+        }
+        $experiments = [];
+        foreach ($allExperiments as $experiment) {
+            if (is_array($experiment) && $matches($experiment['metadata'] ?? null)) {
+                $experiments[] = $prune($experiment);
+            }
+        }
+        foreach ($experiments as $experiment) {
+            foreach ($parentIds($experiment) as $parentId) {
+                $add($parentId);
+            }
+        }
+        $features = $added;
+
+        // The contextual bandits that kept rules and experiments use. A context
+        // whose condition never passes can't be the first that does, so it goes.
+        $allBandits = is_array($payload['contextualBandits'] ?? null) ? $payload['contextualBandits'] : [];
+        $bandits = [];
+        $items = $experiments;
+        foreach ($features as $feature) {
+            foreach ($feature['rules'] ?? [] as $rule) {
+                $items[] = $rule;
+            }
+        }
+        foreach ($items as $item) {
+            $ref = $item['contextualBanditRef'] ?? null;
+            if (!is_string($ref) || $ref === '' || isset($bandits[$ref]) || !array_key_exists($ref, $allBandits)) {
+                continue;
+            }
+            $bandit = $allBandits[$ref];
+            $contexts = [];
+            foreach ($bandit['contexts'] ?? [] as $context) {
+                $condition = Condition::pruneCondition(
+                    $attributes,
+                    is_array($context['condition'] ?? null) ? $context['condition'] : [],
+                    $savedGroups
+                );
+                if ($condition === false) {
+                    continue;
+                }
+                $context['condition'] = $condition === true ? new \stdClass() : $condition;
+                $contexts[] = $context;
+            }
+            $bandit['contexts'] = $contexts;
+            $bandits[$ref] = $bandit;
+        }
+
+        // Keep each saved group whose id appears as a string anywhere, with
+        // condition groups reduced. This needs no list of the operators that
+        // reference groups.
+        $groups = [];
+        $keep = function ($x) use (&$keep, &$groups, $savedGroups, $attributes): void {
+            if (is_string($x)) {
+                if (!array_key_exists($x, $savedGroups) || array_key_exists($x, $groups)) {
+                    return;
+                }
+                $condition = Condition::pruneSavedGroup($attributes, ['id' => $x], $savedGroups);
+                $groups[$x] = is_array($condition) && is_array($savedGroups[$x])
+                    ? array_merge($savedGroups[$x], ['condition' => $condition])
+                    : $savedGroups[$x];
+                $keep($groups[$x]);
+            } elseif (is_array($x)) {
+                foreach ($x as $value) {
+                    $keep($value);
+                }
+            }
+        };
+        $keep([$features, $experiments, $bandits]);
+
+        // Empty objects stay objects when the result is JSON-encoded
+        $payload['features'] = $features ?: new \stdClass();
+        $payload['experiments'] = $experiments;
+        $payload['savedGroups'] = $groups ?: new \stdClass();
+        // Only when there were any, as with the payload's other optional keys
+        if (is_array($payload['contextualBandits'] ?? null)) {
+            $payload['contextualBandits'] = $bandits ?: new \stdClass();
+        }
+        return $payload;
+    }
+
+    /**
      * @param int            $numVariations
      * @param float          $coverage
      * @param null|(float[]) $weights

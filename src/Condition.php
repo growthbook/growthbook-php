@@ -30,6 +30,142 @@ class Condition
     }
 
     /**
+     * Partially evaluates a condition when only some attributes are known, e.g.
+     * on a server. Attributes missing from $attributes are unknown. Returns a
+     * boolean once the result can't depend on them, otherwise the condition
+     * minus every branch that is already decided.
+     *
+     * @param array<string,mixed> $attributes
+     * @param array<string,mixed> $condition
+     * @param array<string,mixed> $savedGroups
+     * @return array<string,mixed>|bool
+     */
+    public static function pruneCondition(array $attributes, array $condition, array $savedGroups = []): array|bool
+    {
+        // One that throws, such as a malformed one, stays as written. Evaluating
+        // it fails as a whole, so no part of it can be decided.
+        try {
+            return static::pruneEntries($attributes, $condition, $savedGroups);
+        } catch (\Throwable $e) {
+            return $condition;
+        }
+    }
+
+    /**
+     * Prunes the saved group a reference points to. Returns its result once
+     * decided, null when it can't be, otherwise its condition minus every
+     * branch that is already decided.
+     *
+     * @internal Used by Growthbook::reducePayload
+     * @param array<string,mixed> $attributes
+     * @param mixed $reference
+     * @param array<string,mixed> $savedGroups
+     * @return array<string,mixed>|bool|null
+     */
+    public static function pruneSavedGroup(array $attributes, $reference, array $savedGroups): array|bool|null
+    {
+        return static::evalSavedGroup($attributes, $reference, $savedGroups, true);
+    }
+
+    /**
+     * @param mixed $obj
+     * @param array<string,mixed> $condition
+     * @param array<string,mixed> $savedGroups
+     * @return array<string,mixed>|bool
+     */
+    private static function pruneEntries($obj, array $condition, array $savedGroups): array|bool
+    {
+        $out = [];
+        foreach ($condition as $key => $value) {
+            switch ($key) {
+                case '$or':
+                case '$nor':
+                case '$and':
+                    $r = static::pruneList($obj, $value, $savedGroups, $key !== '$and');
+                    break;
+                case '$not':
+                    $r = static::pruneEntries($obj, $value, $savedGroups);
+                    break;
+                case '$savedGroup':
+                    $r = static::evalSavedGroup($obj, $value, $savedGroups, true);
+                    // Keep an undecided reference as is rather than inlining the group
+                    if (!is_bool($r)) {
+                        $r = null;
+                    }
+                    break;
+                default:
+                    // null when the attribute is unknown, or the value uses an
+                    // operator this SDK doesn't support, which the client's SDK may
+                    $r = static::isKnown($obj, (string) $key)
+                        ? static::evalConditionValue($value, static::getPath($obj, (string) $key), $savedGroups)
+                        : null;
+            }
+            // $not and $nor pass when what they hold fails
+            if (($key === '$not' || $key === '$nor') && is_bool($r)) {
+                $r = !$r;
+            }
+
+            // One failing entry fails the whole condition, and a passing one is dropped
+            if ($r === false) {
+                return false;
+            }
+            // null is an undecided leaf, which stays as written
+            if ($r === null) {
+                $out[$key] = $value;
+            } elseif ($r !== true) {
+                $out[$key] = $r;
+            }
+        }
+        return count($out) ? $out : true;
+    }
+
+    /**
+     * Prunes an $or (or an $and) list. Returns the conditions still undecided,
+     * or the list's result once there are none.
+     *
+     * @param mixed $obj
+     * @param array<string,mixed>[] $conditions
+     * @param array<string,mixed> $savedGroups
+     * @param bool $or
+     * @return array<array<string,mixed>>|bool
+     */
+    private static function pruneList($obj, array $conditions, array $savedGroups, bool $or): array|bool
+    {
+        $out = [];
+        foreach ($conditions as $condition) {
+            $r = static::pruneEntries($obj, $condition, $savedGroups);
+            // One passing condition decides an $or, and one failing condition an $and
+            if ($or && $r === true) {
+                return true;
+            }
+            if (!$or && $r === false) {
+                return false;
+            }
+            if (!is_bool($r)) {
+                $out[] = $r;
+            }
+        }
+        if (count($out)) {
+            return $out;
+        }
+        // Every condition failed an $or, or passed an $and. Like evalOr, an
+        // empty $or passes.
+        return $or ? !count($conditions) : true;
+    }
+
+    /**
+     * A nested path is unknown, since the server may only have part of the object
+     *
+     * @param mixed $obj
+     * @param string $path
+     * @return bool
+     */
+    private static function isKnown($obj, string $path): bool
+    {
+        return strpos($path, '.') === false && is_array($obj) && array_key_exists($path, $obj);
+    }
+
+    /**
      * Evaluation helpers return true or false, or null when the result depends
      * on an operator or saved group type this SDK doesn't support. The public
      * methods treat null as failing.
@@ -57,6 +193,7 @@ class Condition
                     $r = static::not(static::evalConditionWithContext($obj, $value, $savedGroups));
                     break;
                 case '$savedGroup':
+                    /** @var bool|null $r */
                     $r = static::evalSavedGroup($obj, $value, $savedGroups);
                     break;
                 default:
@@ -76,12 +213,16 @@ class Condition
     /**
      * Resolves a `$savedGroup` reference. Anything unrecognized matches nobody.
      *
+     * With $prune, an attribute missing from $obj is unknown: a list entry on it
+     * is null, and a condition entry is pruned rather than evaluated.
+     *
      * @param mixed $obj
      * @param mixed $reference
      * @param array<string,mixed> $savedGroups
-     * @return bool|null
+     * @param bool $prune
+     * @return array<string,mixed>|bool|null
      */
-    private static function evalSavedGroup($obj, $reference, array $savedGroups): ?bool
+    private static function evalSavedGroup($obj, $reference, array $savedGroups, bool $prune = false): array|bool|null
     {
         if (!is_array($reference) || static::isList($reference)) {
             return false;
@@ -113,6 +254,9 @@ class Condition
             if (!is_array($values) || !static::isList($values)) {
                 return false;
             }
+            if ($prune && !static::isKnown($obj, $key)) {
+                return null;
+            }
             return static::isIn(static::getPath($obj, $key), $values, false);
         }
 
@@ -125,7 +269,9 @@ class Condition
             $visited = self::$visited;
             self::$visited[$id] = true;
             try {
-                return static::evalConditionWithContext($obj, $condition, $savedGroups);
+                return $prune
+                    ? static::pruneEntries($obj, $condition, $savedGroups)
+                    : static::evalConditionWithContext($obj, $condition, $savedGroups);
             } finally {
                 self::$visited = $visited;
             }
@@ -610,12 +756,15 @@ class Condition
     }
 
     /**
+     * Whether the value, or any element of an array value, is in the list
+     *
+     * @internal Used by Growthbook::reducePayload
      * @param mixed $attributeValue
      * @param array<mixed> $conditionValue
      * @param bool $insensitive
      * @return bool
      */
-    private static function isIn($attributeValue, array $conditionValue, bool $insensitive = false): bool
+    public static function isIn($attributeValue, array $conditionValue, bool $insensitive = false): bool
     {
         if (!is_array($attributeValue)) {
             $attributeValue = [$attributeValue];

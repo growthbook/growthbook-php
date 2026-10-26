@@ -128,6 +128,64 @@ final class GrowthbookTest extends TestCase
     }
 
     /**
+     * @dataProvider pruneConditionProvider
+     * @param array<string,mixed> $condition
+     * @param array<string,mixed> $attributes
+     * @param array<string,mixed>|bool $expected
+     * @param array<string,mixed> $savedGroups
+     */
+    public function testPruneCondition(array $condition, array $attributes, $expected, array $savedGroups = []): void
+    {
+        $this->assertEquals($expected, $this->toJsonArray(Condition::pruneCondition($attributes, $condition, $savedGroups)));
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function pruneConditionProvider(): array
+    {
+        return $this->getCases("pruneCondition");
+    }
+
+    /**
+     * @dataProvider reducePayloadProvider
+     * @param array<string,mixed> $input
+     * @param array<string,mixed> $expected
+     */
+    public function testReducePayload(array $input, array $expected): void
+    {
+        // The JS SDK's global attributes, which the user's override
+        $attributes = array_merge($input['globalAttributes'] ?? [], $input['attributes'] ?? []);
+        $options = ['attributes' => $attributes];
+        foreach (['include', 'exclude', 'prerequisites'] as $key) {
+            if (array_key_exists($key, $input)) {
+                $options[$key] = $input[$key];
+            }
+        }
+        $this->assertEquals($expected, $this->toJsonArray(Growthbook::reducePayload($input['payload'], $options)));
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function reducePayloadProvider(): array
+    {
+        return $this->getCases("reducePayload");
+    }
+
+    /**
+     * Decodes a value the way the expected results were decoded, so an empty
+     * object and an empty array compare equal
+     *
+     * @param mixed $value
+     * @return mixed
+     */
+    private function toJsonArray($value)
+    {
+        return json_decode((string) json_encode($value), true);
+    }
+
+    /**
      * Regression for issue #69: version operators must not throw a TypeError
      * when the targeted attribute is missing (null). A missing attribute is
      * not a version, so every version operator fails except "$vne", its
@@ -221,7 +279,7 @@ final class GrowthbookTest extends TestCase
 
     /**
      * Patterns containing "/" match like JavaScript's RegExp. Expected values
-     * come from the JS SDK (cases from @gazzdingo's growthbook-php#78).
+     * come from the JS SDK (cases from Guy (`gazzdingo`)'s growthbook-php#78).
      *
      * @dataProvider regexProvider
      * @param array<string,mixed> $condition

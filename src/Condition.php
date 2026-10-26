@@ -11,6 +11,14 @@ class Condition
     private const CONDITION_OPERATORS = ['$or', '$nor', '$and', '$savedGroup'];
 
     /**
+     * Saved group ids already being resolved, to stop cycles. Restored after
+     * each group, so sibling groups don't see each other's ids.
+     *
+     * @var array<string,bool>
+     */
+    private static $visited = [];
+
+    /**
      * @param array<string,mixed> $attributes
      * @param array<string,mixed> $condition
      * @param array<string,mixed> $savedGroups
@@ -48,6 +56,9 @@ class Condition
                 case '$not':
                     $r = static::not(static::evalConditionWithContext($obj, $value, $savedGroups));
                     break;
+                case '$savedGroup':
+                    $r = static::evalSavedGroup($obj, $value, $savedGroups);
+                    break;
                 default:
                     $r = static::evalConditionValue($value, static::getPath($obj, (string) $key), $savedGroups);
             }
@@ -60,6 +71,68 @@ class Condition
             }
         }
         return $result;
+    }
+
+    /**
+     * Resolves a `$savedGroup` reference. Anything unrecognized matches nobody.
+     *
+     * @param mixed $obj
+     * @param mixed $reference
+     * @param array<string,mixed> $savedGroups
+     * @return bool|null
+     */
+    private static function evalSavedGroup($obj, $reference, array $savedGroups): ?bool
+    {
+        if (!is_array($reference) || static::isList($reference)) {
+            return false;
+        }
+
+        $id = $reference['id'] ?? null;
+        if (!is_string($id) || isset(self::$visited[$id])) {
+            return false;
+        }
+        // Falling back to the entry's attribute would check a different population
+        if (array_key_exists('attributeKey', $reference) && !is_string($reference['attributeKey'])) {
+            return false;
+        }
+
+        $entry = $savedGroups[$id] ?? null;
+        // Absent, or a v1 bare array
+        if (!is_array($entry) || static::isList($entry)) {
+            return false;
+        }
+
+        $type = $entry['type'] ?? null;
+        if ($type === 'list') {
+            // The override wins over the entry's own attribute
+            $key = $reference['attributeKey'] ?? ($entry['attributeKey'] ?? null);
+            if (!is_string($key)) {
+                return false;
+            }
+            $values = $entry['values'] ?? null;
+            if (!is_array($values) || !static::isList($values)) {
+                return false;
+            }
+            return static::isIn(static::getPath($obj, $key), $values, false);
+        }
+
+        if ($type === 'condition') {
+            // A condition group has no single attribute, so any override is ignored
+            $condition = $entry['condition'] ?? null;
+            if (!is_array($condition)) {
+                return false;
+            }
+            $visited = self::$visited;
+            self::$visited[$id] = true;
+            try {
+                return static::evalConditionWithContext($obj, $condition, $savedGroups);
+            } finally {
+                self::$visited = $visited;
+            }
+        }
+
+        // A group type added after this SDK was built. The client SDK may support it.
+        return null;
     }
 
     /**
@@ -372,12 +445,14 @@ class Condition
                 return !static::isIn($attributeValue, $conditionValue, true);
             case '$inGroup':
             case '$notInGroup':
-                $entry = static::getSavedGroupEntry($savedGroups, $conditionValue);
+                $known = (is_string($conditionValue) || is_int($conditionValue))
+                    && array_key_exists($conditionValue, $savedGroups);
+                $entry = $known ? $savedGroups[$conditionValue] : null;
                 if (static::isNewGroupType($entry)) {
                     return null;
                 }
                 // No values means matching nobody. An empty list would pass everyone.
-                $values = static::getSavedGroupArrayValues($entry);
+                $values = static::getSavedGroupArrayValues($known, $entry);
                 if ($values === null) {
                     return false;
                 }
@@ -417,32 +492,18 @@ class Condition
     }
 
     /**
-     * A saved group entry, or null for an id that isn't in the payload
-     *
-     * @param array<string,mixed> $savedGroups
-     * @param mixed $id
-     * @return mixed
-     */
-    private static function getSavedGroupEntry(array $savedGroups, $id)
-    {
-        if (!(is_string($id) || is_int($id)) || !array_key_exists($id, $savedGroups)) {
-            return null;
-        }
-        return $savedGroups[$id];
-    }
-
-    /**
      * The values of a saved group: the legacy bare array, or the values of a
      * typed "list" entry. Null for a group that has no values to check against.
      *
+     * @param bool $known Whether the id is in the payload at all
      * @param mixed $entry
      * @return array<mixed>|null
      */
-    private static function getSavedGroupArrayValues($entry): ?array
+    private static function getSavedGroupArrayValues(bool $known, $entry): ?array
     {
         // An unknown id has always behaved like an empty list. A malformed entry
         // has not, and must not: $notInGroup would pass everyone.
-        if ($entry === null) {
+        if (!$known) {
             return [];
         }
         if (is_array($entry) && static::isList($entry)) {

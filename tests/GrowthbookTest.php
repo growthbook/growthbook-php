@@ -30,10 +30,14 @@ final class GrowthbookTest extends TestCase
             $this->cases = json_decode($cases, true);
         }
 
-        if (!array_key_exists($section, $this->cases)) {
-            throw new \Exception("Unknown test case: $section");
+        // A nested section such as "savedGroupReferencesV2.feature"
+        $raw = $this->cases;
+        foreach (explode('.', $section) as $part) {
+            if (!is_array($raw) || !array_key_exists($part, $raw)) {
+                throw new \Exception("Unknown test case: $section");
+            }
+            $raw = $raw[$part];
         }
-        $raw = $this->cases[$section];
         if (!$this->arrayIsList($raw)) {
             return $raw;
         }
@@ -96,6 +100,7 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider evalConditionProvider
+     * @dataProvider savedGroupReferencesV2EvalConditionProvider
      * @param array<string,mixed> $condition
      * @param array<string,mixed> $attributes
      * @param bool $expected
@@ -112,6 +117,14 @@ final class GrowthbookTest extends TestCase
     public function evalConditionProvider(): array
     {
         return $this->getCases("evalCondition");
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function savedGroupReferencesV2EvalConditionProvider(): array
+    {
+        return $this->getCases("savedGroupReferencesV2.evalCondition");
     }
 
     /**
@@ -381,6 +394,7 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider featureProvider
+     * @dataProvider savedGroupReferencesV2FeatureProvider
      * @param array<string,mixed> $ctx
      * @param string $key
      * @param array<string,mixed> $expected
@@ -441,9 +455,18 @@ final class GrowthbookTest extends TestCase
         return $this->getCases("feature");
     }
 
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function savedGroupReferencesV2FeatureProvider(): array
+    {
+        return $this->getCases("savedGroupReferencesV2.feature");
+    }
+
 
     /**
      * @dataProvider getRunProvider
+     * @dataProvider savedGroupReferencesV2RunProvider
      * @param array<string,mixed> $ctx
      * @param array<string,mixed> $exp
      * @param mixed $expectedValue
@@ -459,6 +482,14 @@ final class GrowthbookTest extends TestCase
         $this->assertSame($res->value, $expectedValue);
         $this->assertSame($res->inExperiment, $inExperiment);
         $this->assertSame($res->hashUsed, $hashUsed);
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function savedGroupReferencesV2RunProvider(): array
+    {
+        return $this->getCases("savedGroupReferencesV2.run");
     }
 
     /**

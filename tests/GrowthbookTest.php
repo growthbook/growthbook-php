@@ -207,6 +207,42 @@ final class GrowthbookTest extends TestCase
     }
 
     /**
+     * Patterns containing "/" match like JavaScript's RegExp. Expected values
+     * come from the JS SDK (cases from @gazzdingo's growthbook-php#78).
+     *
+     * @dataProvider regexProvider
+     * @param array<string,mixed> $condition
+     * @param array<string,mixed> $attributes
+     */
+    public function testRegexMatchesJavaScript(array $condition, array $attributes, bool $expected): void
+    {
+        $this->assertSame($expected, Condition::evalCondition($attributes, $condition, []));
+    }
+
+    /**
+     * @return array<string,mixed[]>
+     */
+    public function regexProvider(): array
+    {
+        return [
+            '$regex - leading slash path' => [['s' => ['$regex' => '^/pricing']], ['s' => '/pricing/plans'], true],
+            '$regex - leading slash path no match' => [['s' => ['$regex' => '^/pricing']], ['s' => '/about'], false],
+            '$regex - slash in middle' => [['s' => ['$regex' => 'a/b']], ['s' => 'xa/by'], true],
+            '$regex - multiple slashes' => [['s' => ['$regex' => '^/a/b/c$']], ['s' => '/a/b/c'], true],
+            '$regex - lone slash' => [['s' => ['$regex' => '/']], ['s' => 'x/y'], true],
+            '$regex - already escaped slash' => [['s' => ['$regex' => '^a\\/b$']], ['s' => 'a/b'], true],
+            '$regex - escaped slash then unescaped slash' => [['s' => ['$regex' => '\\//']], ['s' => 'x//y'], true],
+            '$regex - escaped backslash before slash' => [['s' => ['$regex' => '^a\\\\/b$']], ['s' => 'a\\/b'], true],
+            '$regex - slash in character class' => [['s' => ['$regex' => '^[/]x$']], ['s' => '/x'], true],
+            '$regexi - leading slash path' => [['s' => ['$regexi' => '^/PRICING']], ['s' => '/Pricing'], true],
+            '$regex - invalid pattern with slash' => [['s' => ['$regex' => '(/']], ['s' => '(/'], false],
+            '$regex - invalid pattern' => [['s' => ['$regex' => '[']], ['s' => '['], false],
+            '$regex - non-string pattern never matches' => [['s' => ['$regex' => ['^US$']]], ['s' => 'CA'], false],
+            '$regexi - non-string pattern never matches' => [['s' => ['$regexi' => 5]], ['s' => '5'], false],
+        ];
+    }
+
+    /**
      * A rule whose condition throws, such as a malformed {"$not": null}, is
      * skipped instead of breaking the evaluation of later rules.
      */

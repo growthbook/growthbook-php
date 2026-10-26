@@ -619,8 +619,12 @@ class Condition
      */
     private static function regexMatch($pattern, $value, bool $caseInsensitive = false)
     {
+        // A pattern that isn't a string, such as an array, never matches
+        if (!is_string($pattern)) {
+            return false;
+        }
         $modifiers = $caseInsensitive ? 'i' : '';
-        return @preg_match('/' . static::escapeRegexDelimiter((string) $pattern) . '/' . $modifiers, $value ?? '');
+        return @preg_match('/' . static::escapeRegexDelimiter($pattern) . '/' . $modifiers, $value ?? '');
     }
 
     /**

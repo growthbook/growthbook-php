@@ -237,6 +237,23 @@ final class GrowthbookTest extends TestCase
         $this->assertFalse(Condition::pruneCondition(['x' => NAN], ['x' => ['$gt' => 1]]));
     }
 
+    public function testReducePayloadKeepsMapsWithNumericKeysAsObjects(): void
+    {
+        $payload = [
+            'features' => ['0' => ['defaultValue' => true, 'rules' => [
+                ['condition' => ['$savedGroup' => ['id' => '0']], 'force' => false, 'contextualBanditRef' => '0'],
+            ]]],
+            'savedGroups' => ['0' => ['type' => 'list', 'attributeKey' => 'id', 'values' => ['a']]],
+            'contextualBandits' => ['0' => ['key' => 'b']],
+        ];
+
+        $json = (string) json_encode(Growthbook::reducePayload($payload, []));
+
+        $this->assertStringContainsString('"features":{"0":{', $json);
+        $this->assertStringContainsString('"savedGroups":{"0":{', $json);
+        $this->assertStringContainsString('"contextualBandits":{"0":{', $json);
+    }
+
     public function testReducePayloadKeepsAMalformedSavedGroupAsWritten(): void
     {
         $payload = [

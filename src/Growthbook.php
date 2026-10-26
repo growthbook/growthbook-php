@@ -1788,13 +1788,12 @@ class Growthbook implements LoggerAwareInterface
         };
         $keep([$features, $experiments, $bandits]);
 
-        // Empty objects stay objects when the result is JSON-encoded
-        $payload['features'] = $features ?: new \stdClass();
+        $payload['features'] = static::toObjectMap($features);
         $payload['experiments'] = $experiments;
-        $payload['savedGroups'] = $groups ?: new \stdClass();
+        $payload['savedGroups'] = static::toObjectMap($groups);
         // Only when there were any, as with the payload's other optional keys
         if (is_array($payload['contextualBandits'] ?? null)) {
-            $payload['contextualBandits'] = $bandits ?: new \stdClass();
+            $payload['contextualBandits'] = static::toObjectMap($bandits);
         }
         return $payload;
     }
@@ -1879,6 +1878,18 @@ class Growthbook implements LoggerAwareInterface
     private static function isList(array $value): bool
     {
         return $value !== [] && array_keys($value) === range(0, count($value) - 1);
+    }
+
+    /**
+     * Keeps a map keyed by id an object when the result is JSON-encoded. PHP
+     * encodes an empty array, or one whose keys are 0, 1, ..., as a JSON array.
+     *
+     * @param array<mixed> $map
+     * @return array<mixed>|\stdClass
+     */
+    private static function toObjectMap(array $map): array|\stdClass
+    {
+        return $map === [] || static::isList($map) ? (object) $map : $map;
     }
 
     /**

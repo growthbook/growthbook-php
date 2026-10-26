@@ -226,6 +226,50 @@ final class GrowthbookTest extends TestCase
         $this->assertSame(['$savedGroup' => ['id' => 'a']], $result['savedGroups']['c']['condition']);
     }
 
+    public function testReducePayloadDoesNotFollowGroupIdsInAListsValues(): void
+    {
+        $payload = [
+            'features' => ['f' => ['defaultValue' => false, 'rules' => [
+                ['condition' => ['$savedGroup' => ['id' => 'c']], 'force' => true],
+                ['condition' => ['id' => ['$inGroup' => 'legacy']], 'force' => true],
+                ['condition' => ['items' => ['$elemMatch' => ['$savedGroup' => ['id' => 'l']]]], 'force' => true],
+            ]]],
+            'savedGroups' => [
+                // A list's values are attribute values, even when one is a group id
+                'c' => ['type' => 'condition', 'condition' => ['$savedGroup' => ['id' => 'l'], 'y' => true]],
+                'l' => ['type' => 'list', 'attributeKey' => 'id', 'values' => ['c', 'g']],
+                'legacy' => ['g'],
+                'g' => ['type' => 'condition', 'condition' => ['y' => true]],
+            ],
+        ];
+
+        $result = $this->toJsonArray(Growthbook::reducePayload($payload, ['attributes' => ['y' => true]]));
+
+        // Not on a cycle through the list, so its known "y" check goes
+        $this->assertSame(['$savedGroup' => ['id' => 'l']], $result['savedGroups']['c']['condition']);
+        $this->assertSame(['c', 'l', 'legacy'], array_keys($result['savedGroups']));
+    }
+
+    public function testReducePayloadWithoutSavedGroups(): void
+    {
+        $payload = ['features' => ['f' => ['defaultValue' => false, 'rules' => [
+            ['condition' => ['id' => ['$inGroup' => 'missing']], 'force' => true],
+        ]]]];
+
+        $result = $this->toJsonArray(Growthbook::reducePayload($payload, ['attributes' => []]));
+
+        $this->assertSame($payload['features'], $result['features']);
+        $this->assertSame([], $result['savedGroups']);
+    }
+
+    public function testReducePayloadLeavesOutMissingContextualBandits(): void
+    {
+        $result = Growthbook::reducePayload(['features' => ['f' => ['defaultValue' => true]]], []);
+
+        $this->assertArrayNotHasKey('contextualBandits', $result);
+        $this->assertStringNotContainsString('contextualBandits', (string) json_encode($result));
+    }
+
     public function testOrderingOperatorsFailWithNaN(): void
     {
         foreach (['$lt', '$lte', '$gt', '$gte'] as $operator) {

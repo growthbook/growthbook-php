@@ -1751,14 +1751,20 @@ class Growthbook implements LoggerAwareInterface
                 } else {
                     $asWritten[$x] = true;
                 }
-                $mark($savedGroups[$x], $user);
+                if (static::canReferenceGroups($savedGroups[$x])) {
+                    $mark($savedGroups[$x], $user);
+                }
             } elseif (is_array($x) || is_object($x)) {
                 foreach ((array) $x as $k => $v) {
                     $mark($v, $user && $k !== '$elemMatch' && $k !== 'parentConditions');
                 }
             }
         };
-        $mark([$features, $experiments, $bandits], true);
+        // Walking the payload is only needed when there are groups to find
+        $hasGroups = $savedGroups !== [];
+        if ($hasGroups) {
+            $mark([$features, $experiments, $bandits], true);
+        }
 
         // A group on a cycle can't be reduced on its own: its result depends on
         // which group the evaluation entered the cycle from. Each group's
@@ -1782,14 +1788,18 @@ class Growthbook implements LoggerAwareInterface
                 $groups[$x] = is_array($condition) && is_array($savedGroups[$x])
                     ? array_merge($savedGroups[$x], ['condition' => $condition])
                     : $savedGroups[$x];
-                $keep($groups[$x]);
+                if (static::canReferenceGroups($savedGroups[$x])) {
+                    $keep($groups[$x]);
+                }
             } elseif (is_array($x)) {
                 foreach ($x as $value) {
                     $keep($value);
                 }
             }
         };
-        $keep([$features, $experiments, $bandits]);
+        if ($hasGroups) {
+            $keep([$features, $experiments, $bandits]);
+        }
 
         $payload['features'] = static::toObjectMap($features);
         $payload['experiments'] = $experiments;
@@ -1825,7 +1835,9 @@ class Growthbook implements LoggerAwareInterface
                     }
                 }
             };
-            $collect($group);
+            if (static::canReferenceGroups($group)) {
+                $collect($group);
+            }
             $refs[(string) $id] = array_map('strval', array_keys($found));
         }
 
@@ -1870,6 +1882,20 @@ class Growthbook implements LoggerAwareInterface
             }
         }
         return $onCycle;
+    }
+
+    /**
+     * Whether a saved group can reference other groups. A list's values, typed
+     * or a legacy bare array, are attribute values, never group ids.
+     *
+     * @param mixed $group
+     */
+    private static function canReferenceGroups($group): bool
+    {
+        if (is_object($group)) {
+            $group = (array) $group;
+        }
+        return is_array($group) && !static::isList($group) && ($group['type'] ?? null) !== 'list';
     }
 
     /**

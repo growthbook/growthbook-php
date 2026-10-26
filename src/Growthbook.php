@@ -820,6 +820,27 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
+     * A condition that throws, such as a malformed one ({"$not": null}), fails
+     * rather than breaking evaluation
+     *
+     * @param array<string,mixed> $obj
+     * @param mixed $condition
+     * @return bool
+     */
+    private function evalConditionSafely(array $obj, $condition): bool
+    {
+        try {
+            return Condition::evalCondition($obj, $condition, $this->savedGroups);
+        } catch (\Throwable $e) {
+            $this->log(LogLevel::WARNING, "Condition evaluation failed", [
+                "condition" => $condition,
+                "error" => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
      * @param array<array<string, mixed>> $parentConditions
      * @param array<string> $stack
      * @return string
@@ -837,20 +858,10 @@ class Growthbook implements LoggerAwareInterface
                 return "cyclic";
             }
 
-            // A malformed condition (e.g. {"$not": null}) doesn't match instead of throwing
-            try {
-                $conditionPassed = Condition::evalCondition(
-                    ['value' => $parentRes->value],
-                    $parentCondition['condition'] ?? [],
-                    $this->savedGroups
-                );
-            } catch (\Throwable $e) {
-                $this->log(LogLevel::WARNING, "Could not evaluate prerequisite condition", [
-                    "id" => $conditionId,
-                    "error" => $e->getMessage(),
-                ]);
-                $conditionPassed = false;
-            }
+            $conditionPassed = $this->evalConditionSafely(
+                ['value' => $parentRes->value],
+                $parentCondition['condition'] ?? []
+            );
 
             if ($conditionPassed) {
                 $resultByConditionId[$conditionId] = "pass";
@@ -946,7 +957,7 @@ class Growthbook implements LoggerAwareInterface
                 }
 
                 if ($rule->condition) {
-                    if (!Condition::evalCondition($this->attributes, $rule->condition, $this->savedGroups)) {
+                    if (!$this->evalConditionSafely($this->attributes, $rule->condition)) {
                         $this->log(LogLevel::DEBUG, "Skip rule because of targeting condition", [
                             "feature" => $key,
                             "condition" => $rule->condition
@@ -1145,7 +1156,7 @@ class Growthbook implements LoggerAwareInterface
             }
 
             // 8. Condition fails
-            if ($exp->condition && !Condition::evalCondition($this->attributes, $exp->condition, $this->savedGroups)) {
+            if ($exp->condition && !$this->evalConditionSafely($this->attributes, $exp->condition)) {
                 $this->log(LogLevel::DEBUG, "Skip experiment because of targeting conditions", [
                     "experiment" => $exp->key
                 ]);

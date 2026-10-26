@@ -207,6 +207,27 @@ final class GrowthbookTest extends TestCase
     }
 
     /**
+     * A rule whose condition throws, such as a malformed {"$not": null}, is
+     * skipped instead of breaking the evaluation of later rules.
+     */
+    public function testRuleWithMalformedConditionIsSkipped(): void
+    {
+        $gb = Growthbook::create()
+            ->withAttributes(['id' => 'user-123'])
+            ->withFeatures([
+                'feature' => [
+                    'defaultValue' => 1,
+                    'rules' => [
+                        ['condition' => ['$not' => null], 'force' => 2],
+                        ['condition' => ['id' => 'user-123'], 'force' => 3],
+                    ],
+                ],
+            ]);
+
+        $this->assertSame(3, $gb->getValue('feature', 0));
+    }
+
+    /**
      * @dataProvider getQueryStringOverrideProvider
      *
      */

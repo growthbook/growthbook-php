@@ -1607,7 +1607,7 @@ class Growthbook implements LoggerAwareInterface
         };
 
         // Reduces a rule or an auto experiment
-        $prune = function (array $item) use ($attributes, $savedGroups): array {
+        $prune = function (array $item, bool $isRule) use ($attributes, $savedGroups): array {
             if (!isset($item['condition']) || !is_array($item['condition'])) {
                 return $item;
             }
@@ -1618,8 +1618,10 @@ class Growthbook implements LoggerAwareInterface
                 // Kept, since sticky buckets and forced variations skip an
                 // experiment's condition, and a rule's prerequisites are checked before it
                 $item['condition'] = ['$not' => new \stdClass()];
-                // A force rule that never passes never returns its value
-                if (array_key_exists('force', $item)) {
+                // A force rule that never passes never returns its value. An
+                // auto experiment's forced variation still applies to a
+                // sticky bucketed user.
+                if ($isRule && array_key_exists('force', $item)) {
                     $item['force'] = null;
                 }
             } else {
@@ -1658,7 +1660,7 @@ class Growthbook implements LoggerAwareInterface
                 $rules = [];
                 foreach ($feature['rules'] as $rule) {
                     if (!$scoped || $ruleInProjects($rule['metadata'] ?? null)) {
-                        $rules[] = $prune($rule);
+                        $rules[] = $prune($rule, true);
                     }
                 }
                 $feature['rules'] = $rules;
@@ -1680,7 +1682,7 @@ class Growthbook implements LoggerAwareInterface
         $experiments = [];
         foreach ($allExperiments as $experiment) {
             if (is_array($experiment) && $matches($experiment['metadata'] ?? null)) {
-                $experiments[] = $prune($experiment);
+                $experiments[] = $prune($experiment, false);
             }
         }
         foreach ($experiments as $experiment) {
@@ -1706,6 +1708,11 @@ class Growthbook implements LoggerAwareInterface
                 continue;
             }
             $bandit = $allBandits[$ref];
+            // Evaluation tolerates a definition that isn't an object, so it stays
+            if (!is_array($bandit) || static::isList($bandit)) {
+                $bandits[$ref] = $bandit;
+                continue;
+            }
             $contexts = [];
             foreach ($bandit['contexts'] ?? [] as $context) {
                 $condition = Condition::pruneCondition(
@@ -1723,16 +1730,77 @@ class Growthbook implements LoggerAwareInterface
             $bandits[$ref] = $bandit;
         }
 
+        // Groups that keep their condition as written: those evaluated against
+        // something other than the user (each item in $elemMatch, or the
+        // parent's value in a prerequisite), and the groups those reference
+        $asWritten = [];
+        $seen = [];
+        $mark = function ($x, bool $user) use (&$mark, &$asWritten, &$seen, $savedGroups): void {
+            if (is_string($x)) {
+                if (!array_key_exists($x, $savedGroups) || isset($asWritten[$x])) {
+                    return;
+                }
+                if ($user && isset($seen[$x])) {
+                    return;
+                }
+                if ($user) {
+                    $seen[$x] = true;
+                } else {
+                    $asWritten[$x] = true;
+                }
+                $mark($savedGroups[$x], $user);
+            } elseif (is_array($x) || is_object($x)) {
+                foreach ((array) $x as $k => $v) {
+                    $mark($v, $user && $k !== '$elemMatch' && $k !== 'parentConditions');
+                }
+            }
+        };
+        $mark([$features, $experiments, $bandits], true);
+
+        // A group on a cycle can't be reduced on its own: its result depends on
+        // which group the evaluation entered the cycle from
+        $reaches = function (string $from, string $to, array &$visited) use (&$reaches, $savedGroups): bool {
+            $found = [];
+            $collect = function ($x) use (&$collect, &$found, $savedGroups): void {
+                if (is_string($x)) {
+                    if (array_key_exists($x, $savedGroups)) {
+                        $found[] = $x;
+                    }
+                } elseif (is_array($x) || is_object($x)) {
+                    foreach ((array) $x as $v) {
+                        $collect($v);
+                    }
+                }
+            };
+            $collect($savedGroups[$from]);
+            foreach ($found as $id) {
+                if ($id === $to) {
+                    return true;
+                }
+                if (isset($visited[$id])) {
+                    continue;
+                }
+                $visited[$id] = true;
+                if ($reaches($id, $to, $visited)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
         // Keep each saved group whose id appears as a string anywhere, with
         // condition groups reduced. This needs no list of the operators that
         // reference groups.
         $groups = [];
-        $keep = function ($x) use (&$keep, &$groups, $savedGroups, $attributes): void {
+        $keep = function ($x) use (&$keep, &$groups, $savedGroups, $attributes, $asWritten, $reaches): void {
             if (is_string($x)) {
                 if (!array_key_exists($x, $savedGroups) || array_key_exists($x, $groups)) {
                     return;
                 }
-                $condition = Condition::pruneSavedGroup($attributes, ['id' => $x], $savedGroups);
+                $visited = [];
+                $condition = isset($asWritten[$x]) || $reaches($x, $x, $visited)
+                    ? null
+                    : Condition::pruneSavedGroup($attributes, ['id' => $x], $savedGroups);
                 $groups[$x] = is_array($condition) && is_array($savedGroups[$x])
                     ? array_merge($savedGroups[$x], ['condition' => $condition])
                     : $savedGroups[$x];
@@ -1754,6 +1822,17 @@ class Growthbook implements LoggerAwareInterface
             $payload['contextualBandits'] = $bandits ?: new \stdClass();
         }
         return $payload;
+    }
+
+    /**
+     * Whether an array is a JSON list (sequential keys from 0). An empty array
+     * counts as an object, since `{}` and `[]` decode the same.
+     *
+     * @param array<mixed> $value
+     */
+    private static function isList(array $value): bool
+    {
+        return $value !== [] && array_keys($value) === range(0, count($value) - 1);
     }
 
     /**

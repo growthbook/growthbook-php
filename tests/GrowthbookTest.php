@@ -226,6 +226,17 @@ final class GrowthbookTest extends TestCase
         $this->assertSame(['$savedGroup' => ['id' => 'a']], $result['savedGroups']['c']['condition']);
     }
 
+    public function testOrderingOperatorsFailWithNaN(): void
+    {
+        foreach (['$lt', '$lte', '$gt', '$gte'] as $operator) {
+            $this->assertFalse(Condition::evalCondition(['x' => NAN], ['x' => [$operator => 1]], []), "NaN $operator 1");
+            $this->assertFalse(Condition::evalCondition(['x' => 1], ['x' => [$operator => NAN]], []), "1 $operator NaN");
+            $this->assertFalse(Condition::evalCondition(['x' => NAN], ['x' => [$operator => NAN]], []), "NaN $operator NaN");
+        }
+        // The pruned condition fails the same way rather than being dropped as passing
+        $this->assertFalse(Condition::pruneCondition(['x' => NAN], ['x' => ['$gt' => 1]]));
+    }
+
     public function testReducePayloadKeepsAMalformedSavedGroupAsWritten(): void
     {
         $payload = [

@@ -529,6 +529,21 @@ class Condition
     }
 
     /**
+     * Whether $lt, $lte, $gt and $gte can compare two values. NaN orders
+     * against nothing, as in JS, where every comparison with it is false.
+     *
+     * @param mixed $a
+     * @param mixed $b
+     * @return bool
+     */
+    private static function isComparable($a, $b): bool
+    {
+        return static::isOrderable($a, $b)
+            && !(is_float($a) && is_nan($a))
+            && !(is_float($b) && is_nan($b));
+    }
+
+    /**
      * @param mixed $a
      * @param mixed $b
      * @return int
@@ -556,13 +571,13 @@ class Condition
             case '$ne':
                 return !static::isEqual($attributeValue, $conditionValue);
             case '$lt':
-                return static::isOrderable($attributeValue, $conditionValue) && static::compare($attributeValue, $conditionValue) < 0;
+                return static::isComparable($attributeValue, $conditionValue) && static::compare($attributeValue, $conditionValue) < 0;
             case '$lte':
-                return static::isOrderable($attributeValue, $conditionValue) && static::compare($attributeValue, $conditionValue) <= 0;
+                return static::isComparable($attributeValue, $conditionValue) && static::compare($attributeValue, $conditionValue) <= 0;
             case '$gt':
-                return static::isOrderable($attributeValue, $conditionValue) && static::compare($attributeValue, $conditionValue) > 0;
+                return static::isComparable($attributeValue, $conditionValue) && static::compare($attributeValue, $conditionValue) > 0;
             case '$gte':
-                return static::isOrderable($attributeValue, $conditionValue) && static::compare($attributeValue, $conditionValue) >= 0;
+                return static::isComparable($attributeValue, $conditionValue) && static::compare($attributeValue, $conditionValue) >= 0;
             case '$veq':
             case '$vne':
             case '$vgt':

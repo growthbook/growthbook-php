@@ -2257,7 +2257,7 @@ final class GrowthbookTest extends TestCase
      * @param int|null          $requests Filled by reference with the number of requests made
      * @return array{0:\Psr\Http\Client\ClientInterface,1:\Psr\Http\Message\RequestFactoryInterface}
      */
-    private function makeCountingHttp($response, &$requests): array
+    private function makeCountingHttp($response, &$requests, int $statusCode = 200): array
     {
         $requests = 0;
 
@@ -2272,7 +2272,7 @@ final class GrowthbookTest extends TestCase
         $stream->method('getContents')->willReturn($response instanceof \Throwable ? '' : $response);
 
         $httpResponse = $this->createMock(\Psr\Http\Message\ResponseInterface::class);
-        $httpResponse->method('getStatusCode')->willReturn(200);
+        $httpResponse->method('getStatusCode')->willReturn($statusCode);
         $httpResponse->method('getBody')->willReturn($stream);
         $httpResponse->method('hasHeader')->willReturn(false);
 
@@ -2431,6 +2431,126 @@ final class GrowthbookTest extends TestCase
         $second->initialize('sdk-test', 'https://proxy.example.com');
         $this->assertSame(1, $requests, 'no POST expected while the backoff is active');
         $this->assertTrue($second->isOn('my-feature'));
+    }
+
+    public function testFailedEarlyRevalidationStillServesTheCachedPayload(): void
+    {
+        // The payload is still fresh; the request only happens because the entry is inside the
+        // early-revalidation window.  If the API answers with something unusable, the features
+        // that were already in hand must still be applied - otherwise revalidating early is
+        // worse than not revalidating at all.
+        $cache = new InMemoryTestCache();
+        [$client, $factory] = $this->makeCountingHttp('<html>502 Bad Gateway</html>', $requests);
+
+        for ($i = 0; $i < 20; $i++) {
+            $this->seedFeatureCache($cache, 1); // one second left of a 60s TTL
+            $gb = new Growthbook([
+                'httpClient' => $client,
+                'requestFactory' => $factory,
+                'cache' => $cache,
+                'cacheEarlyRevalidation' => 1.0,
+            ]);
+            $gb->initialize('sdk-test');
+            $this->assertTrue($gb->isOn('my-feature'), 'cached features must survive a failed revalidation');
+        }
+
+        $this->assertGreaterThan(0, $requests, 'the early revalidation never fired, so nothing was proven');
+    }
+
+    public function testNotModifiedResponseStillInitializesPlugins(): void
+    {
+        // An early revalidation with an ETag usually comes back 304, so this path runs for a
+        // random share of requests in every TTL.  Skipping plugin initialization here means the
+        // tracking plugin silently drops every event for those requests.
+        $cache = new InMemoryTestCache();
+        $this->seedFeatureCache($cache, -10);
+        [$client, $factory] = $this->makeCountingHttp('', $requests, 304);
+
+        $plugin = new class implements \Growthbook\Plugin {
+            public bool $initialized = false;
+            public function initialize(string $clientKey): void
+            {
+                $this->initialized = true;
+            }
+            public function onExperimentViewed(\Growthbook\InlineExperiment $experiment, \Growthbook\ExperimentResult $result, array $attributes): void {}
+            public function onFeatureEvaluated(string $featureKey, \Growthbook\FeatureResult $result, array $attributes): void {}
+            public function close(): void {}
+        };
+
+        (new Growthbook([
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'cache' => $cache,
+            'plugins' => [$plugin],
+        ]))->initialize('sdk-test');
+
+        $this->assertSame(1, $requests);
+        $this->assertTrue($plugin->initialized, 'a 304 must not skip plugin initialization');
+    }
+
+    public function testRemoteEvalRejectedRequestDoesNotArmTheBackoff(): void
+    {
+        // The failure marker is keyed on the endpoint, but the POST body carries one user's
+        // attributes.  A 4xx says that payload was bad, not that the proxy is down, so it must
+        // not make everyone else serve stale results.
+        $cache = new InMemoryTestCache();
+        [$working, $workingFactory] = $this->makeCountingHttp(
+            (string) json_encode(['features' => ['my-feature' => ['defaultValue' => true]], 'savedGroups' => []]),
+            $okRequests
+        );
+        (new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $working,
+            'requestFactory' => $workingFactory,
+            'cache' => $cache,
+            'url' => '',
+        ]))->initialize('sdk-test', 'https://proxy.example.com');
+        $cache->expirePayloads();
+
+        [$client, $factory] = $this->makeCountingHttp('{"error":"payload too large"}', $requests, 413);
+        $options = [
+            'remoteEval' => true,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'cache' => $cache,
+            'url' => '',
+        ];
+
+        (new Growthbook($options))->initialize('sdk-test', 'https://proxy.example.com');
+        (new Growthbook($options))->initialize('sdk-test', 'https://proxy.example.com');
+
+        $this->assertSame(2, $requests, 'a rejected request must not stop the next one from trying');
+    }
+
+    public function testRemoteEvalServerErrorStillArmsTheBackoff(): void
+    {
+        $cache = new InMemoryTestCache();
+        [$working, $workingFactory] = $this->makeCountingHttp(
+            (string) json_encode(['features' => ['my-feature' => ['defaultValue' => true]], 'savedGroups' => []]),
+            $okRequests
+        );
+        (new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $working,
+            'requestFactory' => $workingFactory,
+            'cache' => $cache,
+            'url' => '',
+        ]))->initialize('sdk-test', 'https://proxy.example.com');
+        $cache->expirePayloads();
+
+        [$client, $factory] = $this->makeCountingHttp('upstream exploded', $requests, 503);
+        $options = [
+            'remoteEval' => true,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'cache' => $cache,
+            'url' => '',
+        ];
+
+        (new Growthbook($options))->initialize('sdk-test', 'https://proxy.example.com');
+        (new Growthbook($options))->initialize('sdk-test', 'https://proxy.example.com');
+
+        $this->assertSame(1, $requests, 'an unhealthy service must still arm the backoff');
     }
 
     public function testFreshCacheIsNotRevalidatedEarlyWhenDisabled(): void

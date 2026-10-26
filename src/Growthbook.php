@@ -806,6 +806,20 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
+     * Whether a status code says the service is unhealthy rather than the request being bad.
+     *
+     * Only these are worth backing off on: the failure marker covers the whole endpoint, so
+     * treating a per-request rejection as an outage would punish every other caller.
+     *
+     * @param int $statusCode
+     * @return bool
+     */
+    private function isServiceUnhealthyStatus(int $statusCode): bool
+    {
+        return $statusCode >= 500 || $statusCode === 429;
+    }
+
+    /**
      * @param string $url
      * @return bool
      */
@@ -2009,6 +2023,18 @@ class Growthbook implements LoggerAwareInterface
             if (!$parsed || !is_array($parsed) || !array_key_exists("features", $parsed)) {
                 $this->log(LogLevel::WARNING, "Could not load features", ["url" => $url, "responseBody" => $body]);
                 $this->recordFetchFailure($url, $cachedData);
+                // An early revalidation reaches here with a still-valid payload in hand.
+                // Returning without it would evaluate every flag against no features at
+                // all, so a failed revalidation would be worse than never revalidating.
+                if ($cachedData !== null) {
+                    $this->log(LogLevel::WARNING, "Using stale cache as fallback", ["url" => $url]);
+                    if (array_key_exists("features", $cachedData) && is_array($cachedData['features'])) {
+                        $this->setFeatures($cachedData['features']);
+                    }
+                    if (array_key_exists("savedGroups", $cachedData) && is_array($cachedData['savedGroups'])) {
+                        $this->setSavedGroups($cachedData['savedGroups']);
+                    }
+                }
                 $this->initializePlugins();
                 return;
             }
@@ -2290,7 +2316,14 @@ class Growthbook implements LoggerAwareInterface
 
             if ($statusCode >= 400) {
                 $this->log(LogLevel::WARNING, "Remote eval request failed", ["url" => $url, "statusCode" => $statusCode]);
-                $this->recordFetchFailure($url, $cachedData);
+                // The marker is keyed on the endpoint, but this request carried one user's
+                // attributes.  A 4xx usually means that payload was bad, and backing off on
+                // it would make every other user serve stale results - and a client that
+                // keeps repeating the bad request would keep the backoff alive forever.
+                // Only the codes that say the service itself is unhealthy count.
+                if ($this->isServiceUnhealthyStatus($statusCode)) {
+                    $this->recordFetchFailure($url, $cachedData);
+                }
                 if ($cachedData !== null) {
                     $this->applyRemoteEvalData($cachedData, "stale cache");
                 }

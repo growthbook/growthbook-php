@@ -2347,6 +2347,94 @@ final class GrowthbookTest extends TestCase
         $this->assertSame([], $gb->getFeatureRefreshListeners());
     }
 
+    public function testListenersAreNotInheritedByCopies(): void
+    {
+        // The unsubscribe closure can only reach the instance it was registered on, so an
+        // inherited listener could never be removed from the copy
+        $cache = $this->makeCacheServing([
+            'features' => ['my-feature' => ['defaultValue' => true]],
+            'savedGroups' => [],
+            'expiresAt' => time() + 60,
+        ]);
+
+        $events = [];
+        $gb = new Growthbook(['cache' => $cache]);
+        $gb->addFeatureRefreshListener($this->recordingListener($events));
+
+        $copy = $gb->withAttributes(['id' => 'user-2']);
+        $this->assertSame([], $copy->getFeatureRefreshListeners());
+
+        $copy->initialize('sdk-test');
+        $this->assertSame([], $events, 'the copy must not report to the original\'s listeners');
+
+        $gb->initialize('sdk-test');
+        $this->assertCount(1, $events);
+    }
+
+    public function testEverySourceReportsTheSamePayloadShape(): void
+    {
+        $shapes = [];
+        $listener = function (array $payload) use (&$shapes): void {
+            $shapes[] = array_keys($payload);
+        };
+
+        // cache
+        $cache = $this->makeCacheServing([
+            'features' => ['my-feature' => ['defaultValue' => true]],
+            'savedGroups' => [],
+            'expiresAt' => time() + 60,
+        ]);
+        $fromCache = new Growthbook(['cache' => $cache]);
+        $fromCache->addFeatureRefreshListener($listener);
+        $fromCache->initialize('sdk-test');
+
+        // network
+        [$client, $factory] = $this->makeFeaturesHttp((string) json_encode([
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]));
+        $fromNetwork = new Growthbook(['httpClient' => $client, 'requestFactory' => $factory]);
+        $fromNetwork->addFeatureRefreshListener($listener);
+        $fromNetwork->initialize('sdk-test');
+
+        // The cache entry carries expiresAt, which is internal and must not leak to listeners
+        $this->assertCount(2, $shapes);
+        foreach ($shapes as $keys) {
+            sort($keys);
+            $this->assertSame(['features', 'savedGroups'], $keys);
+        }
+    }
+
+    public function testNothingIsReportedWhenNoFeaturesWereApplied(): void
+    {
+        // A cache entry without a features array means nothing was applied
+        $cache = $this->makeCacheServing(['savedGroups' => [], 'expiresAt' => time() + 60]);
+
+        $events = [];
+        $gb = new Growthbook(['cache' => $cache]);
+        $gb->addFeatureRefreshListener($this->recordingListener($events));
+        $gb->initialize('sdk-test');
+
+        $this->assertSame([], $events);
+    }
+
+    public function testAThrowingListenerWithoutALoggerDoesNotLookLikeAFetchFailure(): void
+    {
+        // Listeners deliberately swallow always, unlike the other callbacks: these notifications
+        // run inside initialize()'s fetch error handling, so a rethrow would be reported as a
+        // failed fetch and fall back to the cache
+        [$client, $factory] = $this->makeFeaturesHttp((string) json_encode([
+            'features' => ['my-feature' => ['defaultValue' => true]],
+        ]));
+
+        $gb = new Growthbook(['httpClient' => $client, 'requestFactory' => $factory]);
+        $gb->addFeatureRefreshListener(function (): void {
+            throw new \RuntimeException('listener blew up');
+        });
+        $gb->initialize('sdk-test');
+
+        $this->assertTrue($gb->isOn('my-feature'), 'the payload must still be applied');
+    }
+
     public function testThrowingFeatureRefreshListenerIsLoggedAndDoesNotBreakLoading(): void
     {
         [$client, $factory] = $this->makeFeaturesHttp((string) json_encode([

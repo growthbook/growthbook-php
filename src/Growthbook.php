@@ -236,10 +236,16 @@ class Growthbook implements LoggerAwareInterface
      * The fluent `withX()` methods hand out copies of this instance (per-request or per-user
      * handles), and a PHP clone is shallow: the copy shares this instance's plugin registry.
      * Register the copy as an owner so the plugins are only closed once every handle is gone.
+     *
+     * Listeners, on the other hand, belong to the instance they were registered on, so a copy
+     * starts without them: the unsubscribe closure returned by addFeatureRefreshListener() can
+     * only reach the original, and a listener that evaluates features would read the original's
+     * definitions rather than the copy's.
      */
     public function __clone()
     {
         $this->pluginRegistry->retain();
+        $this->featureRefreshListeners = [];
     }
 
     public function __destruct()
@@ -773,11 +779,32 @@ class Growthbook implements LoggerAwareInterface
      */
     private function notifyFeatureRefresh(array $payload, string $source): void
     {
+        if (!$this->featureRefreshListeners) {
+            return;
+        }
+
+        // Cache-backed sources hand over the decoded cache entry, which carries internal keys
+        // such as expiresAt and may hold no features at all. Listeners get the same two keys
+        // whatever the source, and nothing is reported when nothing was applied.
+        if (!array_key_exists("features", $payload) || !is_array($payload["features"])) {
+            return;
+        }
+        $normalised = [
+            "features" => $payload["features"],
+            "savedGroups" => (array_key_exists("savedGroups", $payload) && is_array($payload["savedGroups"]))
+                ? $payload["savedGroups"]
+                : [],
+        ];
+
         foreach ($this->featureRefreshListeners as $listener) {
             try {
-                $listener($payload, $source);
+                $listener($normalised, $source);
             } catch (\Throwable $e) {
-                // A broken listener must not take the feature load down with it.
+                // Always swallowed, unlike the tracking and feature usage callbacks which rethrow
+                // when no logger is set. Most notifications happen inside the fetch try/catch in
+                // initialize(), so a rethrow would be caught there and reported as a failed fetch,
+                // taking the stale-cache fallback with it: a listener bug would read as an API
+                // outage. Documented in the README rather than made consistent for that reason.
                 $this->log(LogLevel::ERROR, "Feature refresh listener threw", [
                     "source" => $source,
                     "error" => $e->getMessage(),

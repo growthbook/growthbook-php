@@ -254,6 +254,29 @@ final class GrowthbookTest extends TestCase
         $this->assertStringContainsString('"contextualBandits":{"0":{', $json);
     }
 
+    public function testReducedPayloadWithNumericKeysCanBeReducedAgainAndLoaded(): void
+    {
+        $payload = [
+            'features' => ['0' => ['defaultValue' => true, 'rules' => [
+                ['condition' => ['$savedGroup' => ['id' => '0']], 'force' => false, 'contextualBanditRef' => '0'],
+            ]]],
+            'savedGroups' => ['0' => ['type' => 'list', 'attributeKey' => 'id', 'values' => ['a']]],
+            'contextualBandits' => ['0' => ['key' => 'b']],
+        ];
+
+        $first = Growthbook::reducePayload($payload, []);
+        $second = Growthbook::reducePayload($first, []);
+
+        $this->assertSame(json_encode($first), json_encode($second));
+        $this->assertStringContainsString('"features":{"0":{', (string) json_encode($second));
+
+        $gb = Growthbook::create()
+            ->withSavedGroups($second['savedGroups'])
+            ->withFeatures($second['features']);
+        $this->assertFalse($gb->withAttributes(['id' => 'a'])->getFeature('0')->value);
+        $this->assertTrue($gb->withAttributes(['id' => 'z'])->getFeature('0')->value);
+    }
+
     public function testReducePayloadKeepsAMalformedSavedGroupAsWritten(): void
     {
         $payload = [

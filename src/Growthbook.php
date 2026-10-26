@@ -241,21 +241,21 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array<string,mixed> $savedGroups
+     * @param array<string,mixed>|\stdClass $savedGroups An object is accepted, as `reducePayload` returns
      * @return static
      */
-    public function setSavedGroups(array $savedGroups): static
+    public function setSavedGroups(array|\stdClass $savedGroups): static
     {
-        $this->savedGroups = $savedGroups;
+        $this->savedGroups = (array) $savedGroups;
 
         return $this;
     }
 
     /**
-     * @param array<string,mixed> $savedGroups
+     * @param array<string,mixed>|\stdClass $savedGroups An object is accepted, as `reducePayload` returns
      * @return static
      */
-    public function withSavedGroups(array $savedGroups): static
+    public function withSavedGroups(array|\stdClass $savedGroups): static
     {
         $self = clone $this;
         $self->setSavedGroups($savedGroups);
@@ -287,13 +287,13 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array<string,Feature<mixed>|mixed> $features
+     * @param array<string,Feature<mixed>|mixed>|\stdClass $features An object is accepted, as `reducePayload` returns
      * @return static
      */
-    public function setFeatures(array $features): static
+    public function setFeatures(array|\stdClass $features): static
     {
         $this->features = [];
-        foreach ($features as $key => $feature) {
+        foreach ((array) $features as $key => $feature) {
             if ($feature instanceof Feature) {
                 $this->features[$key] = $feature;
             } else {
@@ -306,10 +306,10 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array<string,Feature<mixed>|mixed> $features
+     * @param array<string,Feature<mixed>|mixed>|\stdClass $features An object is accepted, as `reducePayload` returns
      * @return static
      */
-    public function withFeatures(array $features): static
+    public function withFeatures(array|\stdClass $features): static
     {
         $self = clone $this;
         $self->setFeatures($features);
@@ -1546,7 +1546,9 @@ class Growthbook implements LoggerAwareInterface
      *   prerequisites: "keep" (default) sends the prerequisites of what is kept
      *   even when the filters remove them, so the client evaluates the same as
      *   the full payload. "filter" applies the filters to them too.
-     * @return array<string,mixed>
+     * @return array<string,mixed> The `features`, `savedGroups` and `contextualBandits`
+     *   maps are `stdClass` when PHP would JSON-encode them as arrays (empty, or keyed
+     *   0, 1, ...). `reducePayload`, `withFeatures` and `withSavedGroups` accept them.
      */
     public static function reducePayload(array $payload, array $options = []): array
     {
@@ -1554,8 +1556,8 @@ class Growthbook implements LoggerAwareInterface
         $include = $options['include'] ?? [];
         $exclude = $options['exclude'] ?? [];
         $prerequisites = $options['prerequisites'] ?? 'keep';
-        $savedGroups = is_array($payload['savedGroups'] ?? null) ? $payload['savedGroups'] : [];
-        $allFeatures = is_array($payload['features'] ?? null) ? $payload['features'] : [];
+        $savedGroups = static::fromObjectMap($payload['savedGroups'] ?? null) ?? [];
+        $allFeatures = static::fromObjectMap($payload['features'] ?? null) ?? [];
         $allExperiments = is_array($payload['experiments'] ?? null) ? $payload['experiments'] : [];
 
         // Only an array counts, as with `$in`, and any one of its values is enough
@@ -1694,7 +1696,8 @@ class Growthbook implements LoggerAwareInterface
 
         // The contextual bandits that kept rules and experiments use. A context
         // whose condition never passes can't be the first that does, so it goes.
-        $allBandits = is_array($payload['contextualBandits'] ?? null) ? $payload['contextualBandits'] : [];
+        $banditMap = static::fromObjectMap($payload['contextualBandits'] ?? null);
+        $allBandits = $banditMap ?? [];
         $bandits = [];
         $items = $experiments;
         foreach ($features as $feature) {
@@ -1792,7 +1795,7 @@ class Growthbook implements LoggerAwareInterface
         $payload['experiments'] = $experiments;
         $payload['savedGroups'] = static::toObjectMap($groups);
         // Only when there were any, as with the payload's other optional keys
-        if (is_array($payload['contextualBandits'] ?? null)) {
+        if ($banditMap !== null) {
             $payload['contextualBandits'] = static::toObjectMap($bandits);
         }
         return $payload;
@@ -1890,6 +1893,18 @@ class Growthbook implements LoggerAwareInterface
     private static function toObjectMap(array $map): array|\stdClass
     {
         return $map === [] || static::isList($map) ? (object) $map : $map;
+    }
+
+    /**
+     * Reads a map keyed by id as an array, whether it is an array or an object
+     * from `toObjectMap`, so a reduced payload can be reduced again.
+     *
+     * @param mixed $map
+     * @return array<mixed>|null Null when the map is neither
+     */
+    private static function fromObjectMap($map): ?array
+    {
+        return is_array($map) || $map instanceof \stdClass ? (array) $map : null;
     }
 
     /**

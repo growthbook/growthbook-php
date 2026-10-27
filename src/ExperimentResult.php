@@ -56,6 +56,30 @@ class ExperimentResult
     /** @var bool  */
     public $stickyBucketUsed;
 
+    /**
+     * Contextual bandit leaf that supplied the weights, or -1 when the definition was found
+     * but no leaf matched. Only set for a real exposure.
+     *
+     * @var int|null
+     */
+    public $leafId;
+
+    /**
+     * Variation weights the contextual bandit applied to this experiment. Only set for a real
+     * exposure.
+     *
+     * @var float[]|null
+     */
+    public $variationWeights;
+
+    /**
+     * Version of the backend-computed bandit weights. Only set for a real exposure and when
+     * the definition carries one.
+     *
+     * @var int|null
+     */
+    public $banditVersion;
+
 
     /**
      * @param InlineExperiment<T> $experiment
@@ -86,6 +110,14 @@ class ExperimentResult
         $this->featureId = $featureId;
         $this->bucket = $bucket;
         $this->stickyBucketUsed = $stickyBucketUsed;
+
+        // Contextual bandit metadata is reported only for a real exposure, so forced, QA-mode
+        // and filtered-out assignments carry none.
+        if ($experiment->contextualBandit && $hashUsed && $inExperiment) {
+            $this->leafId = $experiment->contextualBandit->leafId;
+            $this->variationWeights = $experiment->contextualBandit->variationWeights;
+            $this->banditVersion = $experiment->contextualBandit->banditVersion;
+        }
 
         $this->key = "" . $variationIndex;
         if ($experiment->meta) {

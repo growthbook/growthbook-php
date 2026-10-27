@@ -290,6 +290,85 @@ final class GrowthbookTest extends TestCase
 
 
     /**
+     * Mock HTTP client + request factory capturing the request URL and returning a fixed body.
+     *
+     * @param string      $body
+     * @param string|null $capturedUrl
+     * @return array{0:\Psr\Http\Client\ClientInterface,1:\Psr\Http\Message\RequestFactoryInterface}
+     */
+    private function makeUrlCapturingHttp(string $body, &$capturedUrl): array
+    {
+        $capturedUrl = null;
+
+        $request = $this->createMock(\Psr\Http\Message\RequestInterface::class);
+        $request->method('withHeader')->willReturnSelf();
+
+        $factory = $this->createMock(\Psr\Http\Message\RequestFactoryInterface::class);
+        $factory->method('createRequest')->willReturnCallback(function ($method, $url) use (&$capturedUrl, $request) {
+            $capturedUrl = $url;
+            return $request;
+        });
+
+        $stream = $this->createMock(\Psr\Http\Message\StreamInterface::class);
+        $stream->method('getContents')->willReturn($body);
+
+        $response = $this->createMock(\Psr\Http\Message\ResponseInterface::class);
+        $response->method('getStatusCode')->willReturn(200);
+        $response->method('getBody')->willReturn($stream);
+        $response->method('hasHeader')->willReturn(false);
+
+        $client = $this->createMock(\Psr\Http\Client\ClientInterface::class);
+        $client->method('sendRequest')->willReturn($response);
+
+        return [$client, $factory];
+    }
+
+    public function testInitializeKeepsTheDecryptionKeyFromTheConstructor(): void
+    {
+        // decrypt() throws \Error, which initialize()'s catch-all swallows under "Failed to
+        // fetch features from API" - with no logger the app just silently gets no features
+        $key = 'Zvwv/+uhpFDznZ6SX28Yjg==';
+        $encrypted = 'm5ylFM6ndyOJA2OPadubkw==.Uu7ViqgKEt/dWvCyhI46q088PkAEJbnXKf3KPZjf9IEQQ+A8fojNoxw4wIbPX3aj';
+        [$client, $factory] = $this->makeUrlCapturingHttp(
+            (string) json_encode(['features' => [], 'encryptedFeatures' => $encrypted]),
+            $ignored
+        );
+
+        $gb = new Growthbook([
+            'decryptionKey' => $key,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+        ]);
+        $gb->initialize('sdk-test');
+
+        $this->assertTrue($gb->isOn('feature'), 'the constructor key must survive initialize()');
+    }
+
+    public function testInitializeKeepsAPreviouslyConfiguredHost(): void
+    {
+        [$client, $factory] = $this->makeUrlCapturingHttp((string) json_encode(['features' => []]), $url);
+
+        $gb = new Growthbook(['httpClient' => $client, 'requestFactory' => $factory]);
+        $gb->initialize('sdk-test', 'https://gw.internal');
+        $this->assertStringStartsWith('https://gw.internal/', (string) $url);
+
+        // A later call without a host must not send the next request to the default CDN
+        $gb->initialize('sdk-test');
+        $this->assertStringStartsWith('https://gw.internal/', (string) $url);
+    }
+
+    public function testInitializeStillOverridesWhenGivenAValue(): void
+    {
+        [$client, $factory] = $this->makeUrlCapturingHttp((string) json_encode(['features' => []]), $url);
+
+        $gb = new Growthbook(['httpClient' => $client, 'requestFactory' => $factory]);
+        $gb->initialize('sdk-test', 'https://first.example.com');
+        $gb->initialize('sdk-test', 'https://second.example.com');
+
+        $this->assertStringStartsWith('https://second.example.com/', (string) $url);
+    }
+
+    /**
      * @dataProvider decryptProvider
      * @param string $encryptedString
      * @param string $key

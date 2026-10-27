@@ -413,6 +413,9 @@ class Growthbook implements LoggerAwareInterface
     public function setLogger(?LoggerInterface $logger = null): void
     {
         $this->logger = $logger;
+        // Same reach as addPlugin(): a copy choosing where plugin errors go would redirect the
+        // original's too.
+        $this->detachFromSharedRegistry();
         $this->pluginRegistry->setLogger($logger);
     }
 
@@ -537,6 +540,9 @@ class Growthbook implements LoggerAwareInterface
 
     public function addPlugin(Plugin $plugin): static
     {
+        // Registering on a copy must not reach the original and its siblings: the plugin would
+        // see other users' evaluations and attributes, and could never be removed from them.
+        $this->detachFromSharedRegistry();
 
         // Pass the client key if we already have one: plugins used to receive initialize() only
         // from initialize(), so one added afterwards stayed uninitialized and dropped its events.
@@ -582,6 +588,27 @@ class Growthbook implements LoggerAwareInterface
     public function getClientKey(): string
     {
         return $this->clientKey;
+    }
+
+    /**
+     * Give this handle a registry it can write to without the others seeing it.
+     *
+     * The plugins registered so far keep receiving this handle's events, since they were
+     * registered for it as well; only what is added afterwards is private to it. They are not
+     * duplicated and not closed twice - the detached registry holds the original one open for
+     * as long as it lives.
+     *
+     * @return void
+     */
+    private function detachFromSharedRegistry(): void
+    {
+        if (!$this->pluginRegistry->isShared()) {
+            return;
+        }
+
+        $detached = $this->pluginRegistry->detach();
+        $this->pluginRegistry->release();
+        $this->pluginRegistry = $detached;
     }
 
     /**

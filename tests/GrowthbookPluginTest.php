@@ -216,7 +216,83 @@ final class GrowthbookPluginIntegrationTest extends TestCase
         $this->assertSame('child', $plugin->featureEvents[0]['key']);
     }
 
-    public function testIsOnAndIsOffTriggerPluginOnce(): void
+    public function testRepeatedEvaluationsOfTheSameValueAreReportedOnce(): void
+    {
+        $plugin = new MockPlugin();
+        $gb = $this->makeGrowthbook($plugin)->withFeatures([
+            'flag-b' => ['defaultValue' => true],
+        ]);
+
+        // Same feature, same value - one event, however many times it is read
+        $gb->isOn('flag-b');
+        $gb->isOff('flag-b');
+        $gb->getFeature('flag-b');
+
+        $this->assertSame(1, $plugin->featureCallCount);
+    }
+
+    public function testDeduplicationIsScopedToTheCurrentUser(): void
+    {
+        $plugin = new MockPlugin();
+        $gb = $this->makeGrowthbook($plugin)->withFeatures([
+            'flag-b' => ['defaultValue' => true],
+        ])->withAttributes(['id' => 'user-1']);
+
+        $gb->isOn('flag-b');
+
+        // A per-user handle starts with a clean slate, and so does a change of attributes
+        $scoped = $gb->withAttributes(['id' => 'user-2']);
+        $scoped->isOn('flag-b');
+        $gb->setAttributes(['id' => 'user-3']);
+        $gb->isOn('flag-b');
+
+        $this->assertSame(3, $plugin->featureCallCount);
+    }
+
+    public function testEvaluationsBeforeTrackingWasWiredUpDoNotSuppressLaterEvents(): void
+    {
+        $gb = $this->makeGrowthbook()->withFeatures(['flag-b' => ['defaultValue' => true]]);
+
+        // Evaluated before anything could record it
+        $gb->isOn('flag-b');
+
+        $plugin = new MockPlugin();
+        $gb->addPlugin($plugin);
+        $gb->isOn('flag-b');
+        $this->assertSame(1, $plugin->featureCallCount, 'adding a plugin must not inherit a history');
+
+        // And the same once the plugins are given their client key
+        $gb->setClientKey('sdk-test');
+        $gb->isOn('flag-b');
+        $this->assertSame(2, $plugin->featureCallCount);
+
+        // A plugin joining later has seen none of it either
+        $late = new MockPlugin();
+        $gb->addPlugin($late);
+        $gb->isOn('flag-b');
+        $this->assertSame(1, $late->featureCallCount);
+    }
+
+    public function testWiringTrackingThroughOneHandleFreesTheOthers(): void
+    {
+        // The handles share the registry, so clearing only the one that added the plugin left
+        // every other handle suppressing its first real event
+        $plugin = new MockPlugin();
+        $root = $this->makeGrowthbook($plugin)
+            ->withFeatures(['flag-b' => ['defaultValue' => true]])
+            ->withAttributes(['id' => 'user-1']);
+
+        $scoped = $root->withAttributes(['id' => 'user-2']);
+        $scoped->isOn('flag-b');
+        $before = $plugin->featureCallCount;
+
+        $root->setClientKey('sdk-test');
+        $scoped->isOn('flag-b');
+
+        $this->assertSame($before + 1, $plugin->featureCallCount);
+    }
+
+    public function testAChangedValueIsReportedAgain(): void
     {
         $plugin = new MockPlugin();
         $gb = $this->makeGrowthbook($plugin)->withFeatures([
@@ -224,9 +300,57 @@ final class GrowthbookPluginIntegrationTest extends TestCase
         ]);
 
         $gb->isOn('flag-b');
-        $gb->isOff('flag-b');
+        $gb->setFeatures(['flag-b' => ['defaultValue' => false]]);
+        $gb->isOn('flag-b');
 
         $this->assertSame(2, $plugin->featureCallCount);
+    }
+
+    public function testLogEventReachesPluginsThatAcceptCustomEvents(): void
+    {
+        $tracking = new GrowthBookTrackingPlugin(new GrowthBookTrackingPluginConfig(batchSize: 1));
+        $events = [];
+        $tracking->setSendHandler(function (string $url, string $body) use (&$events): void {
+            foreach ((array) json_decode($body, true) as $event) {
+                $events[] = $event;
+            }
+        });
+
+        // A plugin that only implements Plugin must simply be skipped, not break the dispatch
+        $plain = new MockPlugin();
+
+        $gb = new Growthbook([
+            'clientKey' => 'sdk-test',
+            'plugins' => [$plain, $tracking],
+            'attributes' => ['id' => 'user-1'],
+        ]);
+
+        $gb->logEvent('Checkout Completed', ['revenue' => 42]);
+
+        $this->assertCount(1, $events);
+        $this->assertSame('Checkout Completed', $events[0]['event_name']);
+        $this->assertSame(['revenue' => 42], $events[0]['properties']);
+        $this->assertSame('user-1', $events[0]['attributes']['id']);
+        $this->assertSame('php', $events[0]['attributes']['sdk_language']);
+    }
+
+    public function testCustomEventsAreNotDeduplicated(): void
+    {
+        $tracking = new GrowthBookTrackingPlugin(new GrowthBookTrackingPluginConfig(batchSize: 1));
+        $events = [];
+        $tracking->setSendHandler(function (string $url, string $body) use (&$events): void {
+            foreach ((array) json_decode($body, true) as $event) {
+                $events[] = $event;
+            }
+        });
+
+        $gb = new Growthbook(['clientKey' => 'sdk-test', 'plugins' => [$tracking]]);
+
+        // The app chose to send each one, so a repeat is a second occurrence
+        $gb->logEvent('Button Clicked');
+        $gb->logEvent('Button Clicked');
+
+        $this->assertCount(2, $events);
     }
 
     public function testMultiplePluginsAllReceiveEvents(): void
@@ -853,6 +977,33 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $factory->method('createRequest')->willReturn($request);
 
         return [$client, $factory];
+    }
+
+    public function testFeatureUsageEventsCanBeTurnedOff(): void
+    {
+        $plugin = new GrowthBookTrackingPlugin(
+            new GrowthBookTrackingPluginConfig(batchSize: 1, enableFeatureUsageEvents: false)
+        );
+        $this->captureEvents($plugin, $events);
+
+        $gb = new Growthbook([
+            'clientKey' => 'sdk-test',
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
+            'features' => [
+                'my-feature' => ['defaultValue' => true],
+                'exp-feature' => ['defaultValue' => 0, 'rules' => [['key' => 'my-exp', 'variations' => [0, 1]]]],
+            ],
+        ]);
+
+        $gb->isOn('my-feature');   // feature usage - dropped
+        $gb->isOn('exp-feature');  // exposure - kept
+        $gb->logEvent('Checkout Completed'); // custom event - kept
+
+        $names = array_column($events, 'event_name');
+        $this->assertNotContains('Feature Evaluated', $names);
+        $this->assertContains('Experiment Viewed', $names);
+        $this->assertContains('Checkout Completed', $names);
     }
 
     public function testClientKeySetAfterThePluginWasAddedReachesIt(): void

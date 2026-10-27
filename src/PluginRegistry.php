@@ -25,6 +25,14 @@ final class PluginRegistry
     private ?string $clientKey = null;
 
     /**
+     * Bumped whenever the audience for events changes - a plugin is added, or the plugins are
+     * given their client key. Instances sharing this registry compare it against the generation
+     * their own "already reported" history belongs to, so a handle that evaluated something
+     * before tracking was wired up does not keep suppressing it afterwards.
+     */
+    private int $generation = 0;
+
+    /**
      * Number of Growthbook instances sharing this registry. A registry is shared by every copy
      * made with the fluent `withX()` methods (PHP clones are shallow), so plugins must stay open
      * until the last of those copies is gone - see [retain] / [release].
@@ -70,6 +78,11 @@ final class PluginRegistry
         return $this->plugins !== [];
     }
 
+    public function generation(): int
+    {
+        return $this->generation;
+    }
+
     /**
      * Whether more than one Growthbook instance holds this registry.
      */
@@ -106,6 +119,8 @@ final class PluginRegistry
             $this->clientKey = $key;
             $this->safeCall($plugin, fn() => $plugin->initialize($key));
         }
+
+        $this->generation++;
     }
 
     public function initialize(string $clientKey): void
@@ -127,6 +142,7 @@ final class PluginRegistry
         }
 
         $this->clientKey = $clientKey;
+        $this->generation++;
         foreach ($this->plugins as $plugin) {
             $this->safeCall($plugin, fn() => $plugin->initialize($clientKey));
         }
@@ -152,6 +168,23 @@ final class PluginRegistry
     {
         foreach ($this->plugins as $plugin) {
             $this->safeCall($plugin, fn() => $plugin->onFeatureEvaluated($featureKey, $result, $attributes));
+        }
+    }
+
+    /**
+     * Dispatch a custom event to the plugins that opted in by implementing EventLoggingPlugin.
+     *
+     * @param string              $eventName
+     * @param array<string,mixed> $properties
+     * @param array<string,mixed> $attributes
+     */
+    public function onLogEvent(string $eventName, array $properties, array $attributes): void
+    {
+        foreach ($this->plugins as $plugin) {
+            if (!$plugin instanceof EventLoggingPlugin) {
+                continue;
+            }
+            $this->safeCall($plugin, fn() => $plugin->onLogEvent($eventName, $properties, $attributes));
         }
     }
 

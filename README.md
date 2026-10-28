@@ -256,6 +256,8 @@ $scoped = $growthbook->withAttributes(['id' => $userId]);
 $scoped->isOn('my-feature');
 ```
 
+Plugins are closed when the last handle is released, which in a request-scoped process is the end of the request. In a long-running runtime - Octane, Swoole, RoadRunner, a queue worker - one instance lives for the whole process, so call `closePlugins()` at the end of a unit of work to make them flush; the instance keeps evaluating features afterwards, its plugins simply stop recording. Calling it twice is safe.
+
 Copies share the cache and the plugins of the original — so plugin tracking keeps batching across handles, and the plugins are closed only once the last handle is gone — but the features are copied at clone time, so a later `setFeatures()` or `initialize()` on the original does not reach a copy made before it. Because the plugins are shared, they keep sending to the client key they were first given: a copy with its own key does not redirect the original's events.
 
 ### Attributes

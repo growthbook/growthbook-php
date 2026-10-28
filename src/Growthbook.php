@@ -1687,9 +1687,16 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
+     * Fetch features for an SDK connection.
+     *
+     * `$apiHost` and `$decryptionKey` are only applied when given. PHP has no overloading, so
+     * an omitted argument and an explicitly empty one both arrive as "" - assigning them
+     * unconditionally wiped a decryptionKey that came from the constructor, and reset the host
+     * on any later call.
+     *
      * @param string $clientKey
-     * @param string $apiHost
-     * @param string $decryptionKey
+     * @param string $apiHost      Leave empty to keep the host already configured
+     * @param string $decryptionKey Leave empty to keep the key already configured
      * @return void
      * @throws ClientExceptionInterface
      * @throws Exception
@@ -1701,8 +1708,12 @@ class Growthbook implements LoggerAwareInterface
         $this->assertClientKeyIsCompatible($clientKey);
         $this->detachFromSharedRegistryWhenChangingConnection($clientKey);
         $this->clientKey = $clientKey;
-        $this->apiHost = $apiHost;
-        $this->decryptionKey = $decryptionKey;
+        if ($apiHost !== "") {
+            $this->apiHost = $apiHost;
+        }
+        if ($decryptionKey !== "") {
+            $this->decryptionKey = $decryptionKey;
+        }
 
         if (!$this->clientKey) {
             throw new Exception("Must specify a clientKey before initializing.");

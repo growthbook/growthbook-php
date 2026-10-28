@@ -256,6 +256,8 @@ $scoped = $growthbook->withAttributes(['id' => $userId]);
 $scoped->isOn('my-feature');
 ```
 
+Registering a plugin on a copy keeps it there: it receives that handle's events only, never the original's or a sibling's. The plugins the copy inherited keep receiving its events, since they were registered for the whole instance, and they are still closed exactly once, after the last handle that uses them is gone. `setLogger()` behaves the same way.
+
 Copies share the cache and the plugins of the original — so plugin tracking keeps batching across handles, and the plugins are closed only once the last handle is gone — but the features are copied at clone time, so a later `setFeatures()` or `initialize()` on the original does not reach a copy made before it. Because the plugins are shared, they keep sending to the client key they were first given: a copy with its own key does not redirect the original's events.
 
 ### Attributes

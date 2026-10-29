@@ -263,6 +263,49 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
+     * Shallow-merge the given attributes into the existing ones (parity with the TS
+     * SDK's `updateAttributes`): new keys are added, existing keys are overwritten and
+     * keys not present in $attributes are preserved. Unlike `setAttributes`, this does
+     * not replace the whole attributes array.
+     *
+     * The merge is shallow - a nested array replaces the previous value of that key
+     * instead of being merged recursively. A `null` value is stored as `null`; it does
+     * not remove the key. Passing an empty array is a no-op.
+     *
+     * Like `setAttributes`, this refreshes sticky buckets and, in remoteEval mode,
+     * triggers a re-evaluation because attributes are part of the eval payload.
+     *
+     * @param array<string,mixed> $attributes
+     * @return static
+     */
+    public function updateAttributes(array $attributes): static
+    {
+        // Merged in a loop instead of array_merge so numeric-string attribute keys
+        // (e.g. "123") keep their key instead of being renumbered.
+        $merged = $this->attributes;
+        foreach ($attributes as $key => $value) {
+            $merged[$key] = $value;
+        }
+
+        return $this->setAttributes($merged);
+    }
+
+    /**
+     * Immutable variant of `updateAttributes`: returns a copy with the given attributes
+     * merged into the existing ones, leaving this instance untouched.
+     *
+     * @param array<string,mixed> $attributes
+     * @return static
+     */
+    public function withUpdatedAttributes(array $attributes): static
+    {
+        $self = clone $this;
+        $self->updateAttributes($attributes);
+
+        return $self;
+    }
+
+    /**
      * @param array<string,mixed> $savedGroups
      * @return static
      */

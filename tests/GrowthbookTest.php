@@ -2123,4 +2123,159 @@ final class GrowthbookTest extends TestCase
 
         $this->assertTrue($gb->isOn('my-feature'));
     }
+
+    public function testUpdateAttributesMergesIntoExisting(): void
+    {
+        $gb = new Growthbook(['attributes' => ['id' => '1', 'country' => 'US']]);
+
+        $gb->updateAttributes(['plan' => 'pro']);
+
+        $this->assertSame(['id' => '1', 'country' => 'US', 'plan' => 'pro'], $gb->getAttributes());
+    }
+
+    public function testUpdateAttributesOverwritesExistingKeysAndPreservesOthers(): void
+    {
+        $gb = new Growthbook(['attributes' => ['id' => '1', 'country' => 'US']]);
+
+        $gb->updateAttributes(['country' => 'FR']);
+
+        $this->assertSame(['id' => '1', 'country' => 'FR'], $gb->getAttributes());
+    }
+
+    public function testUpdateAttributesMergesInsteadOfReplacing(): void
+    {
+        $gb = new Growthbook();
+
+        $gb->setAttributes(['id' => '1']);
+        $gb->updateAttributes(['plan' => 'pro']);
+
+        $this->assertSame(['id' => '1', 'plan' => 'pro'], $gb->getAttributes());
+    }
+
+    public function testUpdateAttributesWithEmptyArrayIsNoop(): void
+    {
+        $gb = new Growthbook(['attributes' => ['id' => '1']]);
+
+        $gb->updateAttributes([]);
+
+        $this->assertSame(['id' => '1'], $gb->getAttributes());
+    }
+
+    public function testUpdateAttributesStoresNullWithoutRemovingKey(): void
+    {
+        $gb = new Growthbook(['attributes' => ['id' => '1', 'plan' => 'pro']]);
+
+        $gb->updateAttributes(['plan' => null]);
+
+        $this->assertSame(['id' => '1', 'plan' => null], $gb->getAttributes());
+    }
+
+    public function testUpdateAttributesIsShallow(): void
+    {
+        $gb = new Growthbook(['attributes' => ['account' => ['age' => 90, 'plan' => 'pro']]]);
+
+        $gb->updateAttributes(['account' => ['age' => 10]]);
+
+        $this->assertSame(['account' => ['age' => 10]], $gb->getAttributes());
+    }
+
+    public function testUpdateAttributesPreservesNumericKeys(): void
+    {
+        // PHP casts numeric-string array keys to int, and array_merge() would renumber
+        // them; the merge must keep the original keys instead.
+        /** @phpstan-ignore-next-line */
+        $gb = new Growthbook(['attributes' => ['123' => 'a']]);
+
+        /** @phpstan-ignore-next-line */
+        $gb->updateAttributes(['456' => 'b']);
+
+        $this->assertSame([123 => 'a', 456 => 'b'], $gb->getAttributes());
+    }
+
+    public function testUpdateAttributesIsUsedForTargeting(): void
+    {
+        $gb = new Growthbook([
+            'features' => [
+                'feature' => [
+                    'defaultValue' => false,
+                    'rules' => [[
+                        'condition' => ['id' => '1', 'plan' => 'pro'],
+                        'force' => true,
+                    ]],
+                ],
+            ],
+        ]);
+
+        $gb->setAttributes(['id' => '1']);
+        $this->assertFalse($gb->isOn('feature'));
+
+        $gb->updateAttributes(['plan' => 'pro']);
+        $this->assertTrue($gb->isOn('feature'));
+    }
+
+    public function testWithUpdatedAttributesDoesNotMutateOriginal(): void
+    {
+        $gb = new Growthbook(['attributes' => ['id' => '1']]);
+
+        $newGb = $gb->withUpdatedAttributes(['plan' => 'pro']);
+
+        $this->assertSame(['id' => '1'], $gb->getAttributes());
+        $this->assertSame(['id' => '1', 'plan' => 'pro'], $newGb->getAttributes());
+    }
+
+    public function testUpdateAttributesRefreshesStickyBuckets(): void
+    {
+        $service = new InMemoryStickyBucketService();
+        $service->saveAssignments([
+            'attributeName' => 'id',
+            'attributeValue' => '2',
+            'assignments' => ['exp__0' => 'control'],
+        ]);
+
+        $gb = new Growthbook([
+            'stickyBucketService' => $service,
+            'attributes' => ['id' => '1'],
+            'features' => [
+                'feature' => [
+                    'defaultValue' => 5,
+                    'rules' => [[
+                        'key' => 'exp',
+                        'variations' => [0, 1],
+                        'weights' => [0, 1],
+                        'meta' => [['key' => 'control'], ['key' => 'variation1']],
+                    ]],
+                ],
+            ],
+        ]);
+
+        // id=1 has no saved assignment -> bucketed normally into variation1
+        $this->assertSame(1, $gb->getFeature('feature')->value);
+
+        // Changing the id must reload assignments, picking up the stored control doc
+        $gb->updateAttributes(['id' => '2']);
+        $this->assertSame(0, $gb->getFeature('feature')->value);
+    }
+
+    public function testRemoteEvalAutoRefetchOnUpdateAttributes(): void
+    {
+        $response = (string) json_encode(['features' => [], 'savedGroups' => []]);
+        [$client, $factory] = $this->makeRemoteEvalHttp($response, 200, $captured);
+
+        $gb = new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'attributes' => ['id' => 'u1'],
+        ]);
+        $gb->initialize('sdk-test', 'https://proxy.example.com');
+        $this->assertSame(1, $captured['sendCount']);
+
+        // Merged attributes change the eval payload -> cache miss -> new POST
+        $captured['body'] = '';
+        $gb->updateAttributes(['plan' => 'pro']);
+        $this->assertSame(2, $captured['sendCount']);
+
+        $body = json_decode($captured['body'], true);
+        $this->assertSame(['id' => 'u1', 'plan' => 'pro'], $body['attributes']);
+    }
 }

@@ -2123,4 +2123,228 @@ final class GrowthbookTest extends TestCase
 
         $this->assertTrue($gb->isOn('my-feature'));
     }
+
+    /**
+     * A feature whose only rule is a 50/50 experiment, so evaluating it produces an exposure.
+     *
+     * @return Growthbook
+     */
+    private function growthbookWithExperimentFeature(): Growthbook
+    {
+        return new Growthbook([
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => 0, 'rules' => [['variations' => [0, 1]]]]],
+        ]);
+    }
+
+    public function testTrackingCallbackSetLaterReceivesEarlierExposures(): void
+    {
+        $gb = $this->growthbookWithExperimentFeature();
+
+        // Evaluated before any sink exists - the exposure is held, not dropped
+        $gb->isOn('my-feature');
+        $this->assertCount(1, $gb->getViewedExperiments());
+
+        $tracked = [];
+        $gb->setTrackingCallback(function ($exp, $result) use (&$tracked): void {
+            $tracked[] = $exp->key;
+        });
+
+        $this->assertSame(['my-feature'], $tracked);
+    }
+
+    public function testDeferredExposuresAreDeliveredOnlyOnce(): void
+    {
+        $gb = $this->growthbookWithExperimentFeature();
+        $gb->isOn('my-feature');
+
+        $tracked = [];
+        $callback = function ($exp, $result) use (&$tracked): void {
+            $tracked[] = $exp->key;
+        };
+
+        $gb->setTrackingCallback($callback);
+        $gb->setTrackingCallback($callback); // a second sink must not replay the buffer
+        $gb->isOn('my-feature');             // nor must re-evaluating the same experiment
+
+        $this->assertCount(1, $tracked);
+    }
+
+    public function testTrackingCallbackSetAtConstructionStillFiresImmediately(): void
+    {
+        $tracked = [];
+        $gb = new Growthbook([
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['my-feature' => ['defaultValue' => 0, 'rules' => [['variations' => [0, 1]]]]],
+            'trackingCallback' => function ($exp, $result) use (&$tracked): void {
+                $tracked[] = $exp->key;
+            },
+        ]);
+
+        $gb->isOn('my-feature');
+        $gb->isOn('my-feature');
+
+        $this->assertSame(['my-feature'], $tracked);
+    }
+
+    public function testSettingNullTrackingCallbackKeepsExposuresForLater(): void
+    {
+        $gb = $this->growthbookWithExperimentFeature();
+        $gb->isOn('my-feature');
+
+        $gb->setTrackingCallback(null);
+
+        $tracked = [];
+        $gb->setTrackingCallback(function ($exp, $result) use (&$tracked): void {
+            $tracked[] = $exp->key;
+        });
+
+        $this->assertSame(['my-feature'], $tracked);
+    }
+
+    public function testACopyDoesNotDeliverTheOriginalsDeferredExposures(): void
+    {
+        $gb = $this->growthbookWithExperimentFeature();
+        $gb->isOn('my-feature');
+
+        // The copy never recorded this exposure, so it is not the copy's to deliver
+        $copyTracked = [];
+        $gb->withTrackingCallback(function ($exp, $result) use (&$copyTracked): void {
+            $copyTracked[] = $exp->key;
+        });
+        $this->assertSame([], $copyTracked);
+
+        // It stays with the instance that did record it, waiting for that instance's sink
+        $originalTracked = [];
+        $gb->setTrackingCallback(function ($exp, $result) use (&$originalTracked): void {
+            $originalTracked[] = $exp->key;
+        });
+        $this->assertSame(['my-feature'], $originalTracked);
+    }
+
+    public function testThrowingCallbackDuringFlushIsLoggedAndDoesNotStopTheRest(): void
+    {
+        $logger = new class extends \Psr\Log\AbstractLogger {
+            /** @var array<int,string> */
+            public array $records = [];
+
+            /**
+             * @param mixed $level
+             * @param string|\Stringable $message
+             * @param array<mixed> $context
+             */
+            public function log($level, $message, array $context = []): void
+            {
+                $this->records[] = (string) $message;
+            }
+        };
+
+        $gb = new Growthbook([
+            'attributes' => ['id' => 'user-1'],
+            'logger' => $logger,
+            'features' => [
+                'feature-a' => ['defaultValue' => 0, 'rules' => [['key' => 'exp-a', 'variations' => [0, 1]]]],
+                'feature-b' => ['defaultValue' => 0, 'rules' => [['key' => 'exp-b', 'variations' => [0, 1]]]],
+            ],
+        ]);
+        $gb->isOn('feature-a');
+        $gb->isOn('feature-b');
+
+        $tracked = [];
+        $gb->setTrackingCallback(function ($exp, $result) use (&$tracked): void {
+            $tracked[] = $exp->key;
+            if ($exp->key === 'exp-a') {
+                throw new \RuntimeException('sink blew up');
+            }
+        });
+
+        $this->assertSame(['exp-a', 'exp-b'], $tracked, 'a throwing sink must not stop the flush');
+        $this->assertContains('Error calling the trackingCallback function', $logger->records);
+    }
+
+    public function testThrowingSinkWithNoLoggerStillDeliversTheRestOfTheBuffer(): void
+    {
+        // With no logger the callback re-throws by design.  That contract stays, but the
+        // exposures queued behind the failing one must still go out: they are already out of the
+        // buffer and marked as seen, so nothing could deliver them afterwards.
+        $gb = new Growthbook([
+            'attributes' => ['id' => 'user-1'],
+            'features' => [
+                'feature-a' => ['defaultValue' => 0, 'rules' => [['key' => 'exp-a', 'variations' => [0, 1]]]],
+                'feature-b' => ['defaultValue' => 0, 'rules' => [['key' => 'exp-b', 'variations' => [0, 1]]]],
+            ],
+        ]);
+        $gb->isOn('feature-a');
+        $gb->isOn('feature-b');
+
+        $tracked = [];
+        $thrownMessage = null;
+        try {
+            $gb->setTrackingCallback(function ($exp, $result) use (&$tracked): void {
+                $tracked[] = $exp->key;
+                if ($exp->key === 'exp-a') {
+                    throw new \RuntimeException('sink blew up');
+                }
+            });
+        } catch (\Throwable $e) {
+            $thrownMessage = $e->getMessage();
+        }
+
+        $this->assertSame(['exp-a', 'exp-b'], $tracked, 'the flush must not stop at the first failure');
+        $this->assertSame('sink blew up', $thrownMessage, 'without a logger the failure must still surface');
+    }
+
+    public function testCopiesDoNotInheritTheDeferredBuffer(): void
+    {
+        // The buffer belongs to the instance that recorded the exposure.  If copies inherited it,
+        // a container-built base specialised per request would deliver the same exposure once per
+        // copy and once more itself - double counting in the same analytics backend.
+        $base = $this->growthbookWithExperimentFeature();
+        $base->isOn('my-feature');
+
+        $tracked = [];
+        $callback = function ($exp, $result) use (&$tracked): void {
+            $tracked[] = $exp->key;
+        };
+
+        $base->withTrackingCallback($callback);
+        $base->withTrackingCallback($callback);
+        $base->setTrackingCallback($callback);
+
+        $this->assertSame(['my-feature'], $tracked, 'only the instance holding the exposure may deliver it');
+    }
+
+    public function testRuleTrackExposuresAreAlsoDeferred(): void
+    {
+        // Server-side evaluated exposures (remote eval "tracks") take the same path
+        $gb = new Growthbook([
+            'attributes' => ['id' => 'u1'],
+            'features' => [
+                'ab-feature' => [
+                    'defaultValue' => false,
+                    'rules' => [[
+                        'force' => true,
+                        'tracks' => [[
+                            'experiment' => ['key' => 'exp-A', 'variations' => [0, 1]],
+                            'result' => [
+                                'variationId' => 1,
+                                'hashUsed' => true,
+                                'hashAttribute' => 'id',
+                                'hashValue' => 'u1',
+                                'featureId' => 'ab-feature',
+                            ],
+                        ]],
+                    ]],
+                ],
+            ],
+        ]);
+        $gb->isOn('ab-feature');
+
+        $tracked = [];
+        $gb->setTrackingCallback(function ($exp, $result) use (&$tracked): void {
+            $tracked[] = $exp->key;
+        });
+
+        $this->assertSame(['exp-A'], $tracked);
+    }
 }

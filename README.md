@@ -327,6 +327,19 @@ $growthbook = new Growthbook([
 $trackingCallback = $growthbook->getTrackingCallback();
 ```
 
+The callback can also be wired after the instance already exists - useful when a framework container builds the instance before the analytics sink is available:
+
+```php
+$growthbook->setTrackingCallback($callback);
+```
+
+Experiments evaluated before that point are not lost: they are held and handed to the callback the moment it is set, once each. (`getViewedExperiments()` keeps listing every experiment seen during the request regardless, so the end-of-request loop above works either way.)
+
+Two things to know about those held exposures:
+
+- They belong to the instance that recorded them. A `with*()` copy starts with an empty buffer, so the exposure is delivered once, by whichever instance set a callback - never once per copy.
+- They carry the experiment and its result, not a snapshot of who was being evaluated. A callback that reads attributes off the instance reads them as they are at the moment of the flush. If you change attributes between evaluating a feature and setting the callback, set the callback first.
+
 ### Tracking Feature Usage
 
 You can also track every time a feature is evaluated using `featureUsageCallback`. Unlike `trackingCallback`, this fires for all feature evaluations — not just experiments.

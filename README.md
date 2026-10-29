@@ -138,6 +138,31 @@ $growthbook = Growthbook\Growthbook::create()
 
 > **Note:** If Guzzle is not installed, the SDK will use a discovered PSR-18 client which may not have timeout guarantees. A warning will be logged in this case.
 
+#### Custom API request headers
+
+If your GrowthBook deployment sits behind an authenticated gateway or proxy, you can attach custom headers to every request the SDK makes to the API host - the features `GET` and, in remote evaluation mode, the eval `POST`:
+
+```php
+$growthbook = new Growthbook\Growthbook([
+  'apiHostRequestHeaders' => [
+    'Authorization' => 'Bearer ' . getenv('GB_GATEWAY_TOKEN'),
+    'X-Tenant'      => 'acme',
+  ],
+]);
+
+// Or via fluent interface
+$growthbook = Growthbook\Growthbook::create()
+  ->withApiHostRequestHeaders(['Authorization' => 'Bearer ' . getenv('GB_GATEWAY_TOKEN')]);
+```
+
+Keep the token in an environment variable or your secrets manager rather than in code. The SDK never writes header values to the log itself, though it cannot promise the same for an HTTP client whose exception messages it logs - one more reason the values are validated up front.
+
+Headers managed by the SDK - `User-Agent`, `If-None-Match` and `Content-Type` - cannot be overridden: passing one of them (in any casing) throws an `InvalidArgumentException`. So does a malformed name, two spellings of the same name (header names are case-insensitive, so only one of them would be sent), or a value outside the HTTP grammar, including surrounding whitespace and CR/LF. Validating here rather than leaving it to the HTTP client means a bad header is a configuration error naming the header, not a failed feature fetch.
+
+Responses are cached per header set: two instances that differ only in their custom headers get their own cache entries, so a gateway that answers differently per tenant cannot have one tenant's payload served to another. Cache keys are unchanged if you do not use the option.
+
+These headers are not sent to the event ingestor used by the tracking plugin; that endpoint is configured separately through `GrowthBookTrackingPluginConfig`.
+
 #### ETag Caching
 
 The SDK automatically uses ETag-based conditional requests (HTTP Conditional GET) to reduce bandwidth. When the GrowthBook API returns an `ETag` header, the SDK stores it and sends `If-None-Match` on subsequent requests. A `304 Not Modified` response reuses the existing cached data without re-downloading the full payload.

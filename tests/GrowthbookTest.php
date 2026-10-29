@@ -9,6 +9,131 @@ use Growthbook\InlineExperiment;
 use Growthbook\InMemoryStickyBucketService;
 use PHPUnit\Framework\TestCase;
 
+/**
+ * Minimal PSR-16 cache for tests: honours TTLs against a clock the test controls, so cache
+ * expiry and the fetch-failure backoff window can be exercised without sleeping.
+ */
+final class InMemoryTestCache implements \Psr\SimpleCache\CacheInterface
+{
+    /** @var array<string,array{value:mixed,expiresAt:int|null}> */
+    private array $store = [];
+
+    /** Seconds added to the current time, so a test can move the clock forward. */
+    public int $clockOffset = 0;
+
+    public int $sets = 0;
+
+    private function now(): int
+    {
+        return time() + $this->clockOffset;
+    }
+
+    public function get(string $key, mixed $default = null): mixed
+    {
+        if (!array_key_exists($key, $this->store)) {
+            return $default;
+        }
+        $entry = $this->store[$key];
+        if ($entry['expiresAt'] !== null && $entry['expiresAt'] <= $this->now()) {
+            unset($this->store[$key]);
+            return $default;
+        }
+
+        return $entry['value'];
+    }
+
+    public function set(string $key, mixed $value, \DateInterval|int|null $ttl = null): bool
+    {
+        $this->sets++;
+        $this->store[$key] = [
+            'value' => $value,
+            'expiresAt' => is_int($ttl) ? $this->now() + $ttl : null,
+        ];
+
+        return true;
+    }
+
+    public function delete(string $key): bool
+    {
+        unset($this->store[$key]);
+
+        return true;
+    }
+
+    public function clear(): bool
+    {
+        $this->store = [];
+
+        return true;
+    }
+
+    /**
+     * @param iterable<string> $keys
+     * @return iterable<string,mixed>
+     */
+    public function getMultiple(iterable $keys, mixed $default = null): iterable
+    {
+        $values = [];
+        foreach ($keys as $key) {
+            $values[$key] = $this->get($key, $default);
+        }
+
+        return $values;
+    }
+
+    /**
+     * @param iterable<string,mixed> $values
+     */
+    public function setMultiple(iterable $values, \DateInterval|int|null $ttl = null): bool
+    {
+        foreach ($values as $key => $value) {
+            $this->set((string) $key, $value, $ttl);
+        }
+
+        return true;
+    }
+
+    /**
+     * @param iterable<string> $keys
+     */
+    public function deleteMultiple(iterable $keys): bool
+    {
+        foreach ($keys as $key) {
+            $this->delete($key);
+        }
+
+        return true;
+    }
+
+    public function has(string $key): bool
+    {
+        return $this->get($key) !== null;
+    }
+
+    /**
+     * @return array<int,string>
+     */
+    public function keys(): array
+    {
+        return array_keys($this->store);
+    }
+
+    /**
+     * Rewrite every cached payload so the SDK considers it expired, without touching the
+     * SDK-internal cache key format.
+     */
+    public function expirePayloads(): void
+    {
+        foreach ($this->store as $key => $entry) {
+            $decoded = is_string($entry['value']) ? json_decode($entry['value'], true) : null;
+            if (is_array($decoded) && array_key_exists('expiresAt', $decoded)) {
+                $decoded['expiresAt'] = time() - 10;
+                $this->set($key, (string) json_encode($decoded), 600);
+            }
+        }
+    }
+}
+
 final class GrowthbookTest extends TestCase
 {
     /**
@@ -2122,5 +2247,384 @@ final class GrowthbookTest extends TestCase
         $gb->initialize('sdk-test', 'https://proxy.example.com');
 
         $this->assertTrue($gb->isOn('my-feature'));
+    }
+
+    /**
+     * Mock HTTP client + request factory counting requests. Pass a \Throwable to make every
+     * request fail.
+     *
+     * @param string|\Throwable $response
+     * @param int|null          $requests Filled by reference with the number of requests made
+     * @return array{0:\Psr\Http\Client\ClientInterface,1:\Psr\Http\Message\RequestFactoryInterface}
+     */
+    private function makeCountingHttp($response, &$requests, int $statusCode = 200): array
+    {
+        $requests = 0;
+
+        $request = $this->createMock(\Psr\Http\Message\RequestInterface::class);
+        $request->method('withHeader')->willReturnSelf();
+        $request->method('getBody')->willReturn($this->createMock(\Psr\Http\Message\StreamInterface::class));
+
+        $factory = $this->createMock(\Psr\Http\Message\RequestFactoryInterface::class);
+        $factory->method('createRequest')->willReturn($request);
+
+        $stream = $this->createMock(\Psr\Http\Message\StreamInterface::class);
+        $stream->method('getContents')->willReturn($response instanceof \Throwable ? '' : $response);
+
+        $httpResponse = $this->createMock(\Psr\Http\Message\ResponseInterface::class);
+        $httpResponse->method('getStatusCode')->willReturn($statusCode);
+        $httpResponse->method('getBody')->willReturn($stream);
+        $httpResponse->method('hasHeader')->willReturn(false);
+
+        $client = $this->createMock(\Psr\Http\Client\ClientInterface::class);
+        $client->method('sendRequest')->willReturnCallback(function () use (&$requests, $response, $httpResponse) {
+            $requests++;
+            if ($response instanceof \Throwable) {
+                throw $response;
+            }
+            return $httpResponse;
+        });
+
+        return [$client, $factory];
+    }
+
+    /**
+     * @param InMemoryTestCache $cache
+     * @param int               $expiresIn Seconds until the entry expires (negative for stale)
+     * @return void
+     */
+    private function seedFeatureCache(InMemoryTestCache $cache, int $expiresIn): void
+    {
+        $url = "https://cdn.growthbook.io/api/features/sdk-test";
+        $cache->set(md5($url . 'v2'), (string) json_encode([
+            'features' => ['my-feature' => ['defaultValue' => true]],
+            'savedGroups' => [],
+            'expiresAt' => time() + $expiresIn,
+        ]), 600);
+    }
+
+    public function testApiFailureBackoffSkipsRepeatedRequests(): void
+    {
+        $cache = new InMemoryTestCache();
+        $this->seedFeatureCache($cache, -10); // stale, so the SDK tries to revalidate
+        [$client, $factory] = $this->makeCountingHttp(new \RuntimeException('api down'), $requests);
+
+        $options = ['httpClient' => $client, 'requestFactory' => $factory, 'cache' => $cache];
+
+        $first = new Growthbook($options);
+        $first->initialize('sdk-test');
+        $this->assertSame(1, $requests);
+        $this->assertTrue($first->isOn('my-feature'), 'stale cache must still be served');
+
+        // A second request in the same window must not pay the API timeout again
+        $second = new Growthbook($options);
+        $second->initialize('sdk-test');
+        $this->assertSame(1, $requests, 'no request expected while the backoff is active');
+        $this->assertTrue($second->isOn('my-feature'), 'cached features must still be served');
+
+        // Once the backoff window passes, the SDK retries
+        $cache->clockOffset = 11;
+        $third = new Growthbook($options);
+        $third->initialize('sdk-test');
+        $this->assertSame(2, $requests, 'the SDK must retry after the backoff expires');
+    }
+
+    public function testFailedFetchWithoutCachedDataDoesNotArmTheBackoff(): void
+    {
+        // Nothing cached to fall back on: backing off would leave the SDK with no features at
+        // all, so it has to keep trying.
+        $cache = new InMemoryTestCache();
+        [$client, $factory] = $this->makeCountingHttp(new \RuntimeException('api down'), $requests);
+
+        $options = ['httpClient' => $client, 'requestFactory' => $factory, 'cache' => $cache];
+        (new Growthbook($options))->initialize('sdk-test');
+        (new Growthbook($options))->initialize('sdk-test');
+
+        $this->assertSame(2, $requests);
+    }
+
+    public function testApiFailureBackoffCanBeDisabled(): void
+    {
+        $cache = new InMemoryTestCache();
+        $this->seedFeatureCache($cache, -10);
+        [$client, $factory] = $this->makeCountingHttp(new \RuntimeException('api down'), $requests);
+
+        $options = [
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'cache' => $cache,
+            'apiFailureRetryDelay' => 0,
+        ];
+
+        (new Growthbook($options))->initialize('sdk-test');
+        (new Growthbook($options))->initialize('sdk-test');
+
+        $this->assertSame(2, $requests);
+    }
+
+    public function testSuccessfulFetchClearsTheFailureBackoff(): void
+    {
+        $cache = new InMemoryTestCache();
+        $this->seedFeatureCache($cache, -10);
+
+        // 1. A failure arms the backoff
+        [$failing, $factory] = $this->makeCountingHttp(new \RuntimeException('api down'), $failedRequests);
+        (new Growthbook(['httpClient' => $failing, 'requestFactory' => $factory, 'cache' => $cache]))
+            ->initialize('sdk-test');
+        $this->assertSame(1, $failedRequests);
+
+        // 2. A successful fetch with the backoff disabled must clear the marker
+        [$working, $workingFactory] = $this->makeCountingHttp(
+            (string) json_encode(['features' => ['my-feature' => ['defaultValue' => true]]]),
+            $okRequests
+        );
+        (new Growthbook([
+            'httpClient' => $working,
+            'requestFactory' => $workingFactory,
+            'cache' => $cache,
+            'apiFailureRetryDelay' => 0,
+        ]))->initialize('sdk-test');
+        $this->assertSame(1, $okRequests);
+
+        // 3. so the next failing instance is free to try again
+        $this->seedFeatureCache($cache, -10);
+        [$failingAgain, $againFactory] = $this->makeCountingHttp(new \RuntimeException('api down'), $retryRequests);
+        (new Growthbook(['httpClient' => $failingAgain, 'requestFactory' => $againFactory, 'cache' => $cache]))
+            ->initialize('sdk-test');
+
+        $this->assertSame(1, $retryRequests, 'the marker from step 1 must have been cleared');
+    }
+
+    public function testRemoteEvalFailureBackoffSkipsRepeatedRequests(): void
+    {
+        $cache = new InMemoryTestCache();
+
+        // Populate the eval cache through the SDK itself, then age the entry, so the test never
+        // has to know how the remote-eval cache key is built
+        [$working, $workingFactory] = $this->makeCountingHttp(
+            (string) json_encode(['features' => ['my-feature' => ['defaultValue' => true]], 'savedGroups' => []]),
+            $okRequests
+        );
+        (new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $working,
+            'requestFactory' => $workingFactory,
+            'cache' => $cache,
+            'url' => '',
+        ]))->initialize('sdk-test', 'https://proxy.example.com');
+        $this->assertSame(1, $okRequests);
+        $cache->expirePayloads();
+
+        [$client, $factory] = $this->makeCountingHttp(new \RuntimeException('proxy down'), $requests);
+        $options = [
+            'remoteEval' => true,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'cache' => $cache,
+            'url' => '',
+        ];
+
+        (new Growthbook($options))->initialize('sdk-test', 'https://proxy.example.com');
+        $this->assertSame(1, $requests);
+
+        $second = new Growthbook($options);
+        $second->initialize('sdk-test', 'https://proxy.example.com');
+        $this->assertSame(1, $requests, 'no POST expected while the backoff is active');
+        $this->assertTrue($second->isOn('my-feature'));
+    }
+
+    public function testFailedEarlyRevalidationStillServesTheCachedPayload(): void
+    {
+        // The payload is still fresh; the request only happens because the entry is inside the
+        // early-revalidation window.  If the API answers with something unusable, the features
+        // that were already in hand must still be applied - otherwise revalidating early is
+        // worse than not revalidating at all.
+        $cache = new InMemoryTestCache();
+        [$client, $factory] = $this->makeCountingHttp('<html>502 Bad Gateway</html>', $requests);
+
+        for ($i = 0; $i < 20; $i++) {
+            $this->seedFeatureCache($cache, 1); // one second left of a 60s TTL
+            $gb = new Growthbook([
+                'httpClient' => $client,
+                'requestFactory' => $factory,
+                'cache' => $cache,
+                'cacheEarlyRevalidation' => 1.0,
+            ]);
+            $gb->initialize('sdk-test');
+            $this->assertTrue($gb->isOn('my-feature'), 'cached features must survive a failed revalidation');
+        }
+
+        $this->assertGreaterThan(0, $requests, 'the early revalidation never fired, so nothing was proven');
+    }
+
+    public function testNotModifiedResponseStillInitializesPlugins(): void
+    {
+        // An early revalidation with an ETag usually comes back 304, so this path runs for a
+        // random share of requests in every TTL.  Skipping plugin initialization here means the
+        // tracking plugin silently drops every event for those requests.
+        $cache = new InMemoryTestCache();
+        $this->seedFeatureCache($cache, -10);
+        [$client, $factory] = $this->makeCountingHttp('', $requests, 304);
+
+        $plugin = new class implements \Growthbook\Plugin {
+            public bool $initialized = false;
+            public function initialize(string $clientKey): void
+            {
+                $this->initialized = true;
+            }
+            public function onExperimentViewed(\Growthbook\InlineExperiment $experiment, \Growthbook\ExperimentResult $result, array $attributes): void {}
+            public function onFeatureEvaluated(string $featureKey, \Growthbook\FeatureResult $result, array $attributes): void {}
+            public function close(): void {}
+        };
+
+        (new Growthbook([
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'cache' => $cache,
+            'plugins' => [$plugin],
+        ]))->initialize('sdk-test');
+
+        $this->assertSame(1, $requests);
+        $this->assertTrue($plugin->initialized, 'a 304 must not skip plugin initialization');
+    }
+
+    public function testRemoteEvalRejectedRequestDoesNotArmTheBackoff(): void
+    {
+        // The failure marker is keyed on the endpoint, but the POST body carries one user's
+        // attributes.  A 4xx says that payload was bad, not that the proxy is down, so it must
+        // not make everyone else serve stale results.
+        $cache = new InMemoryTestCache();
+        [$working, $workingFactory] = $this->makeCountingHttp(
+            (string) json_encode(['features' => ['my-feature' => ['defaultValue' => true]], 'savedGroups' => []]),
+            $okRequests
+        );
+        (new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $working,
+            'requestFactory' => $workingFactory,
+            'cache' => $cache,
+            'url' => '',
+        ]))->initialize('sdk-test', 'https://proxy.example.com');
+        $cache->expirePayloads();
+
+        [$client, $factory] = $this->makeCountingHttp('{"error":"payload too large"}', $requests, 413);
+        $options = [
+            'remoteEval' => true,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'cache' => $cache,
+            'url' => '',
+        ];
+
+        (new Growthbook($options))->initialize('sdk-test', 'https://proxy.example.com');
+        (new Growthbook($options))->initialize('sdk-test', 'https://proxy.example.com');
+
+        $this->assertSame(2, $requests, 'a rejected request must not stop the next one from trying');
+    }
+
+    public function testRemoteEvalServerErrorStillArmsTheBackoff(): void
+    {
+        $cache = new InMemoryTestCache();
+        [$working, $workingFactory] = $this->makeCountingHttp(
+            (string) json_encode(['features' => ['my-feature' => ['defaultValue' => true]], 'savedGroups' => []]),
+            $okRequests
+        );
+        (new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $working,
+            'requestFactory' => $workingFactory,
+            'cache' => $cache,
+            'url' => '',
+        ]))->initialize('sdk-test', 'https://proxy.example.com');
+        $cache->expirePayloads();
+
+        [$client, $factory] = $this->makeCountingHttp('upstream exploded', $requests, 503);
+        $options = [
+            'remoteEval' => true,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'cache' => $cache,
+            'url' => '',
+        ];
+
+        (new Growthbook($options))->initialize('sdk-test', 'https://proxy.example.com');
+        (new Growthbook($options))->initialize('sdk-test', 'https://proxy.example.com');
+
+        $this->assertSame(1, $requests, 'an unhealthy service must still arm the backoff');
+    }
+
+    public function testFreshCacheIsNotRevalidatedEarlyWhenDisabled(): void
+    {
+        $cache = new InMemoryTestCache();
+        $this->seedFeatureCache($cache, 1); // fresh, but one second from expiry
+        [$client, $factory] = $this->makeCountingHttp((string) json_encode(['features' => []]), $requests);
+
+        for ($i = 0; $i < 20; $i++) {
+            (new Growthbook([
+                'httpClient' => $client,
+                'requestFactory' => $factory,
+                'cache' => $cache,
+                'cacheEarlyRevalidation' => 0.0,
+            ]))->initialize('sdk-test');
+        }
+
+        $this->assertSame(0, $requests);
+    }
+
+    public function testFreshCacheIsRevalidatedEarlyNearExpiry(): void
+    {
+        $cache = new InMemoryTestCache();
+        $this->seedFeatureCache($cache, 1); // one second left of a 60s TTL
+        [$client, $factory] = $this->makeCountingHttp((string) json_encode(['features' => []]), $requests);
+
+        // The whole TTL is the revalidation window here, so one second from expiry the
+        // probability is ~98% per call - 20 calls without a single one would be a broken
+        // implementation, not bad luck.
+        for ($i = 0; $i < 20; $i++) {
+            $cache->set(md5("https://cdn.growthbook.io/api/features/sdk-test" . 'v2'), (string) json_encode([
+                'features' => ['my-feature' => ['defaultValue' => true]],
+                'savedGroups' => [],
+                'expiresAt' => time() + 1,
+            ]), 600);
+            (new Growthbook([
+                'httpClient' => $client,
+                'requestFactory' => $factory,
+                'cache' => $cache,
+                'cacheEarlyRevalidation' => 1.0,
+            ]))->initialize('sdk-test');
+        }
+
+        $this->assertGreaterThan(0, $requests);
+    }
+
+    public function testJustWrittenCacheEntryIsNeverRevalidatedEarly(): void
+    {
+        $cache = new InMemoryTestCache();
+        $this->seedFeatureCache($cache, 60); // a full TTL of life left -> probability 0
+        [$client, $factory] = $this->makeCountingHttp((string) json_encode(['features' => []]), $requests);
+
+        for ($i = 0; $i < 20; $i++) {
+            (new Growthbook([
+                'httpClient' => $client,
+                'requestFactory' => $factory,
+                'cache' => $cache,
+                'cacheEarlyRevalidation' => 1.0,
+            ]))->initialize('sdk-test');
+        }
+
+        $this->assertSame(0, $requests);
+    }
+
+    public function testCacheResilienceOptionsAreClamped(): void
+    {
+        $gb = Growthbook::create()
+            ->withApiFailureRetryDelay(-5)
+            ->withCacheEarlyRevalidation(2.5);
+
+        $this->assertSame(0, $gb->getApiFailureRetryDelay());
+        $this->assertSame(1.0, $gb->getCacheEarlyRevalidation());
+
+        $gb = $gb->withCacheEarlyRevalidation(-1.0);
+        $this->assertSame(0.0, $gb->getCacheEarlyRevalidation());
     }
 }

@@ -467,7 +467,7 @@ class Condition
      */
     private static function elemMatch(array $condition, $attributeValue, array $savedGroups): ?bool
     {
-        if (!is_array($attributeValue)) {
+        if (static::getType($attributeValue) !== 'array') {
             return false;
         }
 
@@ -498,7 +498,8 @@ class Condition
 
     /**
      * Strict equality: values of different types are never equal. Integers and
-     * floats are both JSON numbers, so 1 equals 1.0.
+     * floats are both JSON numbers, so 1 equals 1.0. Arrays and objects are
+     * never equal, as JS compares them by reference.
      *
      * @param mixed $a
      * @param mixed $b
@@ -506,10 +507,11 @@ class Condition
      */
     private static function isEqual($a, $b): bool
     {
-        if (static::getType($a) !== static::getType($b)) {
+        $type = static::getType($a);
+        if ($type !== static::getType($b) || $type === 'array' || $type === 'object') {
             return false;
         }
-        if (static::getType($a) === 'number') {
+        if ($type === 'number') {
             return $a == $b;
         }
         return $a === $b;
@@ -551,7 +553,7 @@ class Condition
     private static function compare($a, $b): int
     {
         if (is_string($a) && is_string($b)) {
-            return strcmp($a, $b) <=> 0;
+            return Utf16::compare($a, $b);
         }
         return $a <=> $b;
     }
@@ -627,17 +629,17 @@ class Condition
             case '$elemMatch':
                 return static::elemMatch($conditionValue, $attributeValue, $savedGroups);
             case '$size':
-                if (!is_array($attributeValue)) {
+                if (static::getType($attributeValue) !== 'array') {
                     return false;
                 }
                 return static::evalConditionValue($conditionValue, count($attributeValue), $savedGroups);
             case '$all':
-                if (!is_array($attributeValue) || !is_array($conditionValue)) {
+                if (static::getType($attributeValue) !== 'array' || !is_array($conditionValue)) {
                     return false;
                 }
                 return static::isInAll($attributeValue, $conditionValue, $savedGroups, false);
             case '$alli':
-                if (!is_array($attributeValue) || !is_array($conditionValue)) {
+                if (static::getType($attributeValue) !== 'array' || !is_array($conditionValue)) {
                     return false;
                 }
                 return static::isInAll($attributeValue, $conditionValue, $savedGroups, true);
@@ -786,7 +788,8 @@ class Condition
      */
     public static function isIn($attributeValue, array $conditionValue, bool $insensitive = false): bool
     {
-        if (!is_array($attributeValue)) {
+        // An object is a single value, which equals nothing in the list
+        if (static::getType($attributeValue) !== 'array') {
             $attributeValue = [$attributeValue];
         }
 
@@ -853,12 +856,15 @@ class Condition
         if (!is_string($pattern)) {
             return false;
         }
-        $modifiers = $caseInsensitive ? 'i' : '';
+        // "u" matches by character rather than by byte, like JS does for text
+        // outside the astral planes. Invalid UTF-8 fails to match.
+        $modifiers = $caseInsensitive ? 'iu' : 'u';
         return @preg_match('/' . static::escapeRegexDelimiter($pattern) . '/' . $modifiers, $value ?? '');
     }
 
     /**
-     * Escapes every unescaped "/" so the pattern can be wrapped in "/" delimiters.
+     * Escapes every unescaped "/" so the pattern can be wrapped in "/" delimiters,
+     * and rewrites JS's \uXXXX escape as PCRE's \x{XXXX}.
      *
      * @param string $pattern
      * @return string
@@ -870,7 +876,13 @@ class Condition
         for ($i = 0; $i < $length; $i++) {
             $char = $pattern[$i];
             if ($char === '\\' && $i + 1 < $length) {
-                $escaped .= $char . $pattern[++$i];
+                $hex = substr($pattern, $i + 2, 4);
+                if ($pattern[$i + 1] === 'u' && preg_match('/^[0-9a-fA-F]{4}$/', $hex)) {
+                    $escaped .= '\\x{' . $hex . '}';
+                    $i += 5;
+                } else {
+                    $escaped .= $char . $pattern[++$i];
+                }
             } elseif ($char === '/') {
                 $escaped .= '\\/';
             } else {
@@ -886,6 +898,24 @@ class Condition
      */
     private static function toJson($value): string
     {
-        return json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: 'null';
+        return json_encode(static::normalizeNumbers($value), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: 'null';
+    }
+
+    /**
+     * Turns integral floats into integers, so 1.0 and 1 encode the same, as
+     * they do in JS
+     *
+     * @param mixed $value
+     * @return mixed
+     */
+    private static function normalizeNumbers($value)
+    {
+        if (is_float($value) && is_finite($value) && floor($value) === $value && abs($value) < PHP_INT_MAX) {
+            return (int) $value;
+        }
+        if (is_array($value)) {
+            return array_map([static::class, 'normalizeNumbers'], $value);
+        }
+        return $value;
     }
 }

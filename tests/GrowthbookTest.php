@@ -281,6 +281,164 @@ final class GrowthbookTest extends TestCase
         $this->assertFalse(Condition::pruneCondition(['x' => NAN], ['x' => ['$gt' => 1]]));
     }
 
+    public function testArraysAndObjectsAreNeverEqual(): void
+    {
+        // JS compares arrays and objects by reference, so a JSON value never equals one
+        $this->assertFalse(Condition::evalCondition(['x' => [1]], ['x' => ['$eq' => [1]]], []));
+        $this->assertTrue(Condition::evalCondition(['x' => [1]], ['x' => ['$ne' => [1]]], []));
+        $this->assertFalse(Condition::evalCondition(['x' => ['a' => 1]], ['x' => ['$eq' => ['a' => 1]]], []));
+        $this->assertFalse(Condition::evalCondition(['x' => [1]], ['x' => ['$in' => [[1]]]], []));
+        $this->assertTrue(Condition::evalCondition(['x' => [1]], ['x' => ['$nin' => [[1]]]], []));
+    }
+
+    public function testObjectAttributeIsNotAList(): void
+    {
+        $attributes = ['x' => ['a' => 1]];
+        $this->assertFalse(Condition::evalCondition($attributes, ['x' => ['$in' => [1]]], []));
+        $this->assertTrue(Condition::evalCondition($attributes, ['x' => ['$nin' => [1]]], []));
+        $this->assertFalse(Condition::evalCondition($attributes, ['x' => ['$all' => [1]]], []));
+        $this->assertFalse(Condition::evalCondition($attributes, ['x' => ['$size' => 1]], []));
+        $this->assertFalse(Condition::evalCondition($attributes, ['x' => ['$elemMatch' => ['$eq' => 1]]], []));
+    }
+
+    public function testRegexWithNonStringPatternFails(): void
+    {
+        foreach ([1, true, null, ['a'], ['a' => 'b']] as $pattern) {
+            $this->assertFalse(Condition::evalCondition(['x' => 'a'], ['x' => ['$regex' => $pattern]], []));
+            $this->assertFalse(Condition::evalCondition(['x' => 'a'], ['x' => ['$regexi' => $pattern]], []));
+        }
+    }
+
+    public function testRegexMatchesByCharacterAndSupportsUnicodeEscapes(): void
+    {
+        $this->assertTrue(Condition::evalCondition(['x' => 'é'], ['x' => ['$regex' => '^.$']], []));
+        $this->assertTrue(Condition::evalCondition(['x' => 'é'], ['x' => ['$regex' => 'é']], []));
+        $this->assertTrue(Condition::evalCondition(['x' => 'É'], ['x' => ['$regexi' => '^é$']], []));
+        // A trailing backslash is an invalid pattern, not an error
+        $this->assertFalse(Condition::evalCondition(['x' => 'a'], ['x' => ['$regex' => 'a\\']], []));
+    }
+
+    public function testNumbersCompareByValueInsideArrays(): void
+    {
+        $this->assertTrue(Condition::evalCondition(['x' => [1.0, 2]], ['x' => [1, 2.0]], []));
+        $this->assertTrue(Condition::evalCondition(['x' => ['a' => 1.0]], ['x' => ['a' => 1]], []));
+        $this->assertTrue(Condition::evalCondition(['x' => 1.0], ['x' => ['$in' => [1]]], []));
+        $this->assertTrue(Condition::evalCondition(['x' => [1.0]], ['x' => ['$all' => [1]]], []));
+        $savedGroups = ['nums' => ['type' => 'list', 'attributeKey' => 'x', 'values' => [1, 2]]];
+        $this->assertTrue(Condition::evalCondition(['x' => 2.0], ['$savedGroup' => ['id' => 'nums']], $savedGroups));
+        $this->assertTrue(Condition::evalCondition(['x' => 1.0], ['x' => ['$inGroup' => 'nums']], $savedGroups));
+    }
+
+    public function testStringsOrderByUtf16CodeUnits(): void
+    {
+        // U+FFFF sorts after a surrogate pair in UTF-16, but before it in UTF-8
+        $this->assertTrue(Condition::evalCondition(['x' => '😀'], ['x' => ['$lt' => "\u{FFFF}"]], []));
+        $this->assertTrue(Condition::evalCondition(['x' => 'b'], ['x' => ['$gt' => 'a']], []));
+        $this->assertTrue(Condition::evalCondition(['x' => 'é'], ['x' => ['$gt' => 'e']], []));
+    }
+
+    public function testHashUsesUtf16CodeUnits(): void
+    {
+        $this->assertSame(0.586, Growthbook::hash('', 'josé', 1));
+        $this->assertSame(0.4971, Growthbook::hash('', '😀', 2));
+        // Invalid UTF-8 hashes as U+FFFD, like JS's decoder, rather than failing
+        $this->assertSame(Growthbook::hash('', "\u{FFFD}", 2), Growthbook::hash('', "\xFF", 2));
+    }
+
+    public function testFeatureOnAndOffFollowJsTruthiness(): void
+    {
+        $on = ['off', '0', [], ['a' => 1], 1, -1, 0.5, true];
+        $off = [null, false, 0, 0.0, ''];
+        foreach ($on as $value) {
+            $result = new FeatureResult($value, 'force');
+            $this->assertTrue($result->on, var_export($value, true));
+            $this->assertFalse($result->off, var_export($value, true));
+        }
+        foreach ($off as $value) {
+            $result = new FeatureResult($value, 'force');
+            $this->assertFalse($result->on, var_export($value, true));
+            $this->assertTrue($result->off, var_export($value, true));
+        }
+    }
+
+    /**
+     * @dataProvider unusableHashValueProvider
+     * @param mixed $id
+     */
+    public function testUnusableHashValuesCountAsMissing($id): void
+    {
+        $gb = Growthbook::create()->withAttributes(['id' => $id]);
+
+        $result = $gb->runInlineExperiment(InlineExperiment::create('exp', [0, 1]));
+        $this->assertFalse($result->inExperiment);
+
+        $features = ['f' => ['defaultValue' => 'off', 'rules' => [['force' => 'on', 'coverage' => 1.0]]]];
+        $this->assertSame('off', $gb->withFeatures($features)->getValue('f', null));
+
+        // A filter can't place a user it can't hash
+        $features = ['f' => ['defaultValue' => 'off', 'rules' => [['force' => 'on', 'filters' => [['seed' => 's', 'ranges' => [[0, 1]]]]]]]];
+        $this->assertSame('off', $gb->withFeatures($features)->getValue('f', null));
+    }
+
+    /**
+     * @return array<string,array{0:mixed}>
+     */
+    public function unusableHashValueProvider(): array
+    {
+        return [
+            'zero' => [0],
+            'float zero' => [0.0],
+            'true' => [true],
+            'false' => [false],
+            'empty string' => [''],
+            'null' => [null],
+            'array' => [['1']],
+            'empty array' => [[]],
+            'object' => [['a' => '1']],
+            'infinity' => [INF],
+            'NaN' => [NAN],
+        ];
+    }
+
+    public function testNumericHashValuesFormatLikeJs(): void
+    {
+        $exp = InlineExperiment::create('exp', [0, 1]);
+        $hashOf = function ($id) use ($exp): string {
+            return Growthbook::create()->withAttributes(['id' => $id])->runInlineExperiment($exp)->hashValue;
+        };
+        $this->assertSame('1', $hashOf(1.0));
+        $this->assertSame('1.5', $hashOf(1.5));
+        $this->assertSame('0.1', $hashOf(0.1));
+        $this->assertSame('-2', $hashOf(-2.0));
+        $this->assertSame('123', $hashOf(123));
+        // "0" is a non-empty string, so it can be hashed
+        $this->assertSame('0', $hashOf('0'));
+    }
+
+    /**
+     * @dataProvider unusableHashValueProvider
+     * @param mixed $id
+     */
+    public function testFallbackAttributeWithUnusableHashValue($id): void
+    {
+        $exp = new InlineExperiment('exp', [0, 1], ['hashAttribute' => 'company', 'fallbackAttribute' => 'deviceId']);
+
+        // Without sticky bucketing, the fallback isn't used
+        $gb = Growthbook::create()->withAttributes(['company' => $id, 'deviceId' => 'd1']);
+        $this->assertFalse($gb->runInlineExperiment($exp)->inExperiment);
+
+        // With it, an unusable primary value falls back
+        $sticky = $gb->withStickyBucketing(new InMemoryStickyBucketService(), null);
+        $result = $sticky->runInlineExperiment($exp);
+        $this->assertTrue($result->inExperiment);
+        $this->assertSame('deviceId', $result->hashAttribute);
+        $this->assertSame('d1', $result->hashValue);
+
+        // And an unusable fallback leaves the user out
+        $neither = $sticky->withAttributes(['company' => $id, 'deviceId' => $id]);
+        $this->assertFalse($neither->runInlineExperiment($exp)->inExperiment);
+    }
+
     public function testReducePayloadKeepsMapsWithNumericKeysAsObjects(): void
     {
         $payload = [

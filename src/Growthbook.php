@@ -1106,7 +1106,7 @@ class Growthbook implements LoggerAwareInterface
         }
 
         // 6. Hash value is empty
-        if (!$hashValue) {
+        if ($hashValue === "") {
             $this->log(LogLevel::DEBUG, "Skip experiment because of empty attribute - $hashAttribute", [
                 "experiment" => $exp->key
             ]);
@@ -1382,12 +1382,13 @@ class Growthbook implements LoggerAwareInterface
     public static function hash(string $seed, string $value, int $version): ?float
     {
         // New hashing algorithm
+        // FNV-1a over UTF-16 code units, like the JS SDK, so non-ASCII text buckets the same
         if ($version === 2) {
-            $n = hexdec(hash("fnv1a32", hexdec(hash("fnv1a32", $seed . $value)) . ""));
+            $n = Utf16::fnv1a32((string) Utf16::fnv1a32($seed . $value));
             return ($n % 10000) / 10000;
         } // Original hashing algorithm (with a bias flaw)
         elseif ($version === 1) {
-            $n = hexdec(hash("fnv1a32", $value . $seed));
+            $n = Utf16::fnv1a32($value . $seed);
             return ($n % 1000) / 1000;
         }
 
@@ -1442,31 +1443,57 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
+     * The attribute to hash and its value as a string. The value is "" when
+     * neither the attribute nor the fallback has a usable value. Callers pass a
+     * fallback only when sticky bucketing applies.
+     *
      * @param string|null $hashAttribute
      * @param string|null $fallbackAttribute
      * @return array{0:string,1:string}
      */
     private function getHashValue(?string $hashAttribute = null, ?string $fallbackAttribute = null): array
     {
-        $attribute = $hashAttribute ?? "id";
-        $val = "";
+        $attribute = $hashAttribute ?: "id";
+        $val = static::toHashValue($this->attributes[$attribute] ?? null);
 
-        if (array_key_exists($attribute, $this->attributes)) {
-            $val = $this->attributes[$attribute] ?? "";
-        }
-
-        if (($val === "" || $val === null) && $fallbackAttribute && $this->stickyBucketService) {
-
-            if (array_key_exists($fallbackAttribute, $this->attributes)) {
-                $val = $this->attributes[$fallbackAttribute] ?? "";
-            }
-
-            if (!empty($val) || $val != "") {
+        if ($val === "" && $fallbackAttribute) {
+            $val = static::toHashValue($this->attributes[$fallbackAttribute] ?? null);
+            if ($val !== "") {
                 $attribute = $fallbackAttribute;
             }
         }
 
-        return [$attribute, strval($val)];
+        return [$attribute, $val];
+    }
+
+    /**
+     * An attribute value as the string to hash, like JS's String(). Only a
+     * non-empty string or a finite, non-zero number can be hashed; anything
+     * else, including booleans, arrays and objects, gives "".
+     *
+     * @param mixed $value
+     * @return string
+     */
+    private static function toHashValue($value): string
+    {
+        if (is_string($value)) {
+            return $value;
+        }
+        if (is_int($value)) {
+            return $value === 0 ? "" : (string) $value;
+        }
+        if (is_float($value)) {
+            if ($value == 0 || !is_finite($value)) {
+                return "";
+            }
+            // Integral values have no decimal part, like JS (1.0 is "1")
+            if (floor($value) === $value && abs($value) < 1e21) {
+                return sprintf('%.0f', $value);
+            }
+            // Shortest form that round-trips, like JS
+            return (string) json_encode($value);
+        }
+        return "";
     }
 
     /**
@@ -1476,14 +1503,15 @@ class Growthbook implements LoggerAwareInterface
     private function isFilteredOut(array $filters): bool
     {
         foreach ($filters as $filter) {
+            // Like JS, a user without a usable hash value is filtered out
             list(, $hashValue) = $this->getHashValue($filter["attribute"] ?? "id");
             if ($hashValue === "") {
-                return false;
+                return true;
             }
 
             $n = self::hash($filter["seed"] ?? "", $hashValue, $filter["hashVersion"] ?? 2);
             if ($n === null) {
-                return false;
+                return true;
             }
 
             $filtered = false;
@@ -2601,7 +2629,7 @@ class Growthbook implements LoggerAwareInterface
         if ($fallbackAttribute) {
             list(, $hashValue) = $this->getHashValue($fallbackAttribute);
 
-            $key = $fallbackAttribute . '||' . $hashValue;
+            $key = $hashValue === "" ? "" : $fallbackAttribute . '||' . $hashValue;
             if (array_key_exists($key, $this->stickyBucketAssignmentDocs)) {
                 foreach ($this->stickyBucketAssignmentDocs[$key]['assignments'] as $key => $value) {
                     if (!array_key_exists($key, $merged)) {
@@ -2683,7 +2711,7 @@ class Growthbook implements LoggerAwareInterface
         foreach ($this->stickyBucketIdentifierAttributes as $attr) {
             list(, $hashValue) = $this->getHashValue($attr);
 
-            if ($hashValue) {
+            if ($hashValue !== "") {
                 $attributes[$attr] = $hashValue;
             }
         }

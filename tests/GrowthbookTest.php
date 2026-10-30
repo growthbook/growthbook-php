@@ -575,6 +575,48 @@ final class GrowthbookTest extends TestCase
     }
 
     /**
+     * growthbook/growthbook#7401: one leading `v` and everything from the first `+` are stripped
+     */
+    public function testParseVersionStringStripsOneLeadingVAndBuildMetadata(): void
+    {
+        $plain = Condition::parseVersionString('1.2.3');
+        $this->assertSame($plain, Condition::parseVersionString('v1.2.3'));
+        $this->assertSame('v1-    2-    3-~', Condition::parseVersionString('vv1.2.3'));
+        $this->assertSame($plain, Condition::parseVersionString('1.2.3+build'));
+        $this->assertSame($plain, Condition::parseVersionString('v1.2.3+build+more.1-2'));
+        $this->assertSame($plain, Condition::parseVersionString('1.2.3+'));
+        $this->assertSame('', Condition::parseVersionString('+build'));
+        $this->assertSame(Condition::parseVersionString('1.2.3-rc.1'), Condition::parseVersionString('v1.2.3-rc.1+build.5'));
+    }
+
+    public function testParseVersionStringTreatsLineBreaksAsOrdinaryCharacters(): void
+    {
+        // `.` doesn't match a line break, so the regex kept "+build\nx"; `$` also
+        // matches before a final line break, so "1\n" was padded as a number
+        $plain = Condition::parseVersionString('1.2.3');
+        $this->assertSame($plain, Condition::parseVersionString("1.2.3+build\nx"));
+        $this->assertSame($plain, Condition::parseVersionString("1.2.3+\n"));
+        $this->assertSame("1\n-    2-    3-~", Condition::parseVersionString("1\n.2.3"));
+    }
+
+    public function testParseVersionStringDoesNotDependOnThePcreBacktrackLimit(): void
+    {
+        // With the regex, this input exhausted pcre.backtrack_limit (default
+        // 1 000 000): preg_replace returned null and the version became ""
+        $input = '1.2.3+' . str_repeat('+', 2000000) . "\nx";
+        $this->assertSame(Condition::parseVersionString('1.2.3'), Condition::parseVersionString($input));
+    }
+
+    public function testParseVersionStringRunsInLinearTimeOnManyPlusCharacters(): void
+    {
+        // Quadratic for the regex without PCRE JIT (20 000 took 2 s)
+        $start = microtime(true);
+        Condition::parseVersionString(str_repeat('+', 50000) . "\nx");
+        Condition::parseVersionString(str_repeat('+', 50000) . "\n");
+        $this->assertLessThan(0.5, microtime(true) - $start);
+    }
+
+    /**
      * End-to-end regression for issue #69: a feature whose rule targets a
      * missing version attribute must fall back to the default value rather
      * than throwing.

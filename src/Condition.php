@@ -755,7 +755,16 @@ class Condition
         // Remove build info and leading `v` if any
         // Split version into parts (both core version numbers and pre-release tags)
         // "v1.2.3-rc.1+build123" -> ["1","2","3","rc","1"]
-        $parts = preg_split('/[-.]/', preg_replace('/(^v|\+.*$)/', '', $version) ?? '');
+        // (build metadata starts at the first `+`; no regex, as `\+.*$` backtracks
+        // and can hit pcre.backtrack_limit, which returned null)
+        if (str_starts_with($version, 'v')) {
+            $version = substr($version, 1);
+        }
+        $build = strpos($version, '+');
+        if ($build !== false) {
+            $version = substr($version, 0, $build);
+        }
+        $parts = preg_split('/[-.]/', $version);
 
         // Unable to parse
         if (!is_array($parts)) {
@@ -771,7 +780,7 @@ class Condition
 
         # Left pad each numeric part with spaces so string comparisons will work ("9">"10", but " 9"<"10")
         $parts = array_map(function ($part) {
-            return preg_match('/^[0-9]+$/', $part) ? str_pad($part, 5, " ", STR_PAD_LEFT) : $part;
+            return preg_match('/^[0-9]+\z/', $part) ? str_pad($part, 5, " ", STR_PAD_LEFT) : $part;
         }, $parts);
 
         return implode('-', $parts);

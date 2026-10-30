@@ -30,10 +30,14 @@ final class GrowthbookTest extends TestCase
             $this->cases = json_decode($cases, true);
         }
 
-        if (!array_key_exists($section, $this->cases)) {
-            throw new \Exception("Unknown test case: $section");
+        // A nested section such as "savedGroupReferencesV2.feature"
+        $raw = $this->cases;
+        foreach (explode('.', $section) as $part) {
+            if (!is_array($raw) || !array_key_exists($part, $raw)) {
+                throw new \Exception("Unknown test case: $section");
+            }
+            $raw = $raw[$part];
         }
-        $raw = $this->cases[$section];
         if (!$this->arrayIsList($raw)) {
             return $raw;
         }
@@ -96,6 +100,7 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider evalConditionProvider
+     * @dataProvider savedGroupReferencesV2EvalConditionProvider
      * @param array<string,mixed> $condition
      * @param array<string,mixed> $attributes
      * @param bool $expected
@@ -115,12 +120,399 @@ final class GrowthbookTest extends TestCase
     }
 
     /**
+     * @return array<int|string,mixed[]>
+     */
+    public function savedGroupReferencesV2EvalConditionProvider(): array
+    {
+        return $this->getCases("savedGroupReferencesV2.evalCondition");
+    }
+
+    /**
+     * @dataProvider pruneConditionProvider
+     * @param array<string,mixed> $condition
+     * @param array<string,mixed> $attributes
+     * @param array<string,mixed>|bool $expected
+     * @param array<string,mixed> $savedGroups
+     */
+    public function testPruneCondition(array $condition, array $attributes, $expected, array $savedGroups = []): void
+    {
+        $this->assertEquals($expected, $this->toJsonArray(Condition::pruneCondition($attributes, $condition, $savedGroups)));
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function pruneConditionProvider(): array
+    {
+        return $this->getCases("pruneCondition");
+    }
+
+    /**
+     * @dataProvider reducePayloadProvider
+     * @param array<string,mixed> $input
+     * @param array<string,mixed> $expected
+     */
+    public function testReducePayload(array $input, array $expected): void
+    {
+        // The JS SDK's global attributes, which the user's override
+        $attributes = array_merge($input['globalAttributes'] ?? [], $input['attributes'] ?? []);
+        $options = ['attributes' => $attributes];
+        foreach (['include', 'exclude', 'prerequisites'] as $key) {
+            if (array_key_exists($key, $input)) {
+                $options[$key] = $input[$key];
+            }
+        }
+        $this->assertEquals($expected, $this->toJsonArray(Growthbook::reducePayload($input['payload'], $options)));
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function reducePayloadProvider(): array
+    {
+        return $this->getCases("reducePayload");
+    }
+
+    public function testReducePayloadWithManyGroupsSharingALargeList(): void
+    {
+        // Every condition group references the same large list group, so the
+        // cycle check must not re-walk that list once per group
+        $savedGroups = [
+            'ids' => ['type' => 'list', 'attributeKey' => 'id', 'values' => array_map('strval', range(1, 20000))],
+        ];
+        $rules = [];
+        for ($i = 0; $i < 300; $i++) {
+            $savedGroups["g$i"] = [
+                'type' => 'condition',
+                'condition' => ['$savedGroup' => ['id' => 'ids'], 'country' => 'US'],
+            ];
+            $rules[] = ['condition' => ['$savedGroup' => ['id' => "g$i"]], 'force' => true];
+        }
+        $payload = ['features' => ['f' => ['defaultValue' => false, 'rules' => $rules]], 'savedGroups' => $savedGroups];
+
+        $result = $this->toJsonArray(Growthbook::reducePayload($payload, ['attributes' => ['country' => 'US']]));
+
+        // Each group drops its known "country" check and keeps the list reference
+        $this->assertSame(['$savedGroup' => ['id' => 'ids']], $result['savedGroups']['g0']['condition']);
+        $this->assertSame(['$savedGroup' => ['id' => 'ids']], $result['savedGroups']['g299']['condition']);
+        $this->assertCount(20000, $result['savedGroups']['ids']['values']);
+        $this->assertCount(301, $result['savedGroups']);
+    }
+
+    public function testReducePayloadKeepsOnlyGroupsOnACycleAsWritten(): void
+    {
+        $savedGroups = [
+            // a -> b -> a is a cycle; c references the cycle but isn't on it;
+            // s references itself. The unknown "z" keeps them undecided.
+            'a' => ['type' => 'condition', 'condition' => ['$or' => [['$savedGroup' => ['id' => 'b']], ['x' => true]], 'y' => true, 'z' => 1]],
+            'b' => ['type' => 'condition', 'condition' => ['$not' => ['$savedGroup' => ['id' => 'a']], 'y' => true, 'z' => 1]],
+            'c' => ['type' => 'condition', 'condition' => ['$savedGroup' => ['id' => 'a'], 'y' => true]],
+            's' => ['type' => 'condition', 'condition' => ['$or' => [['$savedGroup' => ['id' => 's']], ['x' => true]], 'y' => true, 'z' => 1]],
+        ];
+        $payload = [
+            'features' => ['f' => ['defaultValue' => false, 'rules' => [
+                ['condition' => ['$savedGroup' => ['id' => 'c']], 'force' => true],
+                ['condition' => ['$savedGroup' => ['id' => 's']], 'force' => true],
+            ]]],
+            'savedGroups' => $savedGroups,
+        ];
+
+        $result = $this->toJsonArray(Growthbook::reducePayload($payload, ['attributes' => ['y' => true]]));
+
+        $this->assertSame($savedGroups['a']['condition'], $result['savedGroups']['a']['condition']);
+        $this->assertSame($savedGroups['b']['condition'], $result['savedGroups']['b']['condition']);
+        $this->assertSame($savedGroups['s']['condition'], $result['savedGroups']['s']['condition']);
+        // Not on the cycle, so its known "y" check is reduced away
+        $this->assertSame(['$savedGroup' => ['id' => 'a']], $result['savedGroups']['c']['condition']);
+    }
+
+    public function testReducePayloadDoesNotFollowGroupIdsInAListsValues(): void
+    {
+        $payload = [
+            'features' => ['f' => ['defaultValue' => false, 'rules' => [
+                ['condition' => ['$savedGroup' => ['id' => 'c']], 'force' => true],
+                ['condition' => ['id' => ['$inGroup' => 'legacy']], 'force' => true],
+                ['condition' => ['items' => ['$elemMatch' => ['$savedGroup' => ['id' => 'l']]]], 'force' => true],
+            ]]],
+            'savedGroups' => [
+                // A list's values are attribute values, even when one is a group id
+                'c' => ['type' => 'condition', 'condition' => ['$savedGroup' => ['id' => 'l'], 'y' => true]],
+                'l' => ['type' => 'list', 'attributeKey' => 'id', 'values' => ['c', 'g']],
+                'legacy' => ['g'],
+                'g' => ['type' => 'condition', 'condition' => ['y' => true]],
+            ],
+        ];
+
+        $result = $this->toJsonArray(Growthbook::reducePayload($payload, ['attributes' => ['y' => true]]));
+
+        // Not on a cycle through the list, so its known "y" check goes
+        $this->assertSame(['$savedGroup' => ['id' => 'l']], $result['savedGroups']['c']['condition']);
+        $this->assertSame(['c', 'l', 'legacy'], array_keys($result['savedGroups']));
+    }
+
+    public function testReducePayloadWithoutSavedGroups(): void
+    {
+        $payload = ['features' => ['f' => ['defaultValue' => false, 'rules' => [
+            ['condition' => ['id' => ['$inGroup' => 'missing']], 'force' => true],
+        ]]]];
+
+        $result = $this->toJsonArray(Growthbook::reducePayload($payload, ['attributes' => []]));
+
+        $this->assertSame($payload['features'], $result['features']);
+        $this->assertSame([], $result['savedGroups']);
+    }
+
+    public function testReducePayloadLeavesOutMissingContextualBandits(): void
+    {
+        $result = Growthbook::reducePayload(['features' => ['f' => ['defaultValue' => true]]], []);
+
+        $this->assertArrayNotHasKey('contextualBandits', $result);
+        $this->assertStringNotContainsString('contextualBandits', (string) json_encode($result));
+    }
+
+    public function testOrderingOperatorsFailWithNaN(): void
+    {
+        foreach (['$lt', '$lte', '$gt', '$gte'] as $operator) {
+            $this->assertFalse(Condition::evalCondition(['x' => NAN], ['x' => [$operator => 1]], []), "NaN $operator 1");
+            $this->assertFalse(Condition::evalCondition(['x' => 1], ['x' => [$operator => NAN]], []), "1 $operator NaN");
+            $this->assertFalse(Condition::evalCondition(['x' => NAN], ['x' => [$operator => NAN]], []), "NaN $operator NaN");
+        }
+        // The pruned condition fails the same way rather than being dropped as passing
+        $this->assertFalse(Condition::pruneCondition(['x' => NAN], ['x' => ['$gt' => 1]]));
+    }
+
+    public function testArraysAndObjectsAreNeverEqual(): void
+    {
+        // JS compares arrays and objects by reference, so a JSON value never equals one
+        $this->assertFalse(Condition::evalCondition(['x' => [1]], ['x' => ['$eq' => [1]]], []));
+        $this->assertTrue(Condition::evalCondition(['x' => [1]], ['x' => ['$ne' => [1]]], []));
+        $this->assertFalse(Condition::evalCondition(['x' => ['a' => 1]], ['x' => ['$eq' => ['a' => 1]]], []));
+        $this->assertFalse(Condition::evalCondition(['x' => [1]], ['x' => ['$in' => [[1]]]], []));
+        $this->assertTrue(Condition::evalCondition(['x' => [1]], ['x' => ['$nin' => [[1]]]], []));
+    }
+
+    public function testObjectAttributeIsNotAList(): void
+    {
+        $attributes = ['x' => ['a' => 1]];
+        $this->assertFalse(Condition::evalCondition($attributes, ['x' => ['$in' => [1]]], []));
+        $this->assertTrue(Condition::evalCondition($attributes, ['x' => ['$nin' => [1]]], []));
+        $this->assertFalse(Condition::evalCondition($attributes, ['x' => ['$all' => [1]]], []));
+        $this->assertFalse(Condition::evalCondition($attributes, ['x' => ['$size' => 1]], []));
+        $this->assertFalse(Condition::evalCondition($attributes, ['x' => ['$elemMatch' => ['$eq' => 1]]], []));
+    }
+
+    public function testRegexWithNonStringPatternFails(): void
+    {
+        foreach ([1, true, null, ['a'], ['a' => 'b']] as $pattern) {
+            $this->assertFalse(Condition::evalCondition(['x' => 'a'], ['x' => ['$regex' => $pattern]], []));
+            $this->assertFalse(Condition::evalCondition(['x' => 'a'], ['x' => ['$regexi' => $pattern]], []));
+        }
+    }
+
+    public function testRegexMatchesByCharacterAndSupportsUnicodeEscapes(): void
+    {
+        $this->assertTrue(Condition::evalCondition(['x' => 'é'], ['x' => ['$regex' => '^.$']], []));
+        $this->assertTrue(Condition::evalCondition(['x' => 'é'], ['x' => ['$regex' => 'é']], []));
+        $this->assertTrue(Condition::evalCondition(['x' => 'É'], ['x' => ['$regexi' => '^é$']], []));
+        // A trailing backslash is an invalid pattern, not an error
+        $this->assertFalse(Condition::evalCondition(['x' => 'a'], ['x' => ['$regex' => 'a\\']], []));
+    }
+
+    public function testNumbersCompareByValueInsideArrays(): void
+    {
+        $this->assertTrue(Condition::evalCondition(['x' => [1.0, 2]], ['x' => [1, 2.0]], []));
+        $this->assertTrue(Condition::evalCondition(['x' => ['a' => 1.0]], ['x' => ['a' => 1]], []));
+        $this->assertTrue(Condition::evalCondition(['x' => 1.0], ['x' => ['$in' => [1]]], []));
+        $this->assertTrue(Condition::evalCondition(['x' => [1.0]], ['x' => ['$all' => [1]]], []));
+        $savedGroups = ['nums' => ['type' => 'list', 'attributeKey' => 'x', 'values' => [1, 2]]];
+        $this->assertTrue(Condition::evalCondition(['x' => 2.0], ['$savedGroup' => ['id' => 'nums']], $savedGroups));
+        $this->assertTrue(Condition::evalCondition(['x' => 1.0], ['x' => ['$inGroup' => 'nums']], $savedGroups));
+    }
+
+    public function testStringsOrderByUtf16CodeUnits(): void
+    {
+        // U+FFFF sorts after a surrogate pair in UTF-16, but before it in UTF-8
+        $this->assertTrue(Condition::evalCondition(['x' => '😀'], ['x' => ['$lt' => "\u{FFFF}"]], []));
+        $this->assertTrue(Condition::evalCondition(['x' => 'b'], ['x' => ['$gt' => 'a']], []));
+        $this->assertTrue(Condition::evalCondition(['x' => 'é'], ['x' => ['$gt' => 'e']], []));
+    }
+
+    public function testHashUsesUtf16CodeUnits(): void
+    {
+        $this->assertSame(0.586, Growthbook::hash('', 'josé', 1));
+        $this->assertSame(0.4971, Growthbook::hash('', '😀', 2));
+        // Invalid UTF-8 hashes as U+FFFD, like JS's decoder, rather than failing
+        $this->assertSame(Growthbook::hash('', "\u{FFFD}", 2), Growthbook::hash('', "\xFF", 2));
+    }
+
+    public function testFeatureOnAndOffFollowJsTruthiness(): void
+    {
+        $on = ['off', '0', [], ['a' => 1], 1, -1, 0.5, true];
+        $off = [null, false, 0, 0.0, ''];
+        foreach ($on as $value) {
+            $result = new FeatureResult($value, 'force');
+            $this->assertTrue($result->on, var_export($value, true));
+            $this->assertFalse($result->off, var_export($value, true));
+        }
+        foreach ($off as $value) {
+            $result = new FeatureResult($value, 'force');
+            $this->assertFalse($result->on, var_export($value, true));
+            $this->assertTrue($result->off, var_export($value, true));
+        }
+    }
+
+    /**
+     * @dataProvider unusableHashValueProvider
+     * @param mixed $id
+     */
+    public function testUnusableHashValuesCountAsMissing($id): void
+    {
+        $gb = Growthbook::create()->withAttributes(['id' => $id]);
+
+        $result = $gb->runInlineExperiment(InlineExperiment::create('exp', [0, 1]));
+        $this->assertFalse($result->inExperiment);
+
+        $features = ['f' => ['defaultValue' => 'off', 'rules' => [['force' => 'on', 'coverage' => 1.0]]]];
+        $this->assertSame('off', $gb->withFeatures($features)->getValue('f', null));
+
+        // A filter can't place a user it can't hash
+        $features = ['f' => ['defaultValue' => 'off', 'rules' => [['force' => 'on', 'filters' => [['seed' => 's', 'ranges' => [[0, 1]]]]]]]];
+        $this->assertSame('off', $gb->withFeatures($features)->getValue('f', null));
+    }
+
+    /**
+     * @return array<string,array{0:mixed}>
+     */
+    public function unusableHashValueProvider(): array
+    {
+        return [
+            'zero' => [0],
+            'float zero' => [0.0],
+            'true' => [true],
+            'false' => [false],
+            'empty string' => [''],
+            'null' => [null],
+            'array' => [['1']],
+            'empty array' => [[]],
+            'object' => [['a' => '1']],
+            'infinity' => [INF],
+            'NaN' => [NAN],
+        ];
+    }
+
+    public function testNumericHashValuesFormatLikeJs(): void
+    {
+        $exp = InlineExperiment::create('exp', [0, 1]);
+        $hashOf = function ($id) use ($exp): string {
+            return Growthbook::create()->withAttributes(['id' => $id])->runInlineExperiment($exp)->hashValue;
+        };
+        $this->assertSame('1', $hashOf(1.0));
+        $this->assertSame('1.5', $hashOf(1.5));
+        $this->assertSame('0.1', $hashOf(0.1));
+        $this->assertSame('-2', $hashOf(-2.0));
+        $this->assertSame('123', $hashOf(123));
+        // "0" is a non-empty string, so it can be hashed
+        $this->assertSame('0', $hashOf('0'));
+    }
+
+    /**
+     * @dataProvider unusableHashValueProvider
+     * @param mixed $id
+     */
+    public function testFallbackAttributeWithUnusableHashValue($id): void
+    {
+        $exp = new InlineExperiment('exp', [0, 1], ['hashAttribute' => 'company', 'fallbackAttribute' => 'deviceId']);
+
+        // Without sticky bucketing, the fallback isn't used
+        $gb = Growthbook::create()->withAttributes(['company' => $id, 'deviceId' => 'd1']);
+        $this->assertFalse($gb->runInlineExperiment($exp)->inExperiment);
+
+        // With it, an unusable primary value falls back
+        $sticky = $gb->withStickyBucketing(new InMemoryStickyBucketService(), null);
+        $result = $sticky->runInlineExperiment($exp);
+        $this->assertTrue($result->inExperiment);
+        $this->assertSame('deviceId', $result->hashAttribute);
+        $this->assertSame('d1', $result->hashValue);
+
+        // And an unusable fallback leaves the user out
+        $neither = $sticky->withAttributes(['company' => $id, 'deviceId' => $id]);
+        $this->assertFalse($neither->runInlineExperiment($exp)->inExperiment);
+    }
+
+    public function testReducePayloadKeepsMapsWithNumericKeysAsObjects(): void
+    {
+        $payload = [
+            'features' => ['0' => ['defaultValue' => true, 'rules' => [
+                ['condition' => ['$savedGroup' => ['id' => '0']], 'force' => false, 'contextualBanditRef' => '0'],
+            ]]],
+            'savedGroups' => ['0' => ['type' => 'list', 'attributeKey' => 'id', 'values' => ['a']]],
+            'contextualBandits' => ['0' => ['key' => 'b']],
+        ];
+
+        $json = (string) json_encode(Growthbook::reducePayload($payload, []));
+
+        $this->assertStringContainsString('"features":{"0":{', $json);
+        $this->assertStringContainsString('"savedGroups":{"0":{', $json);
+        $this->assertStringContainsString('"contextualBandits":{"0":{', $json);
+    }
+
+    public function testReducedPayloadWithNumericKeysCanBeReducedAgainAndLoaded(): void
+    {
+        $payload = [
+            'features' => ['0' => ['defaultValue' => true, 'rules' => [
+                ['condition' => ['$savedGroup' => ['id' => '0']], 'force' => false, 'contextualBanditRef' => '0'],
+            ]]],
+            'savedGroups' => ['0' => ['type' => 'list', 'attributeKey' => 'id', 'values' => ['a']]],
+            'contextualBandits' => ['0' => ['key' => 'b']],
+        ];
+
+        $first = Growthbook::reducePayload($payload, []);
+        $second = Growthbook::reducePayload($first, []);
+
+        $this->assertSame(json_encode($first), json_encode($second));
+        $this->assertStringContainsString('"features":{"0":{', (string) json_encode($second));
+
+        $gb = Growthbook::create()
+            ->withSavedGroups($second['savedGroups'])
+            ->withFeatures($second['features']);
+        $this->assertFalse($gb->withAttributes(['id' => 'a'])->getFeature('0')->value);
+        $this->assertTrue($gb->withAttributes(['id' => 'z'])->getFeature('0')->value);
+    }
+
+    public function testReducePayloadKeepsAMalformedSavedGroupAsWritten(): void
+    {
+        $payload = [
+            'features' => ['f' => ['defaultValue' => false, 'rules' => [
+                ['condition' => ['$savedGroup' => ['id' => 'g']], 'force' => true],
+            ]]],
+            'savedGroups' => ['g' => ['type' => 'condition', 'condition' => ['$not' => null]]],
+        ];
+
+        $result = $this->toJsonArray(Growthbook::reducePayload($payload, ['attributes' => []]));
+
+        $this->assertSame($payload['features'], $result['features']);
+        $this->assertSame($payload['savedGroups'], $result['savedGroups']);
+    }
+
+    /**
+     * Decodes a value the way the expected results were decoded, so an empty
+     * object and an empty array compare equal
+     *
+     * @param mixed $value
+     * @return mixed
+     */
+    private function toJsonArray($value)
+    {
+        return json_decode((string) json_encode($value), true);
+    }
+
+    /**
      * Regression for issue #69: version operators must not throw a TypeError
      * when the targeted attribute is missing (null). A missing attribute is
-     * normalised to "0" (matching the reference TypeScript SDK), so evaluation
-     * proceeds against "0" rather than crashing. Notably "$vgte" — the operator
-     * from the issue — evaluates to false, so the rule is skipped and the
-     * feature falls back to its default value.
+     * not a version, so every version operator fails except "$vne", its
+     * negation (matching the reference TypeScript SDK). Notably "$vgte" — the
+     * operator from the issue — evaluates to false, so the rule is skipped and
+     * the feature falls back to its default value.
      *
      * @dataProvider versionOperatorMissingAttributeProvider
      * @param array<string,mixed> $condition
@@ -136,14 +528,14 @@ final class GrowthbookTest extends TestCase
      */
     public function versionOperatorMissingAttributeProvider(): array
     {
-        // Missing attribute -> "0"; expected result of comparing "0" to "1.2.3".
+        // Missing attribute is not a version: only the negation matches.
         $ops = [
             '$veq'  => false,
             '$vne'  => true,
             '$vgt'  => false,
             '$vgte' => false,
-            '$vlt'  => true,
-            '$vlte' => true,
+            '$vlt'  => false,
+            '$vlte' => false,
         ];
         $cases = [];
         foreach ($ops as $op => $expected) {
@@ -204,6 +596,63 @@ final class GrowthbookTest extends TestCase
             ]);
 
         $this->assertSame(1, $gb->getValue('appVersion-feature-test', 0));
+    }
+
+    /**
+     * Patterns containing "/" match like JavaScript's RegExp. Expected values
+     * come from the JS SDK (cases from Guy (`gazzdingo`)'s growthbook-php#78).
+     *
+     * @dataProvider regexProvider
+     * @param array<string,mixed> $condition
+     * @param array<string,mixed> $attributes
+     */
+    public function testRegexMatchesJavaScript(array $condition, array $attributes, bool $expected): void
+    {
+        $this->assertSame($expected, Condition::evalCondition($attributes, $condition, []));
+    }
+
+    /**
+     * @return array<string,mixed[]>
+     */
+    public function regexProvider(): array
+    {
+        return [
+            '$regex - leading slash path' => [['s' => ['$regex' => '^/pricing']], ['s' => '/pricing/plans'], true],
+            '$regex - leading slash path no match' => [['s' => ['$regex' => '^/pricing']], ['s' => '/about'], false],
+            '$regex - slash in middle' => [['s' => ['$regex' => 'a/b']], ['s' => 'xa/by'], true],
+            '$regex - multiple slashes' => [['s' => ['$regex' => '^/a/b/c$']], ['s' => '/a/b/c'], true],
+            '$regex - lone slash' => [['s' => ['$regex' => '/']], ['s' => 'x/y'], true],
+            '$regex - already escaped slash' => [['s' => ['$regex' => '^a\\/b$']], ['s' => 'a/b'], true],
+            '$regex - escaped slash then unescaped slash' => [['s' => ['$regex' => '\\//']], ['s' => 'x//y'], true],
+            '$regex - escaped backslash before slash' => [['s' => ['$regex' => '^a\\\\/b$']], ['s' => 'a\\/b'], true],
+            '$regex - slash in character class' => [['s' => ['$regex' => '^[/]x$']], ['s' => '/x'], true],
+            '$regexi - leading slash path' => [['s' => ['$regexi' => '^/PRICING']], ['s' => '/Pricing'], true],
+            '$regex - invalid pattern with slash' => [['s' => ['$regex' => '(/']], ['s' => '(/'], false],
+            '$regex - invalid pattern' => [['s' => ['$regex' => '[']], ['s' => '['], false],
+            '$regex - non-string pattern never matches' => [['s' => ['$regex' => ['^US$']]], ['s' => 'CA'], false],
+            '$regexi - non-string pattern never matches' => [['s' => ['$regexi' => 5]], ['s' => '5'], false],
+        ];
+    }
+
+    /**
+     * A rule whose condition throws, such as a malformed {"$not": null}, is
+     * skipped instead of breaking the evaluation of later rules.
+     */
+    public function testRuleWithMalformedConditionIsSkipped(): void
+    {
+        $gb = Growthbook::create()
+            ->withAttributes(['id' => 'user-123'])
+            ->withFeatures([
+                'feature' => [
+                    'defaultValue' => 1,
+                    'rules' => [
+                        ['condition' => ['$not' => null], 'force' => 2],
+                        ['condition' => ['id' => 'user-123'], 'force' => 3],
+                    ],
+                ],
+            ]);
+
+        $this->assertSame(3, $gb->getValue('feature', 0));
     }
 
     /**
@@ -324,12 +773,16 @@ final class GrowthbookTest extends TestCase
 
     /**
      * @dataProvider featureProvider
+     * @dataProvider savedGroupReferencesV2FeatureProvider
      * @param array<string,mixed> $ctx
      * @param string $key
      * @param array<string,mixed> $expected
      */
     public function testFeature(array $ctx, string $key, array $expected): void
     {
+        if (array_key_exists('contextualBandits', $ctx)) {
+            $this->markTestSkipped('Contextual bandits are not supported by this SDK yet');
+        }
         $gb = new Growthbook($ctx);
         $res = $gb->getFeature($key);
 
@@ -381,9 +834,18 @@ final class GrowthbookTest extends TestCase
         return $this->getCases("feature");
     }
 
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function savedGroupReferencesV2FeatureProvider(): array
+    {
+        return $this->getCases("savedGroupReferencesV2.feature");
+    }
+
 
     /**
      * @dataProvider getRunProvider
+     * @dataProvider savedGroupReferencesV2RunProvider
      * @param array<string,mixed> $ctx
      * @param array<string,mixed> $exp
      * @param mixed $expectedValue
@@ -399,6 +861,14 @@ final class GrowthbookTest extends TestCase
         $this->assertSame($res->value, $expectedValue);
         $this->assertSame($res->inExperiment, $inExperiment);
         $this->assertSame($res->hashUsed, $hashUsed);
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function savedGroupReferencesV2RunProvider(): array
+    {
+        return $this->getCases("savedGroupReferencesV2.run");
     }
 
     /**

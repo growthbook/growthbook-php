@@ -263,21 +263,21 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array<string,mixed> $savedGroups
+     * @param array<string,mixed>|\stdClass $savedGroups An object is accepted, as `reducePayload` returns
      * @return static
      */
-    public function setSavedGroups(array $savedGroups): static
+    public function setSavedGroups(array|\stdClass $savedGroups): static
     {
-        $this->savedGroups = $savedGroups;
+        $this->savedGroups = (array) $savedGroups;
 
         return $this;
     }
 
     /**
-     * @param array<string,mixed> $savedGroups
+     * @param array<string,mixed>|\stdClass $savedGroups An object is accepted, as `reducePayload` returns
      * @return static
      */
-    public function withSavedGroups(array $savedGroups): static
+    public function withSavedGroups(array|\stdClass $savedGroups): static
     {
         $self = clone $this;
         $self->setSavedGroups($savedGroups);
@@ -309,13 +309,13 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array<string,Feature<mixed>|mixed> $features
+     * @param array<string,Feature<mixed>|mixed>|\stdClass $features An object is accepted, as `reducePayload` returns
      * @return static
      */
-    public function setFeatures(array $features): static
+    public function setFeatures(array|\stdClass $features): static
     {
         $this->features = [];
-        foreach ($features as $key => $feature) {
+        foreach ((array) $features as $key => $feature) {
             if ($feature instanceof Feature) {
                 $this->features[$key] = $feature;
             } else {
@@ -328,10 +328,10 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array<string,Feature<mixed>|mixed> $features
+     * @param array<string,Feature<mixed>|mixed>|\stdClass $features An object is accepted, as `reducePayload` returns
      * @return static
      */
-    public function withFeatures(array $features): static
+    public function withFeatures(array|\stdClass $features): static
     {
         $self = clone $this;
         $self->setFeatures($features);
@@ -843,6 +843,27 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
+     * A condition that throws, such as a malformed one ({"$not": null}), fails
+     * rather than breaking evaluation
+     *
+     * @param array<string,mixed> $obj
+     * @param mixed $condition
+     * @return bool
+     */
+    private function evalConditionSafely(array $obj, $condition): bool
+    {
+        try {
+            return Condition::evalCondition($obj, $condition, $this->savedGroups);
+        } catch (\Throwable $e) {
+            $this->log(LogLevel::WARNING, "Condition evaluation failed", [
+                "condition" => $condition,
+                "error" => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
      * @param array<array<string, mixed>> $parentConditions
      * @param array<string> $stack
      * @return string
@@ -860,10 +881,9 @@ class Growthbook implements LoggerAwareInterface
                 return "cyclic";
             }
 
-            $conditionPassed = Condition::evalCondition(
+            $conditionPassed = $this->evalConditionSafely(
                 ['value' => $parentRes->value],
-                $parentCondition['condition'] ?? null,
-                $this->savedGroups
+                $parentCondition['condition'] ?? []
             );
 
             if ($conditionPassed) {
@@ -960,7 +980,7 @@ class Growthbook implements LoggerAwareInterface
                 }
 
                 if ($rule->condition) {
-                    if (!Condition::evalCondition($this->attributes, $rule->condition, $this->savedGroups)) {
+                    if (!$this->evalConditionSafely($this->attributes, $rule->condition)) {
                         $this->log(LogLevel::DEBUG, "Skip rule because of targeting condition", [
                             "feature" => $key,
                             "condition" => $rule->condition
@@ -1109,7 +1129,7 @@ class Growthbook implements LoggerAwareInterface
         }
 
         // 6. Hash value is empty
-        if (!$hashValue) {
+        if ($hashValue === "") {
             $this->log(LogLevel::DEBUG, "Skip experiment because of empty attribute - $hashAttribute", [
                 "experiment" => $exp->key
             ]);
@@ -1159,7 +1179,7 @@ class Growthbook implements LoggerAwareInterface
             }
 
             // 8. Condition fails
-            if ($exp->condition && !Condition::evalCondition($this->attributes, $exp->condition, $this->savedGroups)) {
+            if ($exp->condition && !$this->evalConditionSafely($this->attributes, $exp->condition)) {
                 $this->log(LogLevel::DEBUG, "Skip experiment because of targeting conditions", [
                     "experiment" => $exp->key
                 ]);
@@ -1439,12 +1459,13 @@ class Growthbook implements LoggerAwareInterface
     public static function hash(string $seed, string $value, int $version): ?float
     {
         // New hashing algorithm
+        // FNV-1a over UTF-16 code units, like the JS SDK, so non-ASCII text buckets the same
         if ($version === 2) {
-            $n = hexdec(hash("fnv1a32", hexdec(hash("fnv1a32", $seed . $value)) . ""));
+            $n = Utf16::fnv1a32((string) Utf16::fnv1a32($seed . $value));
             return ($n % 10000) / 10000;
         } // Original hashing algorithm (with a bias flaw)
         elseif ($version === 1) {
-            $n = hexdec(hash("fnv1a32", $value . $seed));
+            $n = Utf16::fnv1a32($value . $seed);
             return ($n % 1000) / 1000;
         }
 
@@ -1492,38 +1513,64 @@ class Growthbook implements LoggerAwareInterface
         if ($range) {
             return self::inRange($n, $range);
         } elseif ($coverage !== null) {
-            return $n <= $coverage;
+            return $n < $coverage;
         }
 
         return true;
     }
 
     /**
+     * The attribute to hash and its value as a string. The value is "" when
+     * neither the attribute nor the fallback has a usable value. Callers pass a
+     * fallback only when sticky bucketing applies.
+     *
      * @param string|null $hashAttribute
      * @param string|null $fallbackAttribute
      * @return array{0:string,1:string}
      */
     private function getHashValue(?string $hashAttribute = null, ?string $fallbackAttribute = null): array
     {
-        $attribute = $hashAttribute ?? "id";
-        $val = "";
+        $attribute = $hashAttribute ?: "id";
+        $val = static::toHashValue($this->attributes[$attribute] ?? null);
 
-        if (array_key_exists($attribute, $this->attributes)) {
-            $val = $this->attributes[$attribute] ?? "";
-        }
-
-        if (($val === "" || $val === null) && $fallbackAttribute && $this->stickyBucketService) {
-
-            if (array_key_exists($fallbackAttribute, $this->attributes)) {
-                $val = $this->attributes[$fallbackAttribute] ?? "";
-            }
-
-            if (!empty($val) || $val != "") {
+        if ($val === "" && $fallbackAttribute) {
+            $val = static::toHashValue($this->attributes[$fallbackAttribute] ?? null);
+            if ($val !== "") {
                 $attribute = $fallbackAttribute;
             }
         }
 
-        return [$attribute, strval($val)];
+        return [$attribute, $val];
+    }
+
+    /**
+     * An attribute value as the string to hash, like JS's String(). Only a
+     * non-empty string or a finite, non-zero number can be hashed; anything
+     * else, including booleans, arrays and objects, gives "".
+     *
+     * @param mixed $value
+     * @return string
+     */
+    private static function toHashValue($value): string
+    {
+        if (is_string($value)) {
+            return $value;
+        }
+        if (is_int($value)) {
+            return $value === 0 ? "" : (string) $value;
+        }
+        if (is_float($value)) {
+            if ($value == 0 || !is_finite($value)) {
+                return "";
+            }
+            // Integral values have no decimal part, like JS (1.0 is "1")
+            if (floor($value) === $value && abs($value) < 1e21) {
+                return sprintf('%.0f', $value);
+            }
+            // Shortest form that round-trips, like JS
+            return (string) json_encode($value);
+        }
+        return "";
     }
 
     /**
@@ -1533,14 +1580,15 @@ class Growthbook implements LoggerAwareInterface
     private function isFilteredOut(array $filters): bool
     {
         foreach ($filters as $filter) {
+            // Like JS, a user without a usable hash value is filtered out
             list(, $hashValue) = $this->getHashValue($filter["attribute"] ?? "id");
             if ($hashValue === "") {
-                return false;
+                return true;
             }
 
             $n = self::hash($filter["seed"] ?? "", $hashValue, $filter["hashVersion"] ?? 2);
             if ($n === null) {
-                return false;
+                return true;
             }
 
             $filtered = false;
@@ -1587,6 +1635,407 @@ class Growthbook implements LoggerAwareInterface
             $weights[] = 1 / $numVariations;
         }
         return $weights;
+    }
+
+    /**
+     * Shrinks a payload for a user whose attributes are only partly known, e.g.
+     * on a server bootstrapping a client SDK. The result evaluates the same as
+     * the full payload for anyone who agrees with the known attributes.
+     *
+     * @param array<string,mixed> $payload A decoded, decrypted features API response
+     * @param array{attributes?:array<string,mixed>,include?:array<string,mixed>,exclude?:array<string,mixed>,prerequisites?:string} $options
+     *   attributes: the attributes known for the user.
+     *   include: keep only the features and auto experiments that match every
+     *   filter ({projects?:string[], tags?:string[], customFields?:array<string,mixed[]>}).
+     *   exclude: remove the features and auto experiments that match any filter.
+     *   prerequisites: "keep" (default) sends the prerequisites of what is kept
+     *   even when the filters remove them, so the client evaluates the same as
+     *   the full payload. "filter" applies the filters to them too.
+     * @return array<string,mixed> The `features`, `savedGroups` and `contextualBandits`
+     *   maps are `stdClass` when PHP would JSON-encode them as arrays (empty, or keyed
+     *   0, 1, ...). `reducePayload`, `withFeatures` and `withSavedGroups` accept them.
+     */
+    public static function reducePayload(array $payload, array $options = []): array
+    {
+        $attributes = $options['attributes'] ?? [];
+        $include = $options['include'] ?? [];
+        $exclude = $options['exclude'] ?? [];
+        $prerequisites = $options['prerequisites'] ?? 'keep';
+        $savedGroups = static::fromObjectMap($payload['savedGroups'] ?? null) ?? [];
+        $allFeatures = static::fromObjectMap($payload['features'] ?? null) ?? [];
+        $allExperiments = is_array($payload['experiments'] ?? null) ? $payload['experiments'] : [];
+
+        // Only an array counts, as with `$in`, and any one of its values is enough
+        $has = function ($actual, $want): bool {
+            return is_array($want) && Condition::isIn($actual, $want);
+        };
+
+        // A rule without projects applies wherever its feature is delivered
+        $ruleInProjects = function ($meta) use ($include, $has): bool {
+            return !isset($include['projects'])
+                || !is_array($meta)
+                || !isset($meta['projects'])
+                || $has($meta['projects'], $include['projects']);
+        };
+        // A feature or experiment has to list one of the projects, or be in all
+        // of them. One without projects is in none, like one without tags.
+        $inProjects = function (array $meta) use ($include, $has): bool {
+            return !isset($include['projects'])
+                || !empty($meta['allProjects'])
+                || $has($meta['projects'] ?? null, $include['projects']);
+        };
+        // Kept when it matches every `include` filter and no `exclude` filter.
+        // Only listed projects are excluded, so one in all projects stays.
+        $matches = function ($meta) use ($include, $exclude, $has, $inProjects): bool {
+            $m = is_array($meta) ? $meta : [];
+            $field = function (string $k) use ($m) {
+                return is_array($m['customFields'] ?? null) ? ($m['customFields'][$k] ?? null) : null;
+            };
+            if (!$inProjects($m)) {
+                return false;
+            }
+            if (isset($include['tags']) && !$has($m['tags'] ?? null, $include['tags'])) {
+                return false;
+            }
+            foreach ($include['customFields'] ?? [] as $k => $want) {
+                if (!$has($field((string) $k), $want)) {
+                    return false;
+                }
+            }
+            if ($has($m['projects'] ?? null, $exclude['projects'] ?? null) || $has($m['tags'] ?? null, $exclude['tags'] ?? null)) {
+                return false;
+            }
+            foreach ($exclude['customFields'] ?? [] as $k => $want) {
+                if ($has($field((string) $k), $want)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        // Reduces a rule or an auto experiment
+        $prune = function (array $item, bool $isRule) use ($attributes, $savedGroups): array {
+            if (!isset($item['condition']) || !is_array($item['condition'])) {
+                return $item;
+            }
+            $condition = Condition::pruneCondition($attributes, $item['condition'], $savedGroups);
+            if ($condition === true) {
+                unset($item['condition']);
+            } elseif ($condition === false) {
+                // Kept, since sticky buckets and forced variations skip an
+                // experiment's condition, and a rule's prerequisites are checked before it
+                $item['condition'] = ['$not' => new \stdClass()];
+                // A force rule that never passes never returns its value. An
+                // auto experiment's forced variation still applies to a
+                // sticky bucketed user.
+                if ($isRule && array_key_exists('force', $item)) {
+                    $item['force'] = null;
+                }
+            } else {
+                $item['condition'] = $condition;
+            }
+            return $item;
+        };
+
+        // Adds a feature, then the prerequisites the client evaluates for it,
+        // even when the filters drop them. With "filter", only the filters
+        // decide, except for holdouts, which aren't app features and are always kept.
+        $added = [];
+        $parentIds = function (array $item) use ($prerequisites): array {
+            $ids = [];
+            foreach ($item['parentConditions'] ?? [] as $parent) {
+                $id = (string) ($parent['id'] ?? '');
+                if ($prerequisites !== 'filter' || str_starts_with($id, '$holdout:')) {
+                    $ids[] = $id;
+                }
+            }
+            return $ids;
+        };
+        $add = function (string $id) use (&$add, &$added, $parentIds, $allFeatures, $inProjects, $ruleInProjects, $prune): void {
+            if (!array_key_exists($id, $allFeatures) || array_key_exists($id, $added)) {
+                return;
+            }
+            $feature = $allFeatures[$id];
+            if (!is_array($feature)) {
+                return;
+            }
+            // Rules scoped to other projects aren't served. A prerequisite from
+            // another project keeps its own, as on the server.
+            $scoped = $inProjects(is_array($feature['metadata'] ?? null) ? $feature['metadata'] : []);
+            $rules = null;
+            if (is_array($feature['rules'] ?? null)) {
+                $rules = [];
+                foreach ($feature['rules'] as $rule) {
+                    if (!$scoped || $ruleInProjects($rule['metadata'] ?? null)) {
+                        $rules[] = $prune($rule, true);
+                    }
+                }
+                $feature['rules'] = $rules;
+            }
+            // Stored before its parents are added, so a prerequisite cycle ends
+            $added[$id] = $feature;
+            foreach ($rules ?? [] as $rule) {
+                foreach ($parentIds($rule) as $parentId) {
+                    $add($parentId);
+                }
+            }
+        };
+
+        foreach ($allFeatures as $id => $feature) {
+            if ($matches(is_array($feature) ? ($feature['metadata'] ?? null) : null)) {
+                $add((string) $id);
+            }
+        }
+        $experiments = [];
+        foreach ($allExperiments as $experiment) {
+            if (is_array($experiment) && $matches($experiment['metadata'] ?? null)) {
+                $experiments[] = $prune($experiment, false);
+            }
+        }
+        foreach ($experiments as $experiment) {
+            foreach ($parentIds($experiment) as $parentId) {
+                $add($parentId);
+            }
+        }
+        $features = $added;
+
+        // The contextual bandits that kept rules and experiments use. A context
+        // whose condition never passes can't be the first that does, so it goes.
+        $banditMap = static::fromObjectMap($payload['contextualBandits'] ?? null);
+        $allBandits = $banditMap ?? [];
+        $bandits = [];
+        $items = $experiments;
+        foreach ($features as $feature) {
+            foreach ($feature['rules'] ?? [] as $rule) {
+                $items[] = $rule;
+            }
+        }
+        foreach ($items as $item) {
+            $ref = $item['contextualBanditRef'] ?? null;
+            if (!is_string($ref) || $ref === '' || isset($bandits[$ref]) || !array_key_exists($ref, $allBandits)) {
+                continue;
+            }
+            $bandit = $allBandits[$ref];
+            // Evaluation tolerates a definition that isn't an object, so it stays
+            if (!is_array($bandit) || static::isList($bandit)) {
+                $bandits[$ref] = $bandit;
+                continue;
+            }
+            $contexts = [];
+            foreach ($bandit['contexts'] ?? [] as $context) {
+                $condition = Condition::pruneCondition(
+                    $attributes,
+                    is_array($context['condition'] ?? null) ? $context['condition'] : [],
+                    $savedGroups
+                );
+                if ($condition === false) {
+                    continue;
+                }
+                $context['condition'] = $condition === true ? new \stdClass() : $condition;
+                $contexts[] = $context;
+            }
+            $bandit['contexts'] = $contexts;
+            $bandits[$ref] = $bandit;
+        }
+
+        // Groups that keep their condition as written: those evaluated against
+        // something other than the user (each item in $elemMatch, or the
+        // parent's value in a prerequisite), and the groups those reference
+        $asWritten = [];
+        $seen = [];
+        $mark = function ($x, bool $user) use (&$mark, &$asWritten, &$seen, $savedGroups): void {
+            if (is_string($x)) {
+                if (!array_key_exists($x, $savedGroups) || isset($asWritten[$x])) {
+                    return;
+                }
+                if ($user && isset($seen[$x])) {
+                    return;
+                }
+                if ($user) {
+                    $seen[$x] = true;
+                } else {
+                    $asWritten[$x] = true;
+                }
+                if (static::canReferenceGroups($savedGroups[$x])) {
+                    $mark($savedGroups[$x], $user);
+                }
+            } elseif (is_array($x) || is_object($x)) {
+                foreach ((array) $x as $k => $v) {
+                    $mark($v, $user && $k !== '$elemMatch' && $k !== 'parentConditions');
+                }
+            }
+        };
+        // Walking the payload is only needed when there are groups to find
+        $hasGroups = $savedGroups !== [];
+        if ($hasGroups) {
+            $mark([$features, $experiments, $bandits], true);
+        }
+
+        // A group on a cycle can't be reduced on its own: its result depends on
+        // which group the evaluation entered the cycle from. Each group's
+        // referenced ids are collected once, then one pass finds every group
+        // on a cycle (a strongly connected component of more than one group,
+        // or a group that references itself).
+        $onCycle = static::savedGroupsOnCycle($savedGroups);
+
+        // Keep each saved group whose id appears as a string anywhere, with
+        // condition groups reduced. This needs no list of the operators that
+        // reference groups.
+        $groups = [];
+        $keep = function ($x) use (&$keep, &$groups, $savedGroups, $attributes, $asWritten, $onCycle): void {
+            if (is_string($x)) {
+                if (!array_key_exists($x, $savedGroups) || array_key_exists($x, $groups)) {
+                    return;
+                }
+                $condition = isset($asWritten[$x]) || isset($onCycle[$x])
+                    ? null
+                    : Condition::pruneSavedGroup($attributes, ['id' => $x], $savedGroups);
+                $groups[$x] = is_array($condition) && is_array($savedGroups[$x])
+                    ? array_merge($savedGroups[$x], ['condition' => $condition])
+                    : $savedGroups[$x];
+                if (static::canReferenceGroups($savedGroups[$x])) {
+                    $keep($groups[$x]);
+                }
+            } elseif (is_array($x)) {
+                foreach ($x as $value) {
+                    $keep($value);
+                }
+            }
+        };
+        if ($hasGroups) {
+            $keep([$features, $experiments, $bandits]);
+        }
+
+        $payload['features'] = static::toObjectMap($features);
+        $payload['experiments'] = $experiments;
+        $payload['savedGroups'] = static::toObjectMap($groups);
+        // Only when there were any, as with the payload's other optional keys
+        if ($banditMap !== null) {
+            $payload['contextualBandits'] = static::toObjectMap($bandits);
+        }
+        return $payload;
+    }
+
+    /**
+     * The ids of the saved groups that are on a reference cycle, found with
+     * Tarjan's strongly connected components algorithm.
+     *
+     * @param array<string,mixed> $savedGroups
+     * @return array<string,true>
+     */
+    private static function savedGroupsOnCycle(array $savedGroups): array
+    {
+        // Each group's referenced group ids, collected once
+        $refs = [];
+        foreach ($savedGroups as $id => $group) {
+            $found = [];
+            $collect = function ($x) use (&$collect, &$found, $savedGroups): void {
+                if (is_string($x)) {
+                    if (array_key_exists($x, $savedGroups)) {
+                        $found[$x] = true;
+                    }
+                } elseif (is_array($x) || is_object($x)) {
+                    foreach ((array) $x as $v) {
+                        $collect($v);
+                    }
+                }
+            };
+            if (static::canReferenceGroups($group)) {
+                $collect($group);
+            }
+            $refs[(string) $id] = array_map('strval', array_keys($found));
+        }
+
+        $index = 0;
+        $indexes = [];
+        $lowlinks = [];
+        $stack = [];
+        $onStack = [];
+        $onCycle = [];
+        $connect = function (string $v) use (&$connect, &$index, &$indexes, &$lowlinks, &$stack, &$onStack, &$onCycle, $refs): void {
+            $indexes[$v] = $index;
+            $lowlinks[$v] = $index;
+            $index++;
+            $stack[] = $v;
+            $onStack[$v] = true;
+            foreach ($refs[$v] as $w) {
+                if (!isset($indexes[$w])) {
+                    $connect($w);
+                    $lowlinks[$v] = min($lowlinks[$v], $lowlinks[$w]);
+                } elseif (isset($onStack[$w])) {
+                    $lowlinks[$v] = min($lowlinks[$v], $indexes[$w]);
+                }
+            }
+            if ($lowlinks[$v] !== $indexes[$v]) {
+                return;
+            }
+            $component = [];
+            do {
+                $w = array_pop($stack);
+                unset($onStack[$w]);
+                $component[] = $w;
+            } while ($w !== $v);
+            if (count($component) > 1 || in_array($v, $refs[$v], true)) {
+                foreach ($component as $w) {
+                    $onCycle[$w] = true;
+                }
+            }
+        };
+        foreach (array_keys($refs) as $v) {
+            if (!isset($indexes[$v])) {
+                $connect($v);
+            }
+        }
+        return $onCycle;
+    }
+
+    /**
+     * Whether a saved group can reference other groups. A list's values, typed
+     * or a legacy bare array, are attribute values, never group ids.
+     *
+     * @param mixed $group
+     */
+    private static function canReferenceGroups($group): bool
+    {
+        if (is_object($group)) {
+            $group = (array) $group;
+        }
+        return is_array($group) && !static::isList($group) && ($group['type'] ?? null) !== 'list';
+    }
+
+    /**
+     * Whether an array is a JSON list (sequential keys from 0). An empty array
+     * counts as an object, since `{}` and `[]` decode the same.
+     *
+     * @param array<mixed> $value
+     */
+    private static function isList(array $value): bool
+    {
+        return $value !== [] && array_keys($value) === range(0, count($value) - 1);
+    }
+
+    /**
+     * Keeps a map keyed by id an object when the result is JSON-encoded. PHP
+     * encodes an empty array, or one whose keys are 0, 1, ..., as a JSON array.
+     *
+     * @param array<mixed> $map
+     * @return array<mixed>|\stdClass
+     */
+    private static function toObjectMap(array $map): array|\stdClass
+    {
+        return $map === [] || static::isList($map) ? (object) $map : $map;
+    }
+
+    /**
+     * Reads a map keyed by id as an array, whether it is an array or an object
+     * from `toObjectMap`, so a reduced payload can be reduced again.
+     *
+     * @param mixed $map
+     * @return array<mixed>|null Null when the map is neither
+     */
+    private static function fromObjectMap($map): ?array
+    {
+        return is_array($map) || $map instanceof \stdClass ? (array) $map : null;
     }
 
     /**
@@ -2258,7 +2707,7 @@ class Growthbook implements LoggerAwareInterface
         if ($fallbackAttribute) {
             list(, $hashValue) = $this->getHashValue($fallbackAttribute);
 
-            $key = $fallbackAttribute . '||' . $hashValue;
+            $key = $hashValue === "" ? "" : $fallbackAttribute . '||' . $hashValue;
             if (array_key_exists($key, $this->stickyBucketAssignmentDocs)) {
                 foreach ($this->stickyBucketAssignmentDocs[$key]['assignments'] as $key => $value) {
                     if (!array_key_exists($key, $merged)) {
@@ -2340,7 +2789,7 @@ class Growthbook implements LoggerAwareInterface
         foreach ($this->stickyBucketIdentifierAttributes as $attr) {
             list(, $hashValue) = $this->getHashValue($attr);
 
-            if ($hashValue) {
+            if ($hashValue !== "") {
                 $attributes[$attr] = $hashValue;
             }
         }

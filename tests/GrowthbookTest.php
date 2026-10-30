@@ -101,6 +101,7 @@ final class GrowthbookTest extends TestCase
     /**
      * @dataProvider evalConditionProvider
      * @dataProvider savedGroupReferencesV2EvalConditionProvider
+     * @dataProvider savedGroupReferencesRemoteEvalConditionProvider
      * @param array<string,mixed> $condition
      * @param array<string,mixed> $attributes
      * @param bool $expected
@@ -125,6 +126,14 @@ final class GrowthbookTest extends TestCase
     public function savedGroupReferencesV2EvalConditionProvider(): array
     {
         return $this->getCases("savedGroupReferencesV2.evalCondition");
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function savedGroupReferencesRemoteEvalConditionProvider(): array
+    {
+        return $this->getCases("savedGroupReferencesRemote.evalCondition");
     }
 
     /**
@@ -774,6 +783,7 @@ final class GrowthbookTest extends TestCase
     /**
      * @dataProvider featureProvider
      * @dataProvider savedGroupReferencesV2FeatureProvider
+     * @dataProvider savedGroupReferencesRemoteFeatureProvider
      * @param array<string,mixed> $ctx
      * @param string $key
      * @param array<string,mixed> $expected
@@ -840,6 +850,14 @@ final class GrowthbookTest extends TestCase
     public function savedGroupReferencesV2FeatureProvider(): array
     {
         return $this->getCases("savedGroupReferencesV2.feature");
+    }
+
+    /**
+     * @return array<int|string,mixed[]>
+     */
+    public function savedGroupReferencesRemoteFeatureProvider(): array
+    {
+        return $this->getCases("savedGroupReferencesRemote.feature");
     }
 
 
@@ -2365,6 +2383,34 @@ final class GrowthbookTest extends TestCase
 
         // Response applied
         $this->assertTrue($gb->isOn('my-feature'));
+    }
+
+    public function testRemoteEvalSendsRemoteGroupIds(): void
+    {
+        $response = (string) json_encode(['features' => [], 'savedGroups' => []]);
+        [$client, $factory] = $this->makeRemoteEvalHttp($response, 200, $captured);
+
+        $attributes = ['id' => 'u1', '__gb_remoteGroupIds' => ['grp_old']];
+        $gb = new Growthbook([
+            'remoteEval' => true,
+            'httpClient' => $client,
+            'requestFactory' => $factory,
+            'attributes' => $attributes,
+            'remoteGroupIds' => ['grp_vip'],
+        ]);
+        $gb->initialize('sdk-test', 'https://proxy.example.com');
+
+        // The ids win over the attribute, without changing the attributes
+        $body = json_decode($captured['body'], true);
+        $this->assertSame(['id' => 'u1', '__gb_remoteGroupIds' => ['grp_vip']], $body['attributes']);
+        $this->assertSame($attributes, $gb->getAttributes());
+
+        // New ids are a new evaluation context
+        $captured['body'] = '';
+        $sent = $captured['sendCount'];
+        $gb->setRemoteGroupIds([]);
+        $this->assertSame($sent + 1, $captured['sendCount']);
+        $this->assertSame([], json_decode($captured['body'], true)['attributes']['__gb_remoteGroupIds']);
     }
 
     public function testRemoteEvalSerializesForcedFeaturesAsPairs(): void

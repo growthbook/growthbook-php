@@ -99,6 +99,23 @@ class Growthbook implements LoggerAwareInterface
     private $cacheKeyAttributes = null;
 
     /**
+     * The remote saved groups the user is in, resolved by the app. null means
+     * unresolved, which is not the same as no groups.
+     *
+     * @var string[]|null
+     */
+    private $remoteGroupIds = null;
+
+    /** @var array<int,array{id:string,attributeKey:string,valuesFrom?:string}> The payload's remote saved groups */
+    private $remoteSavedGroups = [];
+
+    /** @var array<string,mixed> The attributes conditions see: the user's, with the remote group ids */
+    private $conditionAttributes = [];
+
+    /** @var bool Warned once per process, since a request usually gets its own instance */
+    private static $warnedMissingRemoteGroupIds = false;
+
+    /**
      * @param array<string, mixed> $options
      * @return static
      * @phpstan-return static
@@ -110,7 +127,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[],clientKey?:string,remoteEval?:bool,cacheKeyAttributes?:array<string>} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[],clientKey?:string,remoteEval?:bool,cacheKeyAttributes?:array<string>,remoteGroupIds?:string[]|null} $options
      */
     public function __construct(array $options = [])
     {
@@ -139,7 +156,8 @@ class Growthbook implements LoggerAwareInterface
             "clientKey",
             "etagCacheSize",
             "remoteEval",
-            "cacheKeyAttributes"
+            "cacheKeyAttributes",
+            "remoteGroupIds"
         ];
         $unknownOptions = array_diff(array_keys($options), $knownOptions);
         if (count($unknownOptions)) {
@@ -184,6 +202,9 @@ class Growthbook implements LoggerAwareInterface
         if (array_key_exists("savedGroups", $options)) {
             $this->setSavedGroups(($options["savedGroups"]));
         }
+        if (array_key_exists("remoteGroupIds", $options)) {
+            $this->setRemoteGroupIds($options["remoteGroupIds"]);
+        }
         if (array_key_exists("clientKey", $options)) {
             $this->setClientKey($options["clientKey"]);
         }
@@ -222,6 +243,7 @@ class Growthbook implements LoggerAwareInterface
     public function setAttributes(array $attributes): static
     {
         $this->attributes = $attributes;
+        $this->conditionAttributes = RemoteSavedGroups::withIds($attributes, $this->remoteGroupIds);
         $this->refreshStickyBuckets();
         $this->refreshForRemoteEval();
 
@@ -247,6 +269,7 @@ class Growthbook implements LoggerAwareInterface
     public function setSavedGroups(array|\stdClass $savedGroups): static
     {
         $this->savedGroups = (array) $savedGroups;
+        $this->remoteSavedGroups = RemoteSavedGroups::fromSavedGroups($this->savedGroups);
 
         return $this;
     }
@@ -261,6 +284,136 @@ class Growthbook implements LoggerAwareInterface
         $self->setSavedGroups($savedGroups);
 
         return $self;
+    }
+
+    /**
+     * Sets the remote saved groups the user is in. A remote saved group keeps its
+     * members outside the payload, so the app resolves the user's groups and passes
+     * their ids here, or uses addRemoteSavedGroups(). Conditions read them as the
+     * `__gb_remoteGroupIds` attribute, over any value the attributes set for it, and
+     * remote evaluation sends them too.
+     *
+     * Pass null while the groups are unresolved: rules that use remote groups then
+     * fail, including "not in group". Don't pass [] for that: it means "in no
+     * group", so "not in group" rules match.
+     *
+     * @param string[]|null $remoteGroupIds
+     * @return static
+     */
+    public function setRemoteGroupIds(?array $remoteGroupIds): static
+    {
+        $this->remoteGroupIds = $remoteGroupIds === null ? null : array_values(array_map('strval', $remoteGroupIds));
+        $this->conditionAttributes = RemoteSavedGroups::withIds($this->attributes, $this->remoteGroupIds);
+        $this->refreshForRemoteEval();
+
+        return $this;
+    }
+
+    /**
+     * @param string[]|null $remoteGroupIds
+     * @return static
+     */
+    public function withRemoteGroupIds(?array $remoteGroupIds): static
+    {
+        $self = clone $this;
+        $self->setRemoteGroupIds($remoteGroupIds);
+
+        return $self;
+    }
+
+    /**
+     * @return string[]|null
+     */
+    public function getRemoteGroupIds(): ?array
+    {
+        return $this->remoteGroupIds;
+    }
+
+    /**
+     * Looks up the user's remote saved groups with $resolver and sets them as the
+     * remote group ids. Leaves them as they were when the payload has no remote
+     * groups or the resolver throws.
+     *
+     * Requires a saved group references v2 payload for the group metadata. With
+     * inline/v1 payloads, resolve membership in the app and call setRemoteGroupIds()
+     * instead.
+     *
+     * @param callable(array<string,mixed>,array<int,array{id:string,attributeKey:string,valuesFrom?:string}>):array<string> $resolver
+     *        Called with the attributes the payload's remote groups use (keyed by
+     *        attributeKey) and the groups ('id', 'attributeKey' and, for a derived
+     *        group, 'valuesFrom'). Returns the ids of the groups the user is in.
+     *        See RedisResolver.
+     * @return static
+     */
+    public function addRemoteSavedGroups(callable $resolver): static
+    {
+        // No remote entries doesn't mean no remote rules: payloads for SDKs without
+        // remote support check __gb_remoteGroupIds directly. Leaving it unset makes
+        // those rules fail closed; [] would let every "not in group" rule match.
+        $groups = $this->getRemoteSavedGroups();
+        if (!$groups) {
+            return $this;
+        }
+        $savedGroups = $this->savedGroups;
+        try {
+            $ids = RemoteSavedGroups::resolve($this->attributes, $groups, $resolver);
+            // New saved groups set during the lookup can add groups the result
+            // doesn't cover, and a missing group would pass "not in group" rules.
+            // Look up once more for the new payload.
+            if ($this->savedGroups !== $savedGroups) {
+                $groups = $this->getRemoteSavedGroups();
+                if (!$groups) {
+                    return $this;
+                }
+                $ids = RemoteSavedGroups::resolve($this->attributes, $groups, $resolver);
+            }
+        } catch (\Throwable $e) {
+            // The class only: messages can hold attribute values, such as a Redis key
+            $this->log(LogLevel::WARNING, "Could not resolve remote saved groups", ["error" => get_class($e)]);
+            return $this;
+        }
+
+        return $this->setRemoteGroupIds($ids);
+    }
+
+    /**
+     * @param callable(array<string,mixed>,array<int,array{id:string,attributeKey:string,valuesFrom?:string}>):array<string> $resolver
+     * @return static
+     */
+    public function withRemoteSavedGroups(callable $resolver): static
+    {
+        $self = clone $this;
+        $self->addRemoteSavedGroups($resolver);
+
+        return $self;
+    }
+
+    /**
+     * The payload's remote saved groups, as a resolver gets them
+     *
+     * @return array<int,array{id:string,attributeKey:string,valuesFrom?:string}>
+     */
+    private function getRemoteSavedGroups(): array
+    {
+        return $this->remoteSavedGroups;
+    }
+
+    /**
+     * Logs once when the payload has remote saved groups but the user has no remote
+     * group ids, since every rule using them will then fail. Logs no attribute values.
+     */
+    private function warnIfRemoteGroupIdsMissing(): void
+    {
+        if (self::$warnedMissingRemoteGroupIds || !$this->logger) {
+            return;
+        }
+        if (RemoteSavedGroups::isMissingIds($this->attributes, $this->remoteGroupIds, $this->remoteSavedGroups)) {
+            self::$warnedMissingRemoteGroupIds = true;
+            $this->log(
+                LogLevel::WARNING,
+                "The payload has remote saved groups, but the user has no remote group ids. Rules using them won't match. See addRemoteSavedGroups."
+            );
+        }
     }
 
     /**
@@ -888,6 +1041,9 @@ class Growthbook implements LoggerAwareInterface
      */
     public function getFeature(string $key, array $stack = []): FeatureResult
     {
+        if (empty($stack)) {
+            $this->warnIfRemoteGroupIdsMissing();
+        }
         $result = $this->evaluateFeature($key, $stack);
         if (empty($stack)) {
             $this->pluginRegistry->onFeatureEvaluated($key, $result, $this->attributes);
@@ -957,7 +1113,7 @@ class Growthbook implements LoggerAwareInterface
                 }
 
                 if ($rule->condition) {
-                    if (!$this->evalConditionSafely($this->attributes, $rule->condition)) {
+                    if (!$this->evalConditionSafely($this->conditionAttributes, $rule->condition)) {
                         $this->log(LogLevel::DEBUG, "Skip rule because of targeting condition", [
                             "feature" => $key,
                             "condition" => $rule->condition
@@ -1046,6 +1202,7 @@ class Growthbook implements LoggerAwareInterface
      */
     public function runInlineExperiment(InlineExperiment $exp): ExperimentResult
     {
+        $this->warnIfRemoteGroupIdsMissing();
         return $this->runExperiment($exp, null);
     }
 
@@ -1156,7 +1313,7 @@ class Growthbook implements LoggerAwareInterface
             }
 
             // 8. Condition fails
-            if ($exp->condition && !$this->evalConditionSafely($this->attributes, $exp->condition)) {
+            if ($exp->condition && !$this->evalConditionSafely($this->conditionAttributes, $exp->condition)) {
                 $this->log(LogLevel::DEBUG, "Skip experiment because of targeting conditions", [
                     "experiment" => $exp->key
                 ]);
@@ -2286,7 +2443,7 @@ class Growthbook implements LoggerAwareInterface
         }
 
         return [
-            "attributes" => $this->attributes,
+            "attributes" => RemoteSavedGroups::withIds($this->attributes, $this->remoteGroupIds),
             "forcedFeatures" => $forcedFeatures,
             "forcedVariations" => $this->forcedVariations,
             "url" => $this->url,

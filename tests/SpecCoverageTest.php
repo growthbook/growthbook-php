@@ -33,6 +33,8 @@ final class SpecCoverageTest extends TestCase
         'savedGroupReferencesV2.evalCondition' => 'GrowthbookTest::testEvalCondition',
         'savedGroupReferencesV2.feature' => 'GrowthbookTest::testFeature',
         'savedGroupReferencesV2.run' => 'GrowthbookTest::testRun',
+        'savedGroupReferencesRemote.evalCondition' => 'GrowthbookTest::testEvalCondition',
+        'savedGroupReferencesRemote.feature' => 'GrowthbookTest::testFeature',
     ];
 
     /**
@@ -41,8 +43,6 @@ final class SpecCoverageTest extends TestCase
     private const EXCLUDED_SECTIONS = [
         'urlRedirect' => 'URL redirect experiments are a browser feature',
         'contextualBandit' => "Contextual bandits aren't implemented",
-        'savedGroupReferencesRemote.evalCondition' => "Remote saved groups aren't implemented yet",
-        'savedGroupReferencesRemote.feature' => "Remote saved groups aren't implemented yet",
     ];
 
     /**

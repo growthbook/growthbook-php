@@ -219,7 +219,8 @@ class Condition
      * Resolves a `$savedGroup` reference. Anything unrecognized matches nobody.
      *
      * With $prune, an attribute missing from $obj is unknown: a list entry on it
-     * is null, and a condition entry is pruned rather than evaluated.
+     * is null, a remote entry is null while __gb_remoteGroupIds is unknown, and a
+     * condition entry is pruned rather than evaluated.
      *
      * @param mixed $obj
      * @param mixed $reference
@@ -263,6 +264,20 @@ class Condition
                 return null;
             }
             return static::isIn(static::getPath($obj, $key), $values, false);
+        }
+
+        if ($type === 'remote') {
+            // The ids live outside the payload: the user's groups arrive resolved, in
+            // the __gb_remoteGroupIds attribute. Another attribute needs a derived
+            // group, which isn't supported yet.
+            if (array_key_exists('attributeKey', $reference) && $reference['attributeKey'] !== ($entry['attributeKey'] ?? null)) {
+                return false;
+            }
+            if ($prune && !static::isKnown($obj, RemoteSavedGroups::ATTRIBUTE)) {
+                return null;
+            }
+            $groupIds = static::getPath($obj, RemoteSavedGroups::ATTRIBUTE);
+            return is_array($groupIds) && static::isList($groupIds) && in_array($id, $groupIds, true);
         }
 
         if ($type === 'condition') {

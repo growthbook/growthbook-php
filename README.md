@@ -184,6 +184,22 @@ $savedGroups = json_decode($savedGroupsJSON, true);
 $growthbook = $growthbook->withSavedGroups($savedGroups);
 ```
 
+#### Remote saved groups
+
+A **remote** saved group keeps its members outside the payload, for lists too large to ship (millions of ids). The payload only says which attribute the group is about, `{"type": "remote", "attributeKey": "account_id"}`, so the SDK needs the ids of the groups the user is in. Conditions read them as the `__gb_remoteGroupIds` attribute, and remote evaluation sends them too.
+
+Resolve them per user with `addRemoteSavedGroups()` (or `withRemoteSavedGroups()` for a copy). `RedisResolver` reads the sets GrowthBook's loader writes to Redis (`SMEMBERS gb:member:<attribute>:<value>`) through any client with `sMembers`, such as phpredis or Predis; any callable `(array $attributes, array $groups): array` works as a resolver:
+
+```php
+$growthbook = $growthbook
+  ->withAttributes(['account_id' => 'a1'])
+  ->withRemoteSavedGroups(new Growthbook\RedisResolver($redis));
+```
+
+Or set them directly with `withRemoteGroupIds(['grp_vip'])`, `setRemoteGroupIds()` or the `remoteGroupIds` option. They win over an attribute of that name, which also works on its own.
+
+Leave them unset (`null`) while they are unresolved: rules that use remote groups then fail, including "not in group" rules, and one warning is logged. An empty array means the user is in no group, which is what lets "not in group" rules match. If the resolver throws, the ids are left as they were and a warning with the exception class is logged.
+
 ## Remote Evaluation
 
 With remote evaluation, feature flags are evaluated on a self-hosted GrowthBook proxy/edge instead of locally in the SDK. Instead of downloading the full feature definitions, the SDK sends the current evaluation context (attributes, forced variations, forced features and URL) to the proxy via a `POST` request, and the proxy returns only the already-evaluated features. This keeps feature definitions and targeting logic off the client.
@@ -224,7 +240,7 @@ $growthbook = new Growthbook\Growthbook([
 
 ### Re-evaluation when the context changes
 
-Because the proxy evaluates features for a specific context, the SDK automatically re-fetches when that context changes after `initialize`. Calling `setAttributes`, `setForcedVariations` or `setUrl` (or their `withX` equivalents) triggers a new request. Thanks to the cache key above, repeated contexts are served from cache without a network call.
+Because the proxy evaluates features for a specific context, the SDK automatically re-fetches when that context changes after `initialize`. Calling `setAttributes`, `setForcedVariations`, `setUrl` or `setRemoteGroupIds` (or their `withX` equivalents) triggers a new request. Thanks to the cache key above, repeated contexts are served from cache without a network call.
 
 ## The Growthbook Class
 

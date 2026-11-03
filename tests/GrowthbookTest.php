@@ -1300,6 +1300,152 @@ final class GrowthbookTest extends TestCase
     }
 
     /**
+     * @return void
+     */
+    public function testStickyBucketWinsOverLaterForceRule(): void
+    {
+        $features = [
+            "feature" => [
+                "defaultValue" => 5,
+                "rules" => [
+                    [
+                        "key" => "exp",
+                        "condition" => ["country" => "USA"],
+                        "variations" => [0, 1],
+                        "weights" => [0, 1],
+                        "meta" => [
+                            ["key" => "0"],
+                            ["key" => "1"]
+                        ]
+                    ],
+                    [
+                        "condition" => ["country" => "NL"],
+                        "force" => 2
+                    ]
+                ]
+            ],
+        ];
+
+        $service = new InMemoryStickyBucketService();
+        $service->saveAssignments([
+            'attributeName' => 'id',
+            'attributeValue' => 1,
+            'assignments' => ['exp__0' => '0']
+        ]);
+
+        $gb = new Growthbook(
+            [
+                'stickyBucketService' => $service,
+                'attributes' => ['id' => 1, 'country' => 'NL'],
+                'features' => $features
+            ]
+        );
+
+        $result = $gb->getFeature('feature');
+        $this->assertEquals(0, $result->value);
+        $this->assertEquals('experiment', $result->source);
+
+        $service->destroy();
+    }
+
+    /**
+     * @return void
+     */
+    public function testFiltersStillApplyWithStickyBucket(): void
+    {
+        $features = [
+            "feature" => [
+                "defaultValue" => 5,
+                "rules" => [
+                    [
+                        "key" => "exp",
+                        "variations" => [0, 1],
+                        "weights" => [0, 1],
+                        "meta" => [
+                            ["key" => "0"],
+                            ["key" => "1"]
+                        ],
+                        "filters" => [
+                            ["seed" => "ns", "ranges" => [[0, 0]]]
+                        ]
+                    ]
+                ]
+            ],
+        ];
+
+        $service = new InMemoryStickyBucketService();
+        $service->saveAssignments([
+            'attributeName' => 'id',
+            'attributeValue' => 1,
+            'assignments' => ['exp__0' => '0']
+        ]);
+
+        $gb = new Growthbook(
+            [
+                'stickyBucketService' => $service,
+                'attributes' => ['id' => 1],
+                'features' => $features
+            ]
+        );
+
+        $result = $gb->getFeature('feature');
+        $this->assertEquals(5, $result->value);
+        $this->assertEquals('defaultValue', $result->source);
+
+        $service->destroy();
+    }
+
+    /**
+     * @return void
+     */
+    public function testPrerequisitesStillApplyWithStickyBucket(): void
+    {
+        $features = [
+            "parent" => [
+                "defaultValue" => false
+            ],
+            "feature" => [
+                "defaultValue" => 5,
+                "rules" => [
+                    [
+                        "key" => "exp",
+                        "parentConditions" => [
+                            ["id" => "parent", "condition" => ["value" => true]]
+                        ],
+                        "variations" => [0, 1],
+                        "weights" => [0, 1],
+                        "meta" => [
+                            ["key" => "0"],
+                            ["key" => "1"]
+                        ]
+                    ]
+                ]
+            ],
+        ];
+
+        $service = new InMemoryStickyBucketService();
+        $service->saveAssignments([
+            'attributeName' => 'id',
+            'attributeValue' => 1,
+            'assignments' => ['exp__0' => '0']
+        ]);
+
+        $gb = new Growthbook(
+            [
+                'stickyBucketService' => $service,
+                'attributes' => ['id' => 1],
+                'features' => $features
+            ]
+        );
+
+        $result = $gb->getFeature('feature');
+        $this->assertEquals(5, $result->value);
+        $this->assertEquals('defaultValue', $result->source);
+
+        $service->destroy();
+    }
+
+    /**
      * Test that ETag is stored in LruETagCache when features are fetched
      * (not in the main PSR cache - ETag is now separate)
      */

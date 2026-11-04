@@ -159,6 +159,8 @@ The `initialize` method takes 3 arguments:
 - `$apiHost` (optional) - Defaults to `https://cdn.growthbook.io`. If self-hosting GrowthBook, set this to your API host.
 - `$decryptionKey` (optional) - Only required if you've enabled encryption for your SDK Connection.
 
+The last two are only applied when given: calling `initialize('sdk-abc123')` keeps the host from an earlier call and the `decryptionKey` passed to the constructor, rather than resetting them to the defaults.
+
 #### withFeatures method
 
 If you prefer to have full control over the fetching/caching behavior, you can use the `withFeatures` method instead to pass an associative array of features into the SDK.

@@ -14,6 +14,17 @@ final class PluginRegistry
     /** @var Plugin[] */
     private array $plugins;
 
+    /**
+     * Plugins this registry dispatches to but does not own: they belong to the registry it was
+     * detached from, which stays alive through [parent] and closes them.
+     *
+     * @var Plugin[]
+     */
+    private array $inherited = [];
+
+    /** Registry this one was detached from, kept alive for as long as this one lives. */
+    private ?PluginRegistry $parent = null;
+
     private ?LoggerInterface $logger;
 
     /**
@@ -75,7 +86,38 @@ final class PluginRegistry
 
     public function hasPlugins(): bool
     {
-        return $this->plugins !== [];
+        return $this->plugins !== [] || $this->inherited !== [];
+    }
+
+    /**
+     * A copy of this registry that one handle can write to on its own.
+     *
+     * The plugins registered so far keep receiving the handle's events - they were registered
+     * for it too - but anything added afterwards reaches only the handle that added it. The
+     * plugin objects are not duplicated and not re-initialized: they stay owned by this
+     * registry, which the detached one keeps alive, so they are still closed exactly once and
+     * only after every handle is done with them.
+     *
+     * @return PluginRegistry
+     */
+    public function detach(): PluginRegistry
+    {
+        $detached = new PluginRegistry([], $this->logger);
+        $detached->inherited = array_merge($this->inherited, $this->plugins);
+        $detached->clientKey = $this->clientKey;
+        $detached->generation = $this->generation;
+        $detached->parent = $this;
+        $this->retain();
+
+        return $detached;
+    }
+
+    /**
+     * @return Plugin[]
+     */
+    private function dispatchTargets(): array
+    {
+        return $this->inherited === [] ? $this->plugins : array_merge($this->inherited, $this->plugins);
     }
 
     public function generation(): int
@@ -143,7 +185,7 @@ final class PluginRegistry
 
         $this->clientKey = $clientKey;
         $this->generation++;
-        foreach ($this->plugins as $plugin) {
+        foreach ($this->dispatchTargets() as $plugin) {
             $this->safeCall($plugin, fn() => $plugin->initialize($clientKey));
         }
     }
@@ -155,7 +197,7 @@ final class PluginRegistry
      */
     public function onExperimentViewed(InlineExperiment $experiment, ExperimentResult $result, array $attributes): void
     {
-        foreach ($this->plugins as $plugin) {
+        foreach ($this->dispatchTargets() as $plugin) {
             $this->safeCall($plugin, fn() => $plugin->onExperimentViewed($experiment, $result, $attributes));
         }
     }
@@ -166,7 +208,7 @@ final class PluginRegistry
      */
     public function onFeatureEvaluated(string $featureKey, FeatureResult $result, array $attributes): void
     {
-        foreach ($this->plugins as $plugin) {
+        foreach ($this->dispatchTargets() as $plugin) {
             $this->safeCall($plugin, fn() => $plugin->onFeatureEvaluated($featureKey, $result, $attributes));
         }
     }
@@ -180,7 +222,7 @@ final class PluginRegistry
      */
     public function onLogEvent(string $eventName, array $properties, array $attributes): void
     {
-        foreach ($this->plugins as $plugin) {
+        foreach ($this->dispatchTargets() as $plugin) {
             if (!$plugin instanceof EventLoggingPlugin) {
                 continue;
             }
@@ -190,8 +232,16 @@ final class PluginRegistry
 
     public function close(): void
     {
+        // Only what this registry owns: the inherited plugins are closed by the registry they
+        // belong to, once this one has let go of it.
         foreach ($this->plugins as $plugin) {
             $this->safeCall($plugin, fn() => $plugin->close());
+        }
+
+        $parent = $this->parent;
+        $this->parent = null;
+        if ($parent !== null) {
+            $parent->release();
         }
     }
 

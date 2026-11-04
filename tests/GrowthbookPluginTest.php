@@ -20,7 +20,7 @@ final class MockPlugin implements Plugin
 
     /** @var array<int, array{experiment: InlineExperiment<mixed>, result: ExperimentResult<mixed>}> */
     public array $experimentEvents = [];
-    /** @var array<int, array{key: string, result: FeatureResult<mixed>}> */
+    /** @var array<int, array{key: string, result: FeatureResult<mixed>, attributes: array<string,mixed>}> */
     public array $featureEvents = [];
 
     public function initialize(string $clientKey): void
@@ -46,7 +46,7 @@ final class MockPlugin implements Plugin
     public function onFeatureEvaluated(string $featureKey, FeatureResult $result, array $attributes): void
     {
         $this->featureCallCount++;
-        $this->featureEvents[] = ['key' => $featureKey, 'result' => $result];
+        $this->featureEvents[] = ['key' => $featureKey, 'result' => $result, 'attributes' => $attributes];
     }
 
     public function close(): void
@@ -732,6 +732,96 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $gb->isOn('my-feature');
 
         $this->assertCount(1, $events);
+    }
+
+    public function testAPluginAddedOnACopyDoesNotSeeTheOriginalsEvents(): void
+    {
+        // addPlugin() wrote into the shared registry, so a plugin meant for one user received
+        // every other handle's evaluations and attributes
+        $base = new MockPlugin();
+        $gb = new Growthbook([
+            'plugins' => [$base],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['flag' => ['defaultValue' => true]],
+        ]);
+        $copy = $gb->withAttributes(['id' => 'user-2']);
+
+        $own = new MockPlugin();
+        $copy->addPlugin($own);
+
+        $copy->isOn('flag');
+        $gb->isOn('flag');
+
+        $this->assertSame(1, $own->featureCallCount, "only the copy's own evaluation");
+        $this->assertSame('user-2', $own->featureEvents[0]['attributes']['id'] ?? null);
+    }
+
+    public function testACopyStillReportsToPluginsItInherited(): void
+    {
+        // The base plugin was registered for the whole instance, so a per-request handle must
+        // keep reporting to it - otherwise scoping a handle would silently stop tracking
+        $base = new MockPlugin();
+        $gb = new Growthbook([
+            'plugins' => [$base],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['flag' => ['defaultValue' => true]],
+        ]);
+        $copy = $gb->withAttributes(['id' => 'user-2']);
+        $copy->addPlugin(new MockPlugin());
+
+        $copy->isOn('flag');
+
+        $this->assertSame(1, $base->featureCallCount);
+    }
+
+    public function testAnInheritedPluginIsClosedOnceAndOnlyWhenEveryHandleIsGone(): void
+    {
+        $base = new MockPlugin();
+        $gb = new Growthbook(['plugins' => [$base], 'attributes' => ['id' => 'user-1']]);
+        $copy = $gb->withAttributes(['id' => 'user-2']);
+
+        $own = new MockPlugin();
+        $copy->addPlugin($own);
+
+        unset($copy);
+        $this->assertTrue($own->closeCalled, "the copy's own plugin goes with it");
+        $this->assertFalse($base->closeCalled, 'the inherited one is still in use');
+
+        unset($gb);
+        $this->assertTrue($base->closeCalled);
+    }
+
+    public function testSettingALoggerOnACopyDoesNotRedirectTheOriginals(): void
+    {
+        $records = [];
+        $logger = $this->createMock(\Psr\Log\LoggerInterface::class);
+        $logger->method('log')->willReturnCallback(function ($level, $message) use (&$records): void {
+            $records[] = (string) $message;
+        });
+
+        $throwing = new class implements Plugin {
+            public function initialize(string $clientKey): void {}
+            /** @param InlineExperiment<mixed> $e @param ExperimentResult<mixed> $r @param array<string,mixed> $a */
+            public function onExperimentViewed(InlineExperiment $e, ExperimentResult $r, array $a): void {}
+            /** @param FeatureResult<mixed> $r @param array<string,mixed> $a */
+            public function onFeatureEvaluated(string $key, FeatureResult $r, array $a): void
+            {
+                throw new \RuntimeException('boom');
+            }
+            public function close(): void {}
+        };
+
+        $gb = new Growthbook([
+            'plugins' => [$throwing],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['flag' => ['defaultValue' => true]],
+        ]);
+        $copy = $gb->withAttributes(['id' => 'user-2']);
+        $copy->setLogger($logger);
+
+        $gb->isOn('flag');
+
+        $this->assertSame([], $records, "the original's plugin errors must not go to the copy's logger");
     }
 
     public function testACopyCannotPointAtAnotherConnection(): void

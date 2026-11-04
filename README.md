@@ -97,6 +97,26 @@ If the GrowthBook API is unavailable and an expired cache exists, the SDK will a
 
 The cached data is stored with a hard TTL of 10× the configured TTL, so stale data remains available as a fallback for that duration.
 
+**Backoff after a failed fetch.** Falling back to the cache still costs the request that discovered the outage a full API timeout, and without a backoff *every* request pays it for as long as the outage lasts. After a failed fetch the SDK records that in the cache and, for the next `apiFailureRetryDelay` seconds (default 10), serves the cached payload directly instead of calling the API again. The marker is shared through your cache, so one worker's failed request spares all the others; a successful fetch clears it immediately. Set it to `0` to always retry:
+
+```php
+$growthbook = new Growthbook\Growthbook([
+  'cache' => $cache,
+  'apiFailureRetryDelay' => 30, // or 0 to disable the backoff
+]);
+```
+
+**Spreading revalidation.** When a cache entry expires, every request in flight at that moment revalidates at once. To avoid that, a still-fresh entry may be revalidated early with a probability that grows from 0 to 1 over the last `cacheEarlyRevalidation` of its TTL (default `0.1`, i.e. the final 10%). Refreshes therefore happen at staggered times and the herd never forms. Set it to `0` to only ever revalidate after expiry:
+
+```php
+$growthbook = new Growthbook\Growthbook([
+  'cache' => $cache,
+  'cacheEarlyRevalidation' => 0.2, // or 0 to disable
+]);
+```
+
+Both apply to the features request and, in remote evaluation mode, to the eval request.
+
 To load features, we require a PSR-17 (HttpClient) and PSR-18 (RequestFactoryInterface) compatible library like Guzzle to be installed.
 
 We will auto-discover most HTTP libraries without any configuration required, but if you prefer to specify it explicitly, you can use the `withHttpClient` method. Note - you'll need to specify both an `HttpClient` and a `RequestFactoryInterface` implementation.

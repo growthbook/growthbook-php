@@ -132,6 +132,59 @@ final class GrowthbookPluginIntegrationTest extends TestCase
         $this->assertTrue($plugin->closeCalled);
     }
 
+    public function testClosePluginsFlushesOnDemand(): void
+    {
+        // A long-running runtime holds one instance for the life of the process, so without an
+        // explicit close its plugins never flush
+        $plugin = new MockPlugin();
+        $gb = new Growthbook(['plugins' => [$plugin], 'attributes' => ['id' => 'user-1']]);
+
+        $gb->closePlugins();
+
+        $this->assertTrue($plugin->closeCalled);
+    }
+
+    public function testClosePluginsIsSafeToCallTwice(): void
+    {
+        // Plugin::close() carries no promise of being idempotent, and the refcount can be
+        // driven below zero by a subclass that forgets parent::__clone()
+        $counting = new class implements Plugin {
+            public int $closeCount = 0;
+
+            public function initialize(string $clientKey): void {}
+            /** @param InlineExperiment<mixed> $e @param ExperimentResult<mixed> $r @param array<string,mixed> $a */
+            public function onExperimentViewed(InlineExperiment $e, ExperimentResult $r, array $a): void {}
+            /** @param FeatureResult<mixed> $r @param array<string,mixed> $a */
+            public function onFeatureEvaluated(string $key, FeatureResult $r, array $a): void {}
+
+            public function close(): void
+            {
+                $this->closeCount++;
+            }
+        };
+
+        $gb = new Growthbook(['plugins' => [$counting]]);
+        $gb->closePlugins();
+        $gb->closePlugins();
+        unset($gb);
+
+        $this->assertSame(1, $counting->closeCount);
+    }
+
+    public function testEvaluationKeepsWorkingAfterClosePlugins(): void
+    {
+        $plugin = new MockPlugin();
+        $gb = new Growthbook([
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['flag' => ['defaultValue' => true]],
+        ]);
+
+        $gb->closePlugins();
+
+        $this->assertTrue($gb->isOn('flag'), 'the SDK keeps evaluating, it just stops recording');
+    }
+
     public function testPluginAddedViaConstructorOption(): void
     {
         $plugin = new MockPlugin();

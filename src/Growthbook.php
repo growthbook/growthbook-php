@@ -225,9 +225,34 @@ class Growthbook implements LoggerAwareInterface
      * handles), and a PHP clone is shallow: the copy shares this instance's plugin registry.
      * Register the copy as an owner so the plugins are only closed once every handle is gone.
      */
+    /**
+     * A subclass that defines __clone() must call parent::__clone(): without it the copy never
+     * registers as an owner of the plugin registry, so releasing the copy closes plugins the
+     * original is still using.
+     */
     public function __clone()
     {
         $this->pluginRegistry->retain();
+    }
+
+    /**
+     * Close the plugins now: they flush what they are holding and stop accepting events.
+     *
+     * Plugins are closed when the last handle is released, which in a request-scoped process is
+     * the end of the request. A long-running runtime - Octane, Swoole, RoadRunner, a queue
+     * worker - keeps one instance alive for the life of the process, so without this its
+     * plugins never close and a kill or a fatal takes whatever they buffered with it. The
+     * built-in tracking plugin registers a shutdown function of its own; a third-party one has
+     * no such safety net.
+     *
+     * Call it at the end of a unit of work. The instance keeps evaluating features afterwards;
+     * its plugins simply no longer record anything.
+     *
+     * @return void
+     */
+    public function closePlugins(): void
+    {
+        $this->pluginRegistry->close();
     }
 
     public function __destruct()

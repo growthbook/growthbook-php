@@ -42,6 +42,14 @@ final class PluginRegistry
     private int $refCount = 1;
 
     /**
+     * Closing is one-way and happens once. The Plugin interface does not promise that close()
+     * can be called twice, and the count can be driven below zero by a subclass of Growthbook
+     * that defines __clone() without calling parent::__clone() - it skips the retain(), so the
+     * copy's release() closes while the original is still using the plugins.
+     */
+    private bool $closed = false;
+
+    /**
      * @param Plugin[]             $plugins
      * @param LoggerInterface|null $logger
      */
@@ -190,6 +198,11 @@ final class PluginRegistry
 
     public function close(): void
     {
+        if ($this->closed) {
+            return;
+        }
+        $this->closed = true;
+
         foreach ($this->plugins as $plugin) {
             $this->safeCall($plugin, fn() => $plugin->close());
         }

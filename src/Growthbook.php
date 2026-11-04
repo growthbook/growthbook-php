@@ -979,7 +979,7 @@ class Growthbook implements LoggerAwareInterface
                     }
                 }
 
-                if ($rule->condition) {
+                if ($rule->condition && isset($rule->force)) {
                     if (!$this->evalConditionSafely($this->attributes, $rule->condition)) {
                         $this->log(LogLevel::DEBUG, "Skip rule because of targeting condition", [
                             "feature" => $key,

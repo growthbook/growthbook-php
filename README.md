@@ -138,6 +138,31 @@ $growthbook = Growthbook\Growthbook::create()
 
 > **Note:** If Guzzle is not installed, the SDK will use a discovered PSR-18 client which may not have timeout guarantees. A warning will be logged in this case.
 
+#### Feature refresh listeners
+
+You can be notified whenever the SDK applies a feature payload, and told where that payload came from:
+
+```php
+$unsubscribe = $growthbook->addFeatureRefreshListener(function (array $payload, string $source) {
+  // $payload: ['features' => [...], 'savedGroups' => [...]]
+  // $source:  'network' | 'cache' | 'stale-cache' | 'not-modified'
+  $logger->info('GrowthBook features applied', [
+    'source' => $source,
+    'numFeatures' => count($payload['features'] ?? []),
+  ]);
+});
+
+$unsubscribe(); // or $growthbook->removeFeatureRefreshListener($listener)
+```
+
+Listeners run after the payload is applied, so evaluating a feature inside one already sees the new definitions. The payload always has exactly those two keys, whatever the source, and nothing is reported when a load applied no features.
+
+A listener that throws is always logged and skipped, so it cannot break a feature load. This differs from `trackingCallback` and `featureUsageCallback`, which rethrow when no logger is configured: most notifications happen inside the fetch error handling in `initialize()`, so a rethrow would surface as a failed feature fetch and trigger the stale-cache fallback - a bug in your listener would look like a GrowthBook outage. Configure a logger if you want to see listener failures.
+
+Listeners belong to the instance they were registered on: a copy made by a fluent method such as `withAttributes()` starts with none, since the unsubscribe closure could not reach a copy anyway, and a listener evaluating features would otherwise read the original's definitions.
+
+> **Note:** this SDK never refreshes features on its own. There is no polling, no streaming and no background worker, so a listener only fires inside a call your application made - `initialize()`, or the remote evaluation refetch triggered by `setAttributes`, `setForcedVariations` or `setUrl`. The point is knowing *which* payload was applied and from where: in remote evaluation mode a plain `setAttributes()` hits the network and can silently fall back to a stale cache, and `stale-cache` is exactly the signal worth alerting on. Features you supply yourself with `setFeatures()` / `withFeatures()` are not reported, since you already have them.
+
 #### ETag Caching
 
 The SDK automatically uses ETag-based conditional requests (HTTP Conditional GET) to reduce bandwidth. When the GrowthBook API returns an `ETag` header, the SDK stores it and sends `If-None-Match` on subsequent requests. A `304 Not Modified` response reuses the existing cached data without re-downloading the full payload.

@@ -451,6 +451,30 @@ $growthbook->logEvent('Checkout Completed', ['revenue' => 42]);
 
 Custom events are never deduplicated - you chose to send each one. A plugin receives them by implementing `Growthbook\EventLoggingPlugin` alongside `Growthbook\Plugin`; plugins that do not are simply skipped.
 
+#### Tracking plugin configuration
+
+```php
+new Growthbook\GrowthBookTrackingPlugin(
+  new Growthbook\GrowthBookTrackingPluginConfig(
+    enable: true,                       // master switch; off means nothing is sent at all
+    enableFeatureUsageEvents: true,     // "Feature Evaluated" events only
+    batchSize: 100,                     // events per ingest request
+    dedupeCacheSize: 1000,              // identical events remembered; 0 disables
+    dedupeKeyAttributes: ['id'],        // attributes that identify the event; null uses all
+    eventFilter: fn (array $event) => $event['attributes']['id'] !== 'internal-bot',
+    ingestorRequestHeaders: ['Authorization' => 'Bearer ' . getenv('GB_GATEWAY_TOKEN')],
+  )
+);
+```
+
+**Deduplication** catches what the per-instance dedupe cannot: handles created with `withAttributes()` keep their own state, so the same evaluation can reach a shared plugin once per handle. The signature covers the event and the attributes that identify it, so one user's event never suppresses another's - narrow `dedupeKeyAttributes` to your identifiers if volatile attributes would otherwise make every event unique. A batch that fails to send gives its signatures back, so nothing stays suppressed on behalf of events that never arrived.
+
+**`eventFilter`** is the only thing between your attributes and the ingestor: use it to drop internal traffic or reject events carrying data that must not leave the deployment.
+
+**`ingestorRequestHeaders`** are for a gateway that also fronts the ingestor - a different host from the API, so the SDK's `apiHostRequestHeaders` do not apply there. `Content-Type` and `User-Agent` are set by the plugin and cannot be overridden.
+
+> **Ingest limits:** the ingestor documents 100 events per request and one request per second. A PHP request sends its batches back to back, so a page producing several hundred distinct events is over that rate limit no matter how it is batched; the plugin logs a warning the first time it sends a second request. `enableFeatureUsageEvents: false` and `eventFilter` are the levers.
+
 ### Logging
 
 GrowthBook can output log messages to help you debug your feature flags and experiments.

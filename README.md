@@ -224,7 +224,7 @@ $growthbook = new Growthbook\Growthbook([
 
 ### Re-evaluation when the context changes
 
-Because the proxy evaluates features for a specific context, the SDK automatically re-fetches when that context changes after `initialize`. Calling `setAttributes`, `setForcedVariations` or `setUrl` (or their `withX` equivalents) triggers a new request. Thanks to the cache key above, repeated contexts are served from cache without a network call.
+Because the proxy evaluates features for a specific context, the SDK automatically re-fetches when that context changes after `initialize`. Calling `setAttributes`, `updateAttributes`, `setForcedVariations` or `setUrl` (or their `withX` equivalents) triggers a new request. Thanks to the cache key above, repeated contexts are served from cache without a network call.
 
 ## The Growthbook Class
 
@@ -280,17 +280,21 @@ $attributes = [
 ];
 ```
 
-If you want to update attributes later, please note that the `withAttributes` method completely overwrites the attributes object. You can use `array_merge` if you only want to update a subset of fields:
+Note that `setAttributes` / `withAttributes` **replace** the whole attributes array - any previously set attribute that is missing from the new array is dropped.
+
+If you only want to update a subset of fields, use `updateAttributes` / `withUpdatedAttributes` instead. They **merge** into the existing attributes: new keys are added, existing keys are overwritten and the rest is preserved (same semantics as the JS/TS SDK's `updateAttributes`).
 
 ```php
-// Only update the url attribute
-$growthbook->withAttributes(array_merge(
-  $growthbook->getAttributes(),
-  [
-    'url' => '/checkout'
-  ]
-));
+$growthbook->setAttributes(['id' => '123', 'loggedIn' => true]);
+
+// Only update the url attribute; id and loggedIn are preserved
+$growthbook->updateAttributes(['url' => '/checkout']);
+
+// Immutable variant - returns a copy, leaves $growthbook untouched
+$checkoutGrowthbook = $growthbook->withUpdatedAttributes(['url' => '/checkout']);
 ```
+
+The merge is shallow: a nested array replaces the previous value of that key instead of being merged recursively (e.g. `updateAttributes(['account' => ['age' => 10]])` drops any other key inside `account`). A `null` value is stored as `null` - it does not remove the key.
 
 ### Tracking Experiments
 

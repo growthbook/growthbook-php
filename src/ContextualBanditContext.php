@@ -47,9 +47,11 @@ class ContextualBanditContext
             $this->leafId = (int) $leafId;
         }
 
+        // An object is accepted, as `reducePayload` returns: it rewrites a condition that always
+        // passes to an empty object, which casts to the empty condition that matches every user.
         $condition = $context["condition"] ?? null;
-        if (is_array($condition)) {
-            $this->condition = $condition;
+        if (is_array($condition) || $condition instanceof \stdClass) {
+            $this->condition = (array) $condition;
         }
 
         $weights = $context["weights"] ?? null;

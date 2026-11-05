@@ -523,6 +523,13 @@ Evaluation walks the leaves top-to-bottom, takes the first whose `condition` mat
 $growthbook->setContextualBandits($contextualBandits); // or ->withContextualBandits(...)
 ```
 
+`reducePayload()` keeps the bandits that the rules it kept still reference, and drops the leaves whose condition cannot pass for the given attributes. Its output feeds straight back in, objects and all:
+
+```php
+$payload = Growthbook::reducePayload($payload, ['attributes' => $attributes]);
+$growthbook->withFeatures($payload['features'])->withContextualBandits($payload['contextualBandits']);
+```
+
 Bandit rules carry their variations under `contextualVariations` rather than `variations`, which is how SDKs without bandit support skip them by design.
 
 For a real exposure (the user was hash-bucketed into the experiment) the `experimentResult` reports which segment produced the weights:

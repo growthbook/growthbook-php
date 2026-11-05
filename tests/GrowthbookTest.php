@@ -3353,4 +3353,40 @@ final class GrowthbookTest extends TestCase
         $this->assertSame([], $gb->getContextualBandits());
         $this->assertArrayHasKey('cb-bandit', $copy->getContextualBandits());
     }
+
+    /**
+     * A reduced payload is the normal way to ship bandits to a client, and it hands back objects
+     * rather than arrays in two places: the map itself, because refs are usually "0", "1", ...,
+     * and the condition of a leaf that always passes for the given attributes.
+     */
+    public function testContextualBanditsSurviveReducePayload(): void
+    {
+        $features = $this->banditFeatures();
+        $features['bandit-feature']['rules'][0]['contextualBanditRef'] = '0';
+
+        $reduced = Growthbook::reducePayload([
+            'features' => $features,
+            'savedGroups' => [],
+            'contextualBandits' => ['0' => $this->banditDefinitions()['cb-bandit']],
+        ], ['attributes' => ['plan' => 'enterprise']]);
+
+        // Both shapes really are objects, otherwise this test would not be exercising anything
+        $this->assertInstanceOf(\stdClass::class, $reduced['contextualBandits']);
+        $leaf = ((array) $reduced['contextualBandits'])['0']['contexts'][0];
+        $this->assertInstanceOf(\stdClass::class, $leaf['condition']);
+
+        $gb = Growthbook::create()
+            ->withFeatures($reduced['features'])
+            ->withContextualBandits($reduced['contextualBandits'])
+            ->withAttributes(['id' => 'user-1', 'plan' => 'enterprise']);
+
+        $this->assertSame('control', $gb->getValue('bandit-feature', 'default'));
+
+        $result = $gb->getFeature('bandit-feature')->experimentResult;
+        $this->assertNotNull($result);
+        assert($result !== null);
+        $this->assertSame(1, $result->leafId);
+        $this->assertSame([1.0, 0.0], $result->variationWeights);
+        $this->assertSame(7, $result->banditVersion);
+    }
 }

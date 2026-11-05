@@ -132,7 +132,7 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[],clientKey?:string,remoteEval?:bool,cacheKeyAttributes?:array<string>,contextualBandits?:array<string,mixed>} $options
+     * @param array{enabled?:bool,logger?:\Psr\Log\LoggerInterface,url?:string,attributes?:array<string,mixed>,features?:array<string,mixed>,savedGroups?:array<string,array<string,mixed>>,forcedVariations?:array<string,int>,qaMode?:bool,trackingCallback?:callable,cache?:\Psr\SimpleCache\CacheInterface,httpClient?:\Psr\Http\Client\ClientInterface,requestFactory?:\Psr\Http\Message\RequestFactoryInterface,decryptionKey?:string,forcedFeatures?:array<string, FeatureResult<mixed>>,plugins?:Plugin[],clientKey?:string,remoteEval?:bool,cacheKeyAttributes?:array<string>,contextualBandits?:array<string,mixed>|\stdClass} $options
      */
     public function __construct(array $options = [])
     {
@@ -297,17 +297,21 @@ class Growthbook implements LoggerAwareInterface
      * GrowthBook backend and normally arrive with the feature payload; this setter exists for
      * tests and for consumers that fetch the payload themselves.
      *
-     * @param array<string,mixed> $contextualBandits Keyed by bandit ref
+     * @param array<string,mixed>|\stdClass $contextualBandits Keyed by bandit ref. An object is
+     *   accepted, as `reducePayload` returns - refs are usually "0", "1", ..., which PHP would
+     *   otherwise JSON-encode as an array.
      * @return static
      */
-    public function setContextualBandits(array $contextualBandits): static
+    public function setContextualBandits(array|\stdClass $contextualBandits): static
     {
         $this->contextualBandits = [];
-        foreach ($contextualBandits as $ref => $definition) {
+        foreach ((array) $contextualBandits as $ref => $definition) {
+            // Casting an object hands back a ref of "0" as the int 0
+            $ref = (string) $ref;
             if ($definition instanceof ContextualBanditDefinition) {
                 $this->contextualBandits[$ref] = $definition;
-            } elseif (is_array($definition)) {
-                $this->contextualBandits[$ref] = new ContextualBanditDefinition($definition);
+            } elseif (is_array($definition) || $definition instanceof \stdClass) {
+                $this->contextualBandits[$ref] = new ContextualBanditDefinition((array) $definition);
             }
         }
 
@@ -315,10 +319,10 @@ class Growthbook implements LoggerAwareInterface
     }
 
     /**
-     * @param array<string,mixed> $contextualBandits
+     * @param array<string,mixed>|\stdClass $contextualBandits An object is accepted, as `reducePayload` returns
      * @return static
      */
-    public function withContextualBandits(array $contextualBandits): static
+    public function withContextualBandits(array|\stdClass $contextualBandits): static
     {
         $self = clone $this;
         $self->setContextualBandits($contextualBandits);
@@ -1084,7 +1088,8 @@ class Growthbook implements LoggerAwareInterface
                     ]);
                     continue;
                 }
-                if ($rule->contextualBanditRef) {
+                // Compared explicitly: refs are usually "0", "1", ..., and "0" is falsy in PHP
+                if ($rule->contextualBanditRef !== null && $rule->contextualBanditRef !== "") {
                     $this->applyContextualBandit($exp, $rule->contextualBanditRef, $key);
                 }
                 $result = $this->runExperiment($exp, $key);
@@ -2503,8 +2508,11 @@ class Growthbook implements LoggerAwareInterface
      */
     private function applyContextualBanditsFromPayload(array $data): void
     {
-        if (array_key_exists("contextualBandits", $data) && is_array($data["contextualBandits"])) {
-            $this->setContextualBandits($data["contextualBandits"]);
+        // Read through fromObjectMap so a reduced payload, where the map is an object, applies
+        // like any other
+        $bandits = static::fromObjectMap($data["contextualBandits"] ?? null);
+        if ($bandits !== null) {
+            $this->setContextualBandits($bandits);
         }
     }
 

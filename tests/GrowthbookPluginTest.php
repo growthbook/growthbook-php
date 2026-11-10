@@ -455,8 +455,10 @@ final class GrowthBookTrackingPluginTest extends TestCase
         });
         $plugin->initialize('sdk-test');
 
-        $exp = $this->makeExperiment();
+        // Three distinct exposures: identical ones are now deduplicated and would never reach
+        // the batch size
         for ($i = 0; $i < 3; $i++) {
+            $exp = $this->makeExperiment("exp-$i");
             $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp), []);
         }
 
@@ -977,6 +979,264 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $factory->method('createRequest')->willReturn($request);
 
         return [$client, $factory];
+    }
+
+    public function testEnableFalseSilencesThePluginEntirely(): void
+    {
+        $plugin = new GrowthBookTrackingPlugin(
+            new GrowthBookTrackingPluginConfig(batchSize: 1, enable: false)
+        );
+        $this->captureEvents($plugin, $events);
+
+        $gb = new Growthbook([
+            'clientKey' => 'sdk-test',
+            'plugins' => [$plugin],
+            'attributes' => ['id' => 'user-1'],
+            'features' => ['exp-feature' => ['defaultValue' => 0, 'rules' => [['key' => 'my-exp', 'variations' => [0, 1]]]]],
+        ]);
+        $gb->isOn('exp-feature');
+        $gb->logEvent('Checkout Completed');
+
+        $this->assertSame([], $events, 'no exposures, no feature usage, no custom events');
+        $this->assertTrue($gb->isOn('exp-feature'), 'the SDK itself keeps working');
+    }
+
+    public function testIdenticalEventsAreSentOnce(): void
+    {
+        // Handles of one instance keep their own dedupe state, so the plugin is the only place
+        // that can see the repeat
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        $exp = $this->makeExperiment('my-exp');
+        $result = $this->makeExperimentResult($exp);
+        $plugin->onExperimentViewed($exp, $result, ['id' => 'user-1']);
+        $plugin->onExperimentViewed($exp, $result, ['id' => 'user-1']);
+
+        $this->assertCount(1, $events);
+    }
+
+    public function testTheSameFeatureEvaluationForAnotherUserIsStillSent(): void
+    {
+        // A feature evaluation names nobody, so the attributes take part in its signature
+        // precisely so that one user's read of a flag cannot suppress another's
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        $result = $this->makeFeatureResult();
+        $plugin->onFeatureEvaluated('flag', $result, ['id' => 'user-1']);
+        $plugin->onFeatureEvaluated('flag', $result, ['id' => 'user-2']);
+
+        $this->assertCount(2, $events);
+    }
+
+    public function testOneExposurePerBucketingUnitNotPerUser(): void
+    {
+        // Two colleagues, one experiment bucketed on their company: that is one assignment,
+        // and reporting it once per user would inflate the exposure count analysis joins on
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        $exp = $this->makeExperiment('my-exp');
+        $result = new ExperimentResult($exp, 'company_id', 'acme', 1, true, null);
+        $plugin->onExperimentViewed($exp, $result, ['id' => 'user-1', 'company_id' => 'acme']);
+        $plugin->onExperimentViewed($exp, $result, ['id' => 'user-2', 'company_id' => 'acme']);
+
+        $this->assertCount(1, $events);
+    }
+
+    public function testExposuresForDifferentBucketingUnitsAreBothSent(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        $exp = $this->makeExperiment('my-exp');
+        foreach (['acme', 'globex'] as $company) {
+            $result = new ExperimentResult($exp, 'company_id', $company, 1, true, null);
+            $plugin->onExperimentViewed($exp, $result, ['company_id' => $company]);
+        }
+
+        $this->assertCount(2, $events);
+    }
+
+    public function testDedupeKeyAttributesAlsoNarrowAnExposure(): void
+    {
+        // Set explicitly, it states what identifies an event here, so it applies to both kinds
+        $plugin = new GrowthBookTrackingPlugin(
+            new GrowthBookTrackingPluginConfig(batchSize: 1, dedupeKeyAttributes: ['id'])
+        );
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        $exp = $this->makeExperiment('my-exp');
+        $result = new ExperimentResult($exp, 'company_id', 'acme', 1, true, null);
+        $plugin->onExperimentViewed($exp, $result, ['id' => 'user-1', 'company_id' => 'acme']);
+        $plugin->onExperimentViewed($exp, $result, ['id' => 'user-2', 'company_id' => 'acme']);
+
+        $this->assertCount(2, $events);
+    }
+
+    public function testTwoUsersOfOneAccountReportOneExposureAndTheirOwnUsage(): void
+    {
+        // The whole split seen from the outside: one process serving two users through
+        // per-user handles, on an experiment bucketed on the account they share
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+
+        $gb = Growthbook::create()->withClientKey('sdk-test')->withFeatures([
+            'feature' => ['defaultValue' => false, 'rules' => [[
+                'key'           => 'my-experiment',
+                'hashAttribute' => 'company_id',
+                'hashVersion'   => 2,
+                'variations'    => [false, true],
+                'coverage'      => 1,
+                'meta'          => [['key' => '0'], ['key' => '1']],
+            ]]],
+        ]);
+        $gb->addPlugin($plugin);
+
+        foreach (['user-1', 'user-2'] as $id) {
+            $gb->withAttributes(['id' => $id, 'company_id' => 'acme'])->getFeature('feature');
+        }
+
+        $byName = [];
+        foreach ($events as $event) {
+            $byName[$event['event_name']][] = $event['attributes']['id'] ?? null;
+        }
+
+        $this->assertSame(['acme'], array_map(
+            fn (array $e): string => $e['properties']['hashValue'],
+            array_values(array_filter($events, fn (array $e): bool => $e['event_name'] === 'Experiment Viewed'))
+        ), 'one exposure, for the account both users were bucketed on');
+        $this->assertSame(['user-1', 'user-2'], $byName['Feature Evaluated'], 'usage for each user');
+    }
+
+    public function testDedupeKeyAttributesNarrowTheSignature(): void
+    {
+        $plugin = new GrowthBookTrackingPlugin(
+            new GrowthBookTrackingPluginConfig(batchSize: 1, dedupeKeyAttributes: ['id'])
+        );
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        $exp = $this->makeExperiment('my-exp');
+        $result = $this->makeExperimentResult($exp);
+        // Same user, a volatile attribute changing between calls: still one event
+        $plugin->onExperimentViewed($exp, $result, ['id' => 'user-1', 'requestId' => 'a']);
+        $plugin->onExperimentViewed($exp, $result, ['id' => 'user-1', 'requestId' => 'b']);
+
+        $this->assertCount(1, $events);
+    }
+
+    public function testCustomEventsAreNeverDeduplicated(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        $plugin->onLogEvent('Button Clicked', [], ['id' => 'user-1']);
+        $plugin->onLogEvent('Button Clicked', [], ['id' => 'user-1']);
+
+        $this->assertCount(2, $events);
+    }
+
+    public function testADroppedBatchLeavesItsEventsReportable(): void
+    {
+        // Keeping the keys would suppress the next identical evaluation as a duplicate of
+        // something nobody ever received
+        $plugin = $this->makePlugin(1);
+        $attempts = 0;
+        $plugin->setSendHandler(function () use (&$attempts): bool {
+            $attempts++;
+            return false; // the batch never arrived
+        });
+        $plugin->initialize('sdk-test');
+
+        $exp = $this->makeExperiment('my-exp');
+        $result = $this->makeExperimentResult($exp);
+        $plugin->onExperimentViewed($exp, $result, ['id' => 'user-1']);
+        $plugin->onExperimentViewed($exp, $result, ['id' => 'user-1']);
+
+        $this->assertSame(2, $attempts);
+    }
+
+    public function testEventFilterCanDropEvents(): void
+    {
+        $plugin = new GrowthBookTrackingPlugin(
+            new GrowthBookTrackingPluginConfig(
+                batchSize: 1,
+                eventFilter: fn (array $event): bool => ($event['attributes']['id'] ?? null) !== 'internal-bot'
+            )
+        );
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        $exp = $this->makeExperiment('my-exp');
+        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp), ['id' => 'internal-bot']);
+        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp), ['id' => 'user-1']);
+
+        $this->assertCount(1, $events);
+        $this->assertSame('user-1', $events[0]['attributes']['id']);
+    }
+
+    public function testIngestorRequestHeadersAreSent(): void
+    {
+        $captured = [];
+        $request = $this->createMock(\Psr\Http\Message\RequestInterface::class);
+        $request->method('withHeader')->willReturnCallback(function ($name, $value) use (&$captured, $request) {
+            $captured[$name] = $value;
+            return $request;
+        });
+        $request->method('withBody')->willReturnSelf();
+
+        $factory = $this->createMock(\Psr\Http\Message\RequestFactoryInterface::class);
+        $factory->method('createRequest')->willReturn($request);
+
+        $response = $this->createMock(\Psr\Http\Message\ResponseInterface::class);
+        $response->method('getStatusCode')->willReturn(200);
+        $client = $this->createMock(\Psr\Http\Client\ClientInterface::class);
+        $client->method('sendRequest')->willReturn($response);
+
+        $plugin = new GrowthBookTrackingPlugin(
+            new GrowthBookTrackingPluginConfig(batchSize: 1, ingestorRequestHeaders: ['Authorization' => 'Bearer gw-token']),
+            $client,
+            $factory
+        );
+        $plugin->initialize('sdk-test');
+
+        $exp = $this->makeExperiment('my-exp');
+        $plugin->onExperimentViewed($exp, $this->makeExperimentResult($exp), []);
+
+        $this->assertSame('Bearer gw-token', $captured['Authorization']);
+        $this->assertSame('application/json', $captured['Content-Type'], 'the plugin still sets its own');
+    }
+
+    /**
+     * @dataProvider rejectedIngestorHeaderProvider
+     * @param array<array-key,mixed> $headers
+     */
+    public function testRejectedIngestorHeaders(array $headers): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        new GrowthBookTrackingPluginConfig(ingestorRequestHeaders: $headers);
+    }
+
+    /**
+     * @return array<string,array{0:array<array-key,mixed>}>
+     */
+    public function rejectedIngestorHeaderProvider(): array
+    {
+        return [
+            'reserved' => [['Content-Type' => 'text/plain']],
+            'duplicate casing' => [['Authorization' => 'a', 'authorization' => 'b']],
+            'malformed name' => [["X-Foo\n" => 'v']],
+            'surrounding whitespace' => [['X-Tenant' => ' acme ']],
+        ];
     }
 
     public function testFeatureUsageEventsCanBeTurnedOff(): void

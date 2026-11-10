@@ -24,6 +24,9 @@ class GrowthBookTrackingPlugin implements Plugin, EventLoggingPlugin
 {
     private const PACKAGE_NAME = "growthbook/growthbook";
 
+    private const EVENT_EXPERIMENT_VIEWED = "Experiment Viewed";
+    private const EVENT_FEATURE_EVALUATED = "Feature Evaluated";
+
     private GrowthBookTrackingPluginConfig $config;
     private string $clientKey = "";
     private bool $initialized = false;
@@ -31,6 +34,20 @@ class GrowthBookTrackingPlugin implements Plugin, EventLoggingPlugin
 
     /** @var array<int, array<string, mixed>> */
     private array $queue = [];
+
+    /**
+     * Signatures of events already sent, newest last. Insertion order is the recency order, so
+     * the oldest entry is the first key.
+     *
+     * @var array<string, true>
+     */
+    private array $recentlySent = [];
+
+    /** Signatures of the batch in flight, so a failed send can give them back. */
+    /** @var array<int, string> */
+    private array $inFlightKeys = [];
+
+    private int $postCount = 0;
 
     private ?ClientInterface $httpClient;
     private ?RequestFactoryInterface $requestFactory;
@@ -83,11 +100,11 @@ class GrowthBookTrackingPlugin implements Plugin, EventLoggingPlugin
      */
     public function onExperimentViewed(InlineExperiment $experiment, ExperimentResult $result, array $attributes): void
     {
-        if (!$this->initialized) {
+        if (!$this->initialized || !$this->config->enable) {
             return;
         }
         $this->enqueue([
-            'event_name' => 'Experiment Viewed',
+            'event_name' => self::EVENT_EXPERIMENT_VIEWED,
             'properties' => [
                 'experimentId' => $experiment->key,
                 // The variation's key, not its index: analysis joins exposures on the key, so an
@@ -109,11 +126,11 @@ class GrowthBookTrackingPlugin implements Plugin, EventLoggingPlugin
      */
     public function onFeatureEvaluated(string $featureKey, FeatureResult $result, array $attributes): void
     {
-        if (!$this->initialized || !$this->config->enableFeatureUsageEvents) {
+        if (!$this->initialized || !$this->config->enable || !$this->config->enableFeatureUsageEvents) {
             return;
         }
         $this->enqueue([
-            'event_name' => 'Feature Evaluated',
+            'event_name' => self::EVENT_FEATURE_EVALUATED,
             'properties' => [
                 'feature' => $featureKey,
                 'value'   => $result->value,
@@ -138,14 +155,16 @@ class GrowthBookTrackingPlugin implements Plugin, EventLoggingPlugin
      */
     public function onLogEvent(string $eventName, array $properties, array $attributes): void
     {
-        if (!$this->initialized) {
+        if (!$this->initialized || !$this->config->enable) {
             return;
         }
+        // Not deduplicated: the application chose to send each one, so a repeat is a second
+        // occurrence rather than noise.
         $this->enqueue([
             'event_name' => $eventName,
             'properties' => $properties,
             'attributes' => $this->mergedAttributes($attributes),
-        ]);
+        ], false);
     }
 
     /**
@@ -194,12 +213,78 @@ class GrowthBookTrackingPlugin implements Plugin, EventLoggingPlugin
 
     /**
      * @param array<string, mixed> $event
+     * @param bool                 $deduplicate
      */
-    private function enqueue(array $event): void
+    private function enqueue(array $event, bool $deduplicate = true): void
     {
+        $filter = $this->config->eventFilter;
+        if ($filter !== null && !$filter($event)) {
+            return;
+        }
+
+        if ($deduplicate && $this->config->dedupeCacheSize > 0) {
+            $key = $this->dedupeKey($event);
+            if (isset($this->recentlySent[$key])) {
+                return;
+            }
+            $this->remember($key);
+            $this->inFlightKeys[] = $key;
+        }
+
         $this->queue[] = $event;
         if (count($this->queue) >= $this->config->batchSize) {
             $this->flush();
+        }
+    }
+
+    /**
+     * Signature of an event for deduplication: the event itself, plus the attributes for the
+     * events that carry no identity of their own.
+     *
+     * An exposure names the unit it was bucketed on - `hashAttribute` and `hashValue` are part
+     * of its properties - so its identity is the bucketing unit. Keying it on the attribute map
+     * as well would report one assignment once per user sharing that unit, so two colleagues
+     * bucketed on their company would count as two exposures. A feature evaluation names
+     * nothing, so without the attributes one user's read of a flag suppresses everyone else's.
+     * The reference SDK draws the line in the same place, in
+     * growthbook@012752c7405ba9771d9ec48d18ae95cdcfdd37c5.
+     *
+     * A configured `dedupeKeyAttributes` is honoured for both: it states explicitly what
+     * identifies an event in this deployment.
+     *
+     * @param array<string, mixed> $event
+     * @return string
+     */
+    private function dedupeKey(array $event): string
+    {
+        $attributes = is_array($event['attributes'] ?? null) ? $event['attributes'] : [];
+        if ($this->config->dedupeKeyAttributes !== null) {
+            $selected = [];
+            foreach ($this->config->dedupeKeyAttributes as $name) {
+                $selected[$name] = $attributes[$name] ?? null;
+            }
+            $attributes = $selected;
+        } elseif (($event['event_name'] ?? '') === self::EVENT_EXPERIMENT_VIEWED) {
+            $attributes = [];
+        }
+        ksort($attributes);
+
+        return md5((string) json_encode([$event['event_name'] ?? '', $event['properties'] ?? [], $attributes]));
+    }
+
+    /**
+     * @param string $key
+     * @return void
+     */
+    private function remember(string $key): void
+    {
+        $this->recentlySent[$key] = true;
+        while (count($this->recentlySent) > $this->config->dedupeCacheSize) {
+            $oldest = array_key_first($this->recentlySent);
+            if ($oldest === null) {
+                break;
+            }
+            unset($this->recentlySent[$oldest]);
         }
     }
 
@@ -209,49 +294,77 @@ class GrowthBookTrackingPlugin implements Plugin, EventLoggingPlugin
             return;
         }
         $events      = $this->queue;
+        $keys        = $this->inFlightKeys;
         $this->queue = [];
-        $this->post($events);
+        $this->inFlightKeys = [];
+
+        if (!$this->post($events)) {
+            // A lost batch must not keep its events suppressed: the next identical evaluation
+            // would be dropped as a duplicate of something nobody ever received.
+            foreach ($keys as $key) {
+                unset($this->recentlySent[$key]);
+            }
+        }
     }
 
     /**
      * @param array<int, array<string, mixed>> $events
      */
-    private function post(array $events): void
+    private function post(array $events): bool
     {
         $payload = json_encode($events);
 
         if ($payload === false) {
-            return;
+            return false;
         }
 
         $url = $this->config->ingestorHost . '/track?client_key=' . rawurlencode($this->clientKey);
 
-        // Test hook — bypasses real HTTP
+        $this->postCount++;
+        if ($this->postCount === 2 && $this->logger) {
+            // The documented ingest limits are 100 events per request and one request per
+            // second, and a PHP request sends its batches back to back. Worth saying once:
+            // the knobs for it are enableFeatureUsageEvents and eventFilter.
+            $this->logger->log(LogLevel::WARNING, "GrowthBookTrackingPlugin: more than one ingest request in a single PHP request, which exceeds the documented rate limit", [
+                "batchSize" => $this->config->batchSize,
+            ]);
+        }
+
+        // Test hook — bypasses real HTTP. Returning false stands in for a dropped batch, which
+        // is the only way to exercise the "give the dedupe keys back" path without a client.
         if ($this->sendHandler !== null) {
-            ($this->sendHandler)($url, $payload);
-            return;
+            return ($this->sendHandler)($url, $payload) !== false;
         }
 
         try {
             $client  = $this->resolveHttpClient();
             $factory = $this->resolveRequestFactory();
             if ($client === null || $factory === null) {
-                return;
+                return false;
             }
 
             $request = $factory->createRequest('POST', $url);
+            foreach ($this->config->ingestorRequestHeaders as $name => $value) {
+                $request = $request->withHeader($name, $value);
+                \assert($request instanceof \Psr\Http\Message\RequestInterface);
+            }
             $request = $request->withHeader('Content-Type', 'application/json');
             $request = $request->withHeader('User-Agent', 'growthbook-php-sdk/' . self::sdkVersion());
             $request = $request->withBody($this->createStream($factory, $payload));
             \assert($request instanceof \Psr\Http\Message\RequestInterface);
 
-            $client->sendRequest($request);
+            $response = $client->sendRequest($request);
+
+            // A 4xx/5xx is a lost batch like any other, and its events have to stay reportable
+            return $response->getStatusCode() < 400;
         } catch (\Throwable $e) {
             if ($this->logger) {
                 $this->logger->log(LogLevel::ERROR, "GrowthBookTrackingPlugin: failed to send events", [
                     "error" => $e->getMessage(),
                 ]);
             }
+
+            return false;
         }
     }
 
@@ -289,7 +402,8 @@ class GrowthBookTrackingPlugin implements Plugin, EventLoggingPlugin
      * For testing only — injects a callable that receives the request URL and
      * raw JSON body instead of making a real HTTP request.
      *
-     * @param callable(string $url, string $body):void $handler
+     * @param callable(string $url, string $body):(void|bool) $handler Returning false marks the
+     *                                                                   batch as not delivered
      */
     public function setSendHandler(callable $handler): void
     {

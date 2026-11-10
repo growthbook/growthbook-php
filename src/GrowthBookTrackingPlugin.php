@@ -24,6 +24,9 @@ class GrowthBookTrackingPlugin implements Plugin, EventLoggingPlugin
 {
     private const PACKAGE_NAME = "growthbook/growthbook";
 
+    private const EVENT_EXPERIMENT_VIEWED = "Experiment Viewed";
+    private const EVENT_FEATURE_EVALUATED = "Feature Evaluated";
+
     private GrowthBookTrackingPluginConfig $config;
     private string $clientKey = "";
     private bool $initialized = false;
@@ -101,7 +104,7 @@ class GrowthBookTrackingPlugin implements Plugin, EventLoggingPlugin
             return;
         }
         $this->enqueue([
-            'event_name' => 'Experiment Viewed',
+            'event_name' => self::EVENT_EXPERIMENT_VIEWED,
             'properties' => [
                 'experimentId' => $experiment->key,
                 // The variation's key, not its index: analysis joins exposures on the key, so an
@@ -127,7 +130,7 @@ class GrowthBookTrackingPlugin implements Plugin, EventLoggingPlugin
             return;
         }
         $this->enqueue([
-            'event_name' => 'Feature Evaluated',
+            'event_name' => self::EVENT_FEATURE_EVALUATED,
             'properties' => [
                 'feature' => $featureKey,
                 'value'   => $result->value,
@@ -235,9 +238,19 @@ class GrowthBookTrackingPlugin implements Plugin, EventLoggingPlugin
     }
 
     /**
-     * Signature of an event for deduplication: the event itself plus the attributes that
-     * identify who it belongs to. Dropping the attributes entirely would let one user's
-     * evaluation suppress another's, which is the opposite of the problem being solved.
+     * Signature of an event for deduplication: the event itself, plus the attributes for the
+     * events that carry no identity of their own.
+     *
+     * An exposure names the unit it was bucketed on - `hashAttribute` and `hashValue` are part
+     * of its properties - so its identity is the bucketing unit. Keying it on the attribute map
+     * as well would report one assignment once per user sharing that unit, so two colleagues
+     * bucketed on their company would count as two exposures. A feature evaluation names
+     * nothing, so without the attributes one user's read of a flag suppresses everyone else's.
+     * The reference SDK draws the line in the same place, in
+     * growthbook@012752c7405ba9771d9ec48d18ae95cdcfdd37c5.
+     *
+     * A configured `dedupeKeyAttributes` is honoured for both: it states explicitly what
+     * identifies an event in this deployment.
      *
      * @param array<string, mixed> $event
      * @return string
@@ -251,6 +264,8 @@ class GrowthBookTrackingPlugin implements Plugin, EventLoggingPlugin
                 $selected[$name] = $attributes[$name] ?? null;
             }
             $attributes = $selected;
+        } elseif (($event['event_name'] ?? '') === self::EVENT_EXPERIMENT_VIEWED) {
+            $attributes = [];
         }
         ksort($attributes);
 

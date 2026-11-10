@@ -1017,20 +1017,102 @@ final class GrowthBookTrackingPluginTest extends TestCase
         $this->assertCount(1, $events);
     }
 
-    public function testTheSameEventForAnotherUserIsStillSent(): void
+    public function testTheSameFeatureEvaluationForAnotherUserIsStillSent(): void
     {
-        // Attributes take part in the signature precisely so that one user cannot suppress
-        // another's event
+        // A feature evaluation names nobody, so the attributes take part in its signature
+        // precisely so that one user's read of a flag cannot suppress another's
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        $result = $this->makeFeatureResult();
+        $plugin->onFeatureEvaluated('flag', $result, ['id' => 'user-1']);
+        $plugin->onFeatureEvaluated('flag', $result, ['id' => 'user-2']);
+
+        $this->assertCount(2, $events);
+    }
+
+    public function testOneExposurePerBucketingUnitNotPerUser(): void
+    {
+        // Two colleagues, one experiment bucketed on their company: that is one assignment,
+        // and reporting it once per user would inflate the exposure count analysis joins on
         $plugin = $this->makePlugin(1);
         $this->captureEvents($plugin, $events);
         $plugin->initialize('sdk-test');
 
         $exp = $this->makeExperiment('my-exp');
-        $result = $this->makeExperimentResult($exp);
-        $plugin->onExperimentViewed($exp, $result, ['id' => 'user-1']);
-        $plugin->onExperimentViewed($exp, $result, ['id' => 'user-2']);
+        $result = new ExperimentResult($exp, 'company_id', 'acme', 1, true, null);
+        $plugin->onExperimentViewed($exp, $result, ['id' => 'user-1', 'company_id' => 'acme']);
+        $plugin->onExperimentViewed($exp, $result, ['id' => 'user-2', 'company_id' => 'acme']);
+
+        $this->assertCount(1, $events);
+    }
+
+    public function testExposuresForDifferentBucketingUnitsAreBothSent(): void
+    {
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        $exp = $this->makeExperiment('my-exp');
+        foreach (['acme', 'globex'] as $company) {
+            $result = new ExperimentResult($exp, 'company_id', $company, 1, true, null);
+            $plugin->onExperimentViewed($exp, $result, ['company_id' => $company]);
+        }
 
         $this->assertCount(2, $events);
+    }
+
+    public function testDedupeKeyAttributesAlsoNarrowAnExposure(): void
+    {
+        // Set explicitly, it states what identifies an event here, so it applies to both kinds
+        $plugin = new GrowthBookTrackingPlugin(
+            new GrowthBookTrackingPluginConfig(batchSize: 1, dedupeKeyAttributes: ['id'])
+        );
+        $this->captureEvents($plugin, $events);
+        $plugin->initialize('sdk-test');
+
+        $exp = $this->makeExperiment('my-exp');
+        $result = new ExperimentResult($exp, 'company_id', 'acme', 1, true, null);
+        $plugin->onExperimentViewed($exp, $result, ['id' => 'user-1', 'company_id' => 'acme']);
+        $plugin->onExperimentViewed($exp, $result, ['id' => 'user-2', 'company_id' => 'acme']);
+
+        $this->assertCount(2, $events);
+    }
+
+    public function testTwoUsersOfOneAccountReportOneExposureAndTheirOwnUsage(): void
+    {
+        // The whole split seen from the outside: one process serving two users through
+        // per-user handles, on an experiment bucketed on the account they share
+        $plugin = $this->makePlugin(1);
+        $this->captureEvents($plugin, $events);
+
+        $gb = Growthbook::create()->withClientKey('sdk-test')->withFeatures([
+            'feature' => ['defaultValue' => false, 'rules' => [[
+                'key'           => 'my-experiment',
+                'hashAttribute' => 'company_id',
+                'hashVersion'   => 2,
+                'variations'    => [false, true],
+                'coverage'      => 1,
+                'meta'          => [['key' => '0'], ['key' => '1']],
+            ]]],
+        ]);
+        $gb->addPlugin($plugin);
+
+        foreach (['user-1', 'user-2'] as $id) {
+            $gb->withAttributes(['id' => $id, 'company_id' => 'acme'])->getFeature('feature');
+        }
+
+        $byName = [];
+        foreach ($events as $event) {
+            $byName[$event['event_name']][] = $event['attributes']['id'] ?? null;
+        }
+
+        $this->assertSame(['acme'], array_map(
+            fn (array $e): string => $e['properties']['hashValue'],
+            array_values(array_filter($events, fn (array $e): bool => $e['event_name'] === 'Experiment Viewed'))
+        ), 'one exposure, for the account both users were bucketed on');
+        $this->assertSame(['user-1', 'user-2'], $byName['Feature Evaluated'], 'usage for each user');
     }
 
     public function testDedupeKeyAttributesNarrowTheSignature(): void

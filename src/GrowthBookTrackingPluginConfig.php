@@ -36,10 +36,12 @@ class GrowthBookTrackingPluginConfig
     public int $dedupeCacheSize;
 
     /**
-     * Attribute keys that take part in the deduplication signature. Null - the default - uses
-     * every attribute, which is what stops one user's event from suppressing another's. Narrow
-     * it to the identifying attributes when volatile ones (timestamps, request ids) would
-     * otherwise make every event unique.
+     * Attribute keys that take part in the deduplication signature. Null - the default - lets
+     * each event decide: a feature evaluation uses every attribute, which is what stops one
+     * user's event from suppressing another's, while an exposure uses none, since the bucketing
+     * unit it was assigned on is already in its properties. Setting this applies the same keys
+     * to both; narrow it to the identifying attributes when volatile ones (timestamps, request
+     * ids) would otherwise make every feature evaluation unique.
      *
      * @var array<string>|null
      */

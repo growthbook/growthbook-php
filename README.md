@@ -467,7 +467,7 @@ new Growthbook\GrowthBookTrackingPlugin(
 );
 ```
 
-**Deduplication** catches what the per-instance dedupe cannot: handles created with `withAttributes()` keep their own state, so the same evaluation can reach a shared plugin once per handle. The signature covers the event and the attributes that identify it, so one user's event never suppresses another's - narrow `dedupeKeyAttributes` to your identifiers if volatile attributes would otherwise make every event unique. A batch that fails to send gives its signatures back, so nothing stays suppressed on behalf of events that never arrived.
+**Deduplication** catches what the per-instance dedupe cannot: handles created with `withAttributes()` keep their own state, so the same evaluation can reach a shared plugin once per handle. Each event is signed by what identifies it — a "Feature Evaluated" by the evaluation *and the attributes*, so one user's read of a flag never suppresses another's; an exposure by the evaluation alone, since `hashAttribute` and `hashValue` already name the unit it was bucketed on, and two users sharing that unit are one exposure rather than two. Set `dedupeKeyAttributes` to apply your own identifiers to both, if volatile attributes would otherwise make every feature evaluation unique. A batch that fails to send gives its signatures back, so nothing stays suppressed on behalf of events that never arrived.
 
 **`eventFilter`** is the only thing between your attributes and the ingestor: use it to drop internal traffic or reject events carrying data that must not leave the deployment.
 
